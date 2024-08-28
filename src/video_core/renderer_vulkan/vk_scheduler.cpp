@@ -29,22 +29,15 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     is_rendering = true;
     render_state = new_state;
 
-    const auto witdh =
-        render_state.width != std::numeric_limits<u32>::max() ? render_state.width : 1;
-    const auto height =
-        render_state.height != std::numeric_limits<u32>::max() ? render_state.height : 1;
-
     const vk::RenderingInfo rendering_info = {
         .renderArea =
             {
                 .offset = {0, 0},
-                .extent = {witdh, height},
+                .extent = {render_state.width, render_state.height},
             },
         .layerCount = 1,
         .colorAttachmentCount = render_state.num_color_attachments,
-        .pColorAttachments = render_state.num_color_attachments > 0
-                                 ? render_state.color_attachments.data()
-                                 : nullptr,
+        .pColorAttachments = render_state.color_attachments.data(),
         .pDepthAttachment = render_state.has_depth ? &render_state.depth_attachment : nullptr,
         .pStencilAttachment = render_state.has_stencil ? &render_state.depth_attachment : nullptr,
     };
@@ -79,7 +72,7 @@ void Scheduler::EndRendering() {
                 },
         });
     }
-    if (render_state.has_depth || render_state.has_stencil) {
+    if (render_state.has_depth) {
         barriers.push_back(vk::ImageMemoryBarrier{
             .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
             .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,

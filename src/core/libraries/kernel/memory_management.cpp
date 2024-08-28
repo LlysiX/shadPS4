@@ -15,7 +15,7 @@ namespace Libraries::Kernel {
 
 u64 PS4_SYSV_ABI sceKernelGetDirectMemorySize() {
     LOG_WARNING(Kernel_Vmm, "called");
-    return SCE_KERNEL_MAIN_DMEM_SIZE;
+    return SCE_KERNEL_MAIN_DMEM_SIZE - 1_GB;
 }
 
 int PS4_SYSV_ABI sceKernelAllocateDirectMemory(s64 searchStart, s64 searchEnd, u64 len,

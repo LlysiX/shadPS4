@@ -7,7 +7,6 @@
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "rtc.h"
-#include "rtc_error.h"
 
 namespace Libraries::Rtc {
 
@@ -124,7 +123,8 @@ int PS4_SYSV_ABI sceRtcGetTick() {
 }
 
 int PS4_SYSV_ABI sceRtcGetTickResolution() {
-    return 1000000;
+    LOG_ERROR(Lib_Rtc, "(STUBBED) called");
+    return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI sceRtcGetTime_t() {

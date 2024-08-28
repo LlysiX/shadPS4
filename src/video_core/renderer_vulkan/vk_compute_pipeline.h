@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -17,18 +16,11 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
-struct Program {
-    Shader::IR::Program pgm;
-    std::vector<u32> spv;
-    vk::ShaderModule module;
-    u32 end_binding;
-};
-
 class ComputePipeline {
 public:
     explicit ComputePipeline(const Instance& instance, Scheduler& scheduler,
-                             vk::PipelineCache pipeline_cache, u64 compute_key,
-                             const Program* program);
+                             vk::PipelineCache pipeline_cache, const Shader::Info* info,
+                             u64 compute_key, vk::ShaderModule module);
     ~ComputePipeline();
 
     [[nodiscard]] vk::Pipeline Handle() const noexcept {
@@ -45,7 +37,7 @@ private:
     vk::UniquePipelineLayout pipeline_layout;
     vk::UniqueDescriptorSetLayout desc_layout;
     u64 compute_key;
-    const Shader::Info* info;
+    Shader::Info info{};
 };
 
 } // namespace Vulkan

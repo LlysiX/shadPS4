@@ -40,6 +40,9 @@
    <property name="scaledContents">
     <bool>true</bool>
    </property>
+   <property name="openExternalLinks">
+    <bool>true</bool>
+   </property>
   </widget>
   <widget class="QLabel" name="shad_title">
    <property name="geometry">
@@ -103,6 +106,5 @@
    </property>
   </widget>
  </widget>
- <resources/>
  <connections/>
 </ui>

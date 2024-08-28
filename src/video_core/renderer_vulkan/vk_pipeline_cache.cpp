@@ -20,10 +20,6 @@ namespace Vulkan {
 
 using Shader::VsOutput;
 
-[[nodiscard]] inline u64 HashCombine(const u64 seed, const u64 hash) {
-    return seed ^ (hash + 0x9e3779b9 + (seed << 6) + (seed >> 2));
-}
-
 void BuildVsOutputs(Shader::Info& info, const AmdGpu::Liverpool::VsOutputControl& ctl) {
     const auto add_output = [&](VsOutput x, VsOutput y, VsOutput z, VsOutput w) {
         if (x != VsOutput::None || y != VsOutput::None || z != VsOutput::None ||
@@ -180,24 +176,9 @@ void PipelineCache::RefreshGraphicsKey() {
     key.num_samples = regs.aa_config.NumSamples();
 
     const auto& db = regs.depth_buffer;
-    const auto ds_format = LiverpoolToVK::DepthFormat(db.z_info.format, db.stencil_info.format);
-
-    if (db.z_info.format != AmdGpu::Liverpool::DepthBuffer::ZFormat::Invalid) {
-        key.depth_format = ds_format;
-    } else {
-        key.depth_format = vk::Format::eUndefined;
-    }
+    key.depth_format = LiverpoolToVK::DepthFormat(db.z_info.format, db.stencil_info.format);
     if (key.depth.depth_enable) {
         key.depth.depth_enable.Assign(key.depth_format != vk::Format::eUndefined);
-    }
-
-    if (db.stencil_info.format != AmdGpu::Liverpool::DepthBuffer::StencilFormat::Invalid) {
-        key.stencil_format = key.depth_format;
-    } else {
-        key.stencil_format = vk::Format::eUndefined;
-    }
-    if (key.depth.stencil_enable) {
-        key.depth.stencil_enable.Assign(key.stencil_format != vk::Format::eUndefined);
     }
 
     const auto skip_cb_binding =
@@ -265,13 +246,22 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     }
 
     u32 binding{};
+    std::array<Shader::IR::Program, MaxShaderStages> programs;
+    std::array<const Shader::Info*, MaxShaderStages> infos{};
+
     for (u32 i = 0; i < MaxShaderStages; i++) {
         if (!graphics_key.stage_hashes[i]) {
-            programs[i] = nullptr;
+            stages[i] = VK_NULL_HANDLE;
             continue;
         }
         auto* pgm = regs.ProgramForStage(i);
         const auto code = pgm->Code();
+
+        const auto it = module_map.find(graphics_key.stage_hashes[i]);
+        if (it != module_map.end()) {
+            stages[i] = *it->second;
+            continue;
+        }
 
         // Dump shader code if requested.
         const auto stage = Shader::Stage{i};
@@ -283,69 +273,39 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
         block_pool.ReleaseContents();
         inst_pool.ReleaseContents();
 
-        if (stage != Shader::Stage::Fragment && stage != Shader::Stage::Vertex) {
+        if (stage != Shader::Stage::Compute && stage != Shader::Stage::Fragment &&
+            stage != Shader::Stage::Vertex) {
             LOG_ERROR(Render_Vulkan, "Unsupported shader stage {}. PL creation skipped.", stage);
             return {};
         }
 
-        const u64 lookup_hash = HashCombine(hash, binding);
-        auto it = program_cache.find(lookup_hash);
-        if (it != program_cache.end()) {
-            const Program* program = it.value().get();
-            ASSERT(program->pgm.info.stage == stage);
-            programs[i] = program;
-            binding = program->end_binding;
-            continue;
-        }
-
         // Recompile shader to IR.
         try {
-            auto program = std::make_unique<Program>();
-            block_pool.ReleaseContents();
-            inst_pool.ReleaseContents();
-
             LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x}", stage, hash);
             Shader::Info info = MakeShaderInfo(stage, pgm->user_data, regs);
             info.pgm_base = pgm->Address<uintptr_t>();
             info.pgm_hash = hash;
-
-            // TEMP: for Rock Band 4:
-            // Skip broken shader with V_MOVREL... instructions:
-            if (hash == 0x13a1d5fc) {
-                return nullptr;
-            }
-
-            // TEMP: for Rock Band 4:
-            // Skip broken shader with V_MOVREL... instructions:
-            //if (hash == 0xce54e4dd) {
-            //    return nullptr;
-            //}
-            
-            program->pgm =
+            programs[i] =
                 Shader::TranslateProgram(inst_pool, block_pool, code, std::move(info), profile);
 
             // Compile IR to SPIR-V
-            program->spv = Shader::Backend::SPIRV::EmitSPIRV(profile, program->pgm, binding);
+            auto spv_code = Shader::Backend::SPIRV::EmitSPIRV(profile, programs[i], binding);
             if (Config::dumpShaders()) {
-                DumpShader(program->spv, hash, stage, "spv");
+                DumpShader(spv_code, hash, stage, "spv");
             }
-
-            // Compile module and set name to hash in renderdoc
-            program->end_binding = binding;
-            program->module = CompileSPV(program->spv, instance.GetDevice());
-            const auto name = fmt::format("{}_{:#x}", stage, hash);
-            Vulkan::SetObjectName(instance.GetDevice(), program->module, name);
-
-            // Cache program
-            const auto [it, _] = program_cache.emplace(lookup_hash, std::move(program));
-            programs[i] = it.value().get();
+            stages[i] = CompileSPV(spv_code, instance.GetDevice());
+            infos[i] = &programs[i].info;
         } catch (const Shader::Exception& e) {
             UNREACHABLE_MSG("{}", e.what());
         }
+
+        // Set module name to hash in renderdoc
+        const auto name = fmt::format("{}_{:#x}", stage, hash);
+        Vulkan::SetObjectName(instance.GetDevice(), stages[i], name);
     }
 
     return std::make_unique<GraphicsPipeline>(instance, scheduler, graphics_key, *pipeline_cache,
-                                              programs);
+                                              infos, stages);
 }
 
 std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline() {
@@ -362,7 +322,6 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline() {
 
     // Recompile shader to IR.
     try {
-        auto program = std::make_unique<Program>();
         LOG_INFO(Render_Vulkan, "Compiling cs shader {:#x}", compute_key);
         Shader::Info info =
             MakeShaderInfo(Shader::Stage::Compute, cs_pgm.user_data, liverpool->regs);
@@ -375,31 +334,21 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline() {
             return nullptr;
         }
 
-        // TEMP: for Rock Band 4 Rivals:
-        // Skip broken shader with V_MOVREL... instructions:
-        if (compute_key == 0x28080e22) {
-            return nullptr;
-        }
-
-        program->pgm =
+        auto program =
             Shader::TranslateProgram(inst_pool, block_pool, code, std::move(info), profile);
 
         // Compile IR to SPIR-V
         u32 binding{};
-        program->spv = Shader::Backend::SPIRV::EmitSPIRV(profile, program->pgm, binding);
+        const auto spv_code = Shader::Backend::SPIRV::EmitSPIRV(profile, program, binding);
         if (Config::dumpShaders()) {
-            DumpShader(program->spv, compute_key, Shader::Stage::Compute, "spv");
+            DumpShader(spv_code, compute_key, Shader::Stage::Compute, "spv");
         }
-
-        // Compile module and set name to hash in renderdoc
-        program->module = CompileSPV(program->spv, instance.GetDevice());
+        const auto module = CompileSPV(spv_code, instance.GetDevice());
+        // Set module name to hash in renderdoc
         const auto name = fmt::format("cs_{:#x}", compute_key);
-        Vulkan::SetObjectName(instance.GetDevice(), program->module, name);
-
-        // Cache program
-        const auto [it, _] = program_cache.emplace(compute_key, std::move(program));
-        return std::make_unique<ComputePipeline>(instance, scheduler, *pipeline_cache, compute_key,
-                                                 it.value().get());
+        Vulkan::SetObjectName(instance.GetDevice(), module, name);
+        return std::make_unique<ComputePipeline>(instance, scheduler, *pipeline_cache,
+                                                 &program.info, compute_key, module);
     } catch (const Shader::Exception& e) {
         UNREACHABLE_MSG("{}", e.what());
         return nullptr;

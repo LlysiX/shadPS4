@@ -18,6 +18,7 @@
 #include "core/libraries/kernel/threads/threads.h"
 #include "core/libraries/libs.h"
 #include "core/linker.h"
+#include "core/tls.h"
 #ifdef _WIN64
 #include <windows.h>
 #else
@@ -987,15 +988,15 @@ static void cleanup_thread(void* arg) {
             destructor(value);
         }
     }
-    Core::CleanupThreadPatchStack();
+    Core::SetTcbBase(nullptr);
     thread->is_almost_done = true;
 }
 
 static void* run_thread(void* arg) {
     auto* thread = static_cast<ScePthread>(arg);
     Common::SetCurrentThreadName(thread->name.c_str());
-    auto* linker = Common::Singleton<Core::Linker>::Instance();
     Core::InitializeThreadPatchStack();
+    auto* linker = Common::Singleton<Core::Linker>::Instance();
     linker->InitTlsForThread(false);
     void* ret = nullptr;
     g_pthread_self = thread;

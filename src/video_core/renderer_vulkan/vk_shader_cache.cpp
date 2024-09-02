@@ -69,11 +69,14 @@ Shader::Info MakeShaderInfo(const GuestProgram& pgm, const AmdGpu::Liverpool::Re
     case Shader::Stage::Vertex: {
         info.num_user_data = regs.vs_program.settings.num_user_regs;
         info.num_input_vgprs = regs.vs_program.settings.vgpr_comp_cnt;
+        // vgprs allocated in granularity of 4
+        info.num_allocated_vgprs = regs.vs_program.settings.num_vgprs * 4;
         BuildVsOutputs(info, regs.vs_output_control);
         break;
     }
     case Shader::Stage::Fragment: {
         info.num_user_data = regs.ps_program.settings.num_user_regs;
+        info.num_allocated_vgprs = regs.ps_program.settings.num_vgprs * 4;
         for (u32 i = 0; i < regs.num_interp; i++) {
             info.ps_inputs.push_back({
                 .param_index = regs.ps_inputs[i].input_offset.Value(),
@@ -87,6 +90,7 @@ Shader::Info MakeShaderInfo(const GuestProgram& pgm, const AmdGpu::Liverpool::Re
     case Shader::Stage::Compute: {
         const auto& cs_pgm = regs.cs_program;
         info.num_user_data = cs_pgm.settings.num_user_regs;
+        info.num_allocated_vgprs = cs_pgm.settings.num_vgprs * 4;
         info.workgroup_size = {cs_pgm.num_thread_x.full, cs_pgm.num_thread_y.full,
                                cs_pgm.num_thread_z.full};
         info.tgid_enable = {cs_pgm.IsTgidEnabled(0), cs_pgm.IsTgidEnabled(1),

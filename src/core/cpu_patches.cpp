@@ -126,39 +126,35 @@ static Xbyak::Reg AllocateScratchRegister(
 static pthread_key_t stack_pointer_slot;
 static pthread_key_t patch_stack_slot;
 static std::once_flag patch_context_slots_init_flag;
+static constexpr u32 patch_stack_size = 0x1000;
 
 static_assert(sizeof(void*) == sizeof(u64),
               "Cannot fit a register inside a thread local storage slot.");
 
+static void FreePatchStack(void* patch_stack) {
+    // Subtract back to the bottom of the stack for free.
+    std::free(static_cast<u8*>(patch_stack) - patch_stack_size);
+}
+
 static void InitializePatchContextSlots() {
     ASSERT_MSG(pthread_key_create(&stack_pointer_slot, nullptr) == 0,
                "Unable to allocate thread-local register for stack pointer.");
-    ASSERT_MSG(pthread_key_create(&patch_stack_slot, nullptr) == 0,
+    ASSERT_MSG(pthread_key_create(&patch_stack_slot, FreePatchStack) == 0,
                "Unable to allocate thread-local register for patch stack.");
 }
 
 void InitializeThreadPatchStack() {
     std::call_once(patch_context_slots_init_flag, InitializePatchContextSlots);
 
-    const auto* patch_stack = std::malloc(0x1000);
-    pthread_setspecific(patch_stack_slot, patch_stack);
-}
-
-void CleanupThreadPatchStack() {
-    std::call_once(patch_context_slots_init_flag, InitializePatchContextSlots);
-
-    auto* patch_stack = pthread_getspecific(patch_stack_slot);
-    if (patch_stack != nullptr) {
-        std::free(patch_stack);
-        pthread_setspecific(patch_stack_slot, nullptr);
-    }
+    pthread_setspecific(patch_stack_slot,
+                        static_cast<u8*>(std::malloc(patch_stack_size)) + patch_stack_size);
 }
 
 /// Saves the stack pointer to thread local storage and loads the patch stack.
 static void SaveStack(Xbyak::CodeGenerator& c) {
     std::call_once(patch_context_slots_init_flag, InitializePatchContextSlots);
 
-    // Save stack pointer and load patch stack.
+    // Save original stack pointer and load patch stack.
     c.putSeg(gs);
     c.mov(qword[reinterpret_cast<void*>(stack_pointer_slot * sizeof(void*))], rsp);
     c.putSeg(gs);
@@ -181,10 +177,6 @@ static void RestoreStack(Xbyak::CodeGenerator& c) {
 // These utilities are not implemented as we can't save anything to thread local storage without
 // temporary registers.
 void InitializeThreadPatchStack() {
-    // No-op
-}
-
-void CleanupThreadPatchStack() {
     // No-op
 }
 
@@ -244,7 +236,7 @@ static void RestoreContext(Xbyak::CodeGenerator& c, const Xbyak::Operand& dst) {
         if (!dst.isREG() || dst.getIdx() != reg) {
             c.pop(Xbyak::Reg64(reg));
         } else {
-            c.add(rsp, 4);
+            c.add(rsp, 8);
         }
     }
     RestoreStack(c);
@@ -507,13 +499,14 @@ static bool FilterTcbAccess(const ZydisDecodedOperand* operands) {
 
 static void GenerateTcbAccess(const ZydisDecodedOperand* operands, Xbyak::CodeGenerator& c) {
     const auto dst = ZydisToXbyakRegisterOperand(operands[0]);
-    const auto slot = GetTcbKey();
 
 #if defined(_WIN32)
     // The following logic is based on the Kernel32.dll asm of TlsGetValue
     static constexpr u32 TlsSlotsOffset = 0x1480;
     static constexpr u32 TlsExpansionSlotsOffset = 0x1780;
     static constexpr u32 TlsMinimumAvailable = 64;
+
+    const auto slot = GetTcbKey();
 
     // Load the pointer to the table of TLS slots.
     c.putSeg(gs);
@@ -528,11 +521,6 @@ static void GenerateTcbAccess(const ZydisDecodedOperand* operands, Xbyak::CodeGe
         // Load the pointer to our buffer.
         c.mov(dst, qword[dst + tls_index * sizeof(LPVOID)]);
     }
-#elif defined(__APPLE__)
-    // The following logic is based on the Darwin implementation of _os_tsd_get_direct, used by
-    // pthread_getspecific https://github.com/apple/darwin-xnu/blob/main/libsyscall/os/tsd.h#L89-L96
-    c.putSeg(gs);
-    c.mov(dst, qword[reinterpret_cast<void*>(slot * sizeof(void*))]);
 #else
     const auto src = ZydisToXbyakMemoryOperand(operands[1]);
 
@@ -556,10 +544,10 @@ struct PatchInfo {
 };
 
 static const std::unordered_map<ZydisMnemonic, PatchInfo> Patches = {
-#if defined(_WIN32) || defined(__APPLE__)
-    // Windows and Apple need a trampoline.
+#if defined(_WIN32)
+    // Windows needs a trampoline.
     {ZYDIS_MNEMONIC_MOV, {FilterTcbAccess, GenerateTcbAccess, true}},
-#else
+#elif !defined(__APPLE__)
     {ZYDIS_MNEMONIC_MOV, {FilterTcbAccess, GenerateTcbAccess, false}},
 #endif
 

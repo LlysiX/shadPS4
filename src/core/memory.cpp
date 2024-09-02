@@ -99,7 +99,7 @@ void MemoryManager::Free(PAddr phys_addr, size_t size) {
         }
     }
     for (const auto& [addr, size] : remove_list) {
-        UnmapMemory(addr, size);
+        UnmapMemoryImpl(addr, size);
     }
 
     // Mark region as free and attempt to coalesce it with neighbours.
@@ -122,7 +122,7 @@ int MemoryManager::Reserve(void** out_addr, VAddr virtual_addr, size_t size, Mem
         const auto& vma = FindVMA(mapped_addr)->second;
         // If the VMA is mapped, unmap the region first.
         if (vma.IsMapped()) {
-            UnmapMemory(mapped_addr, size);
+            UnmapMemoryImpl(mapped_addr, size);
         }
         const size_t remaining_size = vma.base + vma.size - mapped_addr;
         ASSERT_MSG(vma.type == VMAType::Free && remaining_size >= size);
@@ -231,7 +231,10 @@ int MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, size_t size, Mem
 
 void MemoryManager::UnmapMemory(VAddr virtual_addr, size_t size) {
     std::scoped_lock lk{mutex};
+    UnmapMemoryImpl(virtual_addr, size);
+}
 
+void MemoryManager::UnmapMemoryImpl(VAddr virtual_addr, size_t size) {
     const auto it = FindVMA(virtual_addr);
     const auto& vma_base = it->second;
     ASSERT_MSG(vma_base.Contains(virtual_addr, size),
@@ -303,9 +306,10 @@ int MemoryManager::VirtualQuery(VAddr addr, int flags,
     const auto& vma = it->second;
     info->start = vma.base;
     info->end = vma.base + vma.size;
+    info->protection = static_cast<s32>(vma.prot);
     info->is_flexible.Assign(vma.type == VMAType::Flexible);
     info->is_direct.Assign(vma.type == VMAType::Direct);
-    info->is_commited.Assign(vma.type != VMAType::Free);
+    info->is_commited.Assign(vma.type != VMAType::Free && vma.type != VMAType::Reserved);
     vma.name.copy(info->name.data(), std::min(info->name.size(), vma.name.size()));
     if (vma.type == VMAType::Direct) {
         const auto dmem_it = FindDmemArea(vma.phys_base);

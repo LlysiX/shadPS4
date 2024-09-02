@@ -203,6 +203,7 @@ struct Info {
 
     u32 num_user_data;
     u32 num_input_vgprs;
+    u32 num_allocated_vgprs;
     std::span<const u32> user_data;
     Stage stage;
 

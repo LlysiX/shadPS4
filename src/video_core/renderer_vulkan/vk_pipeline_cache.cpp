@@ -64,13 +64,14 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
 }
 
 // 0x3f84ec55ULL - Amplitude V_MOVRELD_B32
-// 0xc7f34c4fULL - Amplitude V_CMPX_LE_I32
-// 0x28080e22ULL -
-// 0x13a1d5fcULL -
+// 0xc7f34c4fULL - Amplitude/Rock band 4 1.08 V_CMPX_LE_I32
+// 0x13a1d5fcULL - Rock Band 4 1.08 V_MOVRELD_B32
+// 0x28080e22ULL - Rock Band 4 Rivals (2.21) V_MOVRELD_B32
 // 0xce54e4ddULL - Rock Band 4 V_MOVRELS_B32 - DO NOT USE, makes notes invisible
 
 bool ShouldSkipShader(u64 shader_hash, const char* shader_type) {
-    static constexpr std::array<u64, 2> skip_hashes = {0x3f84ec55ULL, 0xc7f34c4fULL};
+    static constexpr std::array<u64, 4> skip_hashes = {0x3f84ec55ULL, 0xc7f34c4fULL,
+                                                       0x13a1d5fcULL, 0x28080e22ULL};
     if (std::ranges::contains(skip_hashes, shader_hash)) {
         LOG_WARNING(Render_Vulkan, "Skipped {} shader hash {:#x}.", shader_type, shader_hash);
         return true;

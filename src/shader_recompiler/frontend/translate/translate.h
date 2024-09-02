@@ -192,6 +192,7 @@ public:
     void V_BFM_B32(const GcnInst& inst);
     void V_FFBH_U32(const GcnInst& inst);
     void V_MOVRELS_B32(const GcnInst& inst);
+    void V_MOVRELD_B32(const GcnInst& inst);
 
     // Vector Memory
     void BUFFER_LOAD(u32 num_dwords, bool is_typed, const GcnInst& inst);

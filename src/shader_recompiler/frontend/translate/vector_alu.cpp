@@ -315,6 +315,8 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
         return V_MOVRELD_B32(inst);
     case Opcode::V_CMPX_LE_I32:
         return V_CMP_U32(ConditionOp::LE, true, true, inst); 
+    case Opcode::V_MOVRELSD_B32:
+        return V_MOVRELSD_B32(inst);
     case Opcode::V_NOP:
         return;
     case Opcode::V_BFM_B32:
@@ -994,61 +996,71 @@ void Translator::V_FFBH_U32(const GcnInst& inst) {
     SetDst(inst.dst[0], IR::U32{ir.Select(cond, pos_from_left, ir.Imm32(~0U))});
 }
 
-void Translator::V_MOVRELS_B32(const GcnInst& inst) {
-    // Weird format
-    // VGPR[D.u] = VGPR[S0.u + M0.u]
-    const IR::U32 src0{GetSrc(inst.src[0])};
-    const IR::U32 dst_idx{GetSrc(inst.dst[0])};
-    // Seems wrong way to "load" m0
-    IR::U32 src_idx = src0;
-    if (!m0_value.IsEmpty()) {
-        src_idx = ir.IAdd(src_idx, m0_value);
-    }
+void Translator::VMovRelHelper(const IR::U32 src_idx, const IR::U32 dst_idx) {
     IR::U32 src_val = ir.Imm32(0xdeadbeef);
-
     ASSERT(info.num_allocated_vgprs > 0);
-    // Emulate switch stmt to index the VGPRs by src_idx to read
+
+    // // Emulates 2 switch statements:
+    // uint src_val;
+    // switch (src_idx) {
+    //     case 0:
+    //         src_val = Read(VGPR0);
+    //         break;
+    //     ...
+    //     case N:
+    //         src_val = Read(VGPRN);
+    //         break;
+    // }
+    //
+    // switch (dst_idx) {
+    //     case 0:
+    //         Write(VGPR0, src_val);
+    //         break;
+    //     ...
+    //     case N:
+    //         Write(VGPRN, src_val);
+    //         break;
+    // }
+    // where N is the highest allocated VGPR
+
+    // Switch to get src_val
     for (u32 i = 0; i < info.num_allocated_vgprs; i++) {
         const IR::U1 cond = ir.IEqual(src_idx, ir.Imm32(i));
         src_val =
             IR::U32{ir.Select(cond, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i), src_val)};
     }
 
-    // Emulate switch stmt to index the VGPRs by dst_idx to write
+    // Switch to write VGPR[dst_idx]
     for (u32 i = 0; i < info.num_allocated_vgprs; i++) {
         const IR::U1 cond = ir.IEqual(dst_idx, ir.Imm32(i));
         IR::U32 dst_val =
             IR::U32{ir.Select(cond, src_val, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i))};
-        ir.SetVectorReg(IR::VectorReg::V0 + i, src_val);
+        ir.SetVectorReg(IR::VectorReg::V0 + i, dst_val);
     }
 }
 
-void Translator::V_MOVRELD_B32(const GcnInst& inst) {
+void Translator::V_MOVRELS_B32(const GcnInst& inst) {
     // Weird format
-    // VGPR[dst+m0] = VGPR[src]
+    // VGPR[D.u] = VGPR[S0.u + M0.u]
+    IR::U32 src_idx{GetSrc(inst.src[0])};
+    const IR::U32 dst_idx{GetSrc(inst.dst[0])};
+    src_idx = ir.IAdd(src_idx, ir.GetM0());
+    VMovRelHelper(src_idx, dst_idx);
+}
+
+void Translator::V_MOVRELD_B32(const GcnInst& inst) {
     const IR::U32 src_idx{GetSrc(inst.src[0])};
     IR::U32 dst_idx{GetSrc(inst.dst[0])};
-    // Seems wrong way to "load" m0
-    if (!m0_value.IsEmpty()) {
-        dst_idx = ir.IAdd(dst_idx, m0_value);
-    }
-    IR::U32 src_val = ir.Imm32(0xdeadbeef);
+    dst_idx = ir.IAdd(dst_idx, ir.GetM0());
+    VMovRelHelper(src_idx, dst_idx);
+}
 
-    ASSERT(info.num_allocated_vgprs > 0);
-    // Emulate switch stmt to index the VGPRs by src_idx to read
-    for (u32 i = 0; i < info.num_allocated_vgprs; i++) {
-        const IR::U1 cond = ir.IEqual(src_idx, ir.Imm32(i));
-        src_val =
-            IR::U32{ir.Select(cond, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i), src_val)};
-    }
-
-    // Emulate switch stmt to index the VGPRs by dst_idx to write
-    for (u32 i = 0; i < info.num_allocated_vgprs; i++) {
-        const IR::U1 cond = ir.IEqual(dst_idx, ir.Imm32(i));
-        IR::U32 dst_val =
-            IR::U32{ir.Select(cond, src_val, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i))};
-        ir.SetVectorReg(IR::VectorReg::V0 + i, src_val);
-    }
+void Translator::V_MOVRELSD_B32(const GcnInst& inst) {
+    IR::U32 src_idx{GetSrc(inst.src[0])};
+    IR::U32 dst_idx{GetSrc(inst.dst[0])};
+    src_idx = ir.IAdd(src_idx, ir.GetM0());
+    dst_idx = ir.IAdd(dst_idx, ir.GetM0());
+    VMovRelHelper(src_idx, dst_idx);
 }
 
 } // namespace Shader::Gcn

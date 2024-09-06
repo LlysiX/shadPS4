@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
-#include "common/config.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/image.h"
-#include "video_core/texture_cache/tile_manager.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnullability-completeness"
 #include <vk_mem_alloc.h>
+#pragma GCC diagnostic pop
 
 namespace VideoCore {
 
 using namespace Vulkan;
-using Libraries::VideoOut::TilingMode;
 
 bool ImageInfo::IsBlockCoded() const {
     switch (pixel_format) {
@@ -166,8 +166,9 @@ Image::Image(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
 
     image.Create(image_ci);
 
-    Vulkan::SetObjectName(instance->GetDevice(), (vk::Image)image, "Image {:#x}:{:#x}",
-                          info.guest_address, info.guest_size_bytes);
+    Vulkan::SetObjectName(instance->GetDevice(), (vk::Image)image, "Image {}x{}x{} {:#x}:{:#x}",
+                          info.size.width, info.size.height, info.size.depth, info.guest_address,
+                          info.guest_size_bytes);
 }
 
 void Image::Transit(vk::ImageLayout dst_layout, vk::Flags<vk::AccessFlagBits> dst_mask,
@@ -237,6 +238,74 @@ void Image::Upload(vk::Buffer buffer, u64 offset) {
 
     const auto cmdbuf = scheduler->CommandBuffer();
     cmdbuf.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, image_copy);
+
+    Transit(vk::ImageLayout::eGeneral,
+            vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead);
+}
+
+void Image::CopyImage(const Image& image) {
+    scheduler->EndRendering();
+    Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits::eTransferWrite);
+
+    auto cmdbuf = scheduler->CommandBuffer();
+
+    boost::container::small_vector<vk::ImageCopy, 14> image_copy{};
+    for (u32 m = 0; m < image.info.resources.levels; ++m) {
+        const auto mip_w = std::max(info.size.width >> m, 1u);
+        const auto mip_h = std::max(info.size.height >> m, 1u);
+        const auto mip_d = std::max(info.size.depth >> m, 1u);
+
+        image_copy.emplace_back(vk::ImageCopy{
+            .srcSubresource{
+                .aspectMask = image.aspect_mask,
+                .mipLevel = m,
+                .baseArrayLayer = 0,
+                .layerCount = image.info.resources.layers,
+            },
+            .dstSubresource{
+                .aspectMask = image.aspect_mask,
+                .mipLevel = m,
+                .baseArrayLayer = 0,
+                .layerCount = image.info.resources.layers,
+            },
+            .extent = {mip_w, mip_h, mip_d},
+        });
+    }
+    cmdbuf.copyImage(image.image, image.layout, this->image, this->layout, image_copy);
+
+    Transit(vk::ImageLayout::eGeneral,
+            vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead);
+}
+
+void Image::CopyMip(const Image& image, u32 mip) {
+    scheduler->EndRendering();
+    Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits::eTransferWrite);
+
+    auto cmdbuf = scheduler->CommandBuffer();
+
+    const auto mip_w = std::max(info.size.width >> mip, 1u);
+    const auto mip_h = std::max(info.size.height >> mip, 1u);
+    const auto mip_d = std::max(info.size.depth >> mip, 1u);
+
+    ASSERT(mip_w == image.info.size.width);
+    ASSERT(mip_h == image.info.size.height);
+
+    const vk::ImageCopy image_copy{
+        .srcSubresource{
+            .aspectMask = image.aspect_mask,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = image.info.resources.layers,
+        },
+        .dstSubresource{
+            .aspectMask = image.aspect_mask,
+            .mipLevel = mip,
+            .baseArrayLayer = 0,
+            .layerCount = info.resources.layers,
+        },
+        .extent = {mip_w, mip_h, mip_d},
+    };
+    cmdbuf.copyImage(image.image, image.layout, this->image, this->layout, image_copy);
 
     Transit(vk::ImageLayout::eGeneral,
             vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead);

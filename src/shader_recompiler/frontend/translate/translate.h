@@ -5,9 +5,9 @@
 
 #include <span>
 #include "shader_recompiler/frontend/instruction.h"
+#include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/ir_emitter.h"
-#include "shader_recompiler/runtime_info.h"
 
 namespace Shader {
 struct Info;
@@ -55,7 +55,8 @@ enum class NegateMode : u32 {
 
 class Translator {
 public:
-    explicit Translator(IR::Block* block_, Info& info, const Profile& profile);
+    explicit Translator(IR::Block* block_, Info& info, const RuntimeInfo& runtime_info,
+                        const Profile& profile);
 
     // Instruction categories
     void EmitPrologue();
@@ -100,8 +101,8 @@ public:
     void S_ADDC_U32(const GcnInst& inst);
     void S_MULK_I32(const GcnInst& inst);
     void S_ADDK_I32(const GcnInst& inst);
-    void S_MAX_U32(const GcnInst& inst);
-    void S_MIN_U32(const GcnInst& inst);
+    void S_MAX_U32(bool is_signed, const GcnInst& inst);
+    void S_MIN_U32(bool is_signed, const GcnInst& inst);
     void S_CMPK(ConditionOp cond, bool is_signed, const GcnInst& inst);
 
     // Scalar Memory
@@ -172,7 +173,7 @@ public:
     void V_BCNT_U32_B32(const GcnInst& inst);
     void V_COS_F32(const GcnInst& inst);
     void V_MAX3_F32(const GcnInst& inst);
-    void V_MAX3_U32(const GcnInst& inst);
+    void V_MAX3_U32(bool is_signed, const GcnInst& inst);
     void V_CVT_I32_F32(const GcnInst& inst);
     void V_MIN_I32(const GcnInst& inst);
     void V_MUL_LO_U32(const GcnInst& inst);
@@ -216,6 +217,8 @@ public:
     void V_READFIRSTLANE_B32(const GcnInst& inst);
     void V_READLANE_B32(const GcnInst& inst);
     void V_WRITELANE_B32(const GcnInst& inst);
+    void DS_APPEND(const GcnInst& inst);
+    void DS_CONSUME(const GcnInst& inst);
     void S_BARRIER();
 
     // MIMG
@@ -235,18 +238,20 @@ private:
     void SetDst(const InstOperand& operand, const IR::U32F32& value);
     void SetDst64(const InstOperand& operand, const IR::U64F64& value_raw);
 
-    void VMovRelHelper(const IR::U32 src_idx, const IR::U32 dst_idx);
+    IR::U32 VMovRelSHelper(u32 src_vgprno, const IR::U32 m0);
+    void VMovRelDHelper(u32 dst_vgprno, const IR::U32 src_val, const IR::U32 m0);
 
     void LogMissingOpcode(const GcnInst& inst);
 
 private:
     IR::IREmitter ir;
     Info& info;
+    const RuntimeInfo& runtime_info;
     const Profile& profile;
     bool opcode_missing = false;
 };
 
 void Translate(IR::Block* block, u32 block_base, std::span<const GcnInst> inst_list, Info& info,
-               const Profile& profile);
+               const RuntimeInfo& runtime_info, const Profile& profile);
 
 } // namespace Shader::Gcn

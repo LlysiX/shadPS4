@@ -295,7 +295,7 @@ ScePthread PS4_SYSV_ABI scePthreadSelf() {
 
 int PS4_SYSV_ABI scePthreadAttrSetaffinity(ScePthreadAttr* pattr,
                                            const /*SceKernelCpumask*/ u64 mask) {
-    LOG_INFO(Kernel_Pthread, "called");
+    LOG_DEBUG(Kernel_Pthread, "called");
 
     if (pattr == nullptr || *pattr == nullptr) {
         return SCE_KERNEL_ERROR_EINVAL;
@@ -387,7 +387,7 @@ int PS4_SYSV_ABI posix_pthread_attr_setstacksize(ScePthreadAttr* attr, size_t st
 }
 
 int PS4_SYSV_ABI scePthreadSetaffinity(ScePthread thread, const /*SceKernelCpumask*/ u64 mask) {
-    LOG_INFO(Kernel_Pthread, "called");
+    LOG_DEBUG(Kernel_Pthread, "called");
 
     if (thread == nullptr) {
         return SCE_KERNEL_ERROR_ESRCH;
@@ -412,11 +412,6 @@ int PS4_SYSV_ABI scePthreadGetaffinity(ScePthread thread, /*SceKernelCpumask*/ u
 
 ScePthreadMutex* createMutex(ScePthreadMutex* addr) {
     if (addr == nullptr || *addr != nullptr) {
-        return addr;
-    }
-    static std::mutex mutex;
-    std::scoped_lock lk{mutex};
-    if (*addr != nullptr) {
         return addr;
     }
     const VAddr vaddr = reinterpret_cast<VAddr>(addr);
@@ -584,8 +579,7 @@ int PS4_SYSV_ABI scePthreadMutexLock(ScePthreadMutex* mutex) {
 }
 
 int PS4_SYSV_ABI scePthreadMutexUnlock(ScePthreadMutex* mutex) {
-    mutex = createMutex(mutex);
-    if (mutex == nullptr) {
+    if (mutex == nullptr || *mutex == nullptr) {
         return SCE_KERNEL_ERROR_EINVAL;
     }
 

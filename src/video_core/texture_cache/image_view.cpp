@@ -123,9 +123,14 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     // When sampling D32 texture from shader, the T# specifies R32 Float format so adjust it.
     vk::Format format = info.format;
     vk::ImageAspectFlags aspect = image.aspect_mask;
-    if (image.aspect_mask & vk::ImageAspectFlagBits::eDepth && format == vk::Format::eR32Sfloat) {
+    if (image.aspect_mask & vk::ImageAspectFlagBits::eDepth &&
+        (format == vk::Format::eR32Sfloat || format == vk::Format::eD32Sfloat)) {
         format = image.info.pixel_format;
         aspect = vk::ImageAspectFlagBits::eDepth;
+    }
+    if (image.aspect_mask & vk::ImageAspectFlagBits::eStencil && format == vk::Format::eR8Unorm) {
+        format = image.info.pixel_format;
+        aspect = vk::ImageAspectFlagBits::eStencil;
     }
 
     const vk::ImageViewCreateInfo image_view_ci = {

@@ -64,7 +64,8 @@ Emulator::Emulator() {
     LOG_INFO(Config, "Vulkan vkValidationSync: {}", Config::vkValidationSyncEnabled());
     LOG_INFO(Config, "Vulkan vkValidationGpu: {}", Config::vkValidationGpuEnabled());
     LOG_INFO(Config, "Vulkan rdocEnable: {}", Config::isRdocEnabled());
-    LOG_INFO(Config, "Vulkan rdocMarkersEnable: {}", Config::isMarkersEnabled());
+    LOG_INFO(Config, "Vulkan rdocMarkersEnable: {}", Config::vkMarkersEnabled());
+    LOG_INFO(Config, "Vulkan crashDiagnostics: {}", Config::vkCrashDiagnosticEnabled());
 
     // Defer until after logging is initialized.
     memory = Core::Memory::Instance();
@@ -194,7 +195,7 @@ void Emulator::Run(const std::filesystem::path& file) {
 }
 
 void Emulator::LoadSystemModules(const std::filesystem::path& file) {
-    constexpr std::array<SysModules, 9> ModulesToLoad{
+    constexpr std::array<SysModules, 10> ModulesToLoad{
         {{"libSceNgs2.sprx", &Libraries::Ngs2::RegisterlibSceNgs2},
          {"libSceFiber.sprx", nullptr},
          {"libSceUlt.sprx", nullptr},
@@ -203,7 +204,8 @@ void Emulator::LoadSystemModules(const std::filesystem::path& file) {
          {"libSceLibcInternal.sprx", &Libraries::LibcInternal::RegisterlibSceLibcInternal},
          {"libSceDiscMap.sprx", &Libraries::DiscMap::RegisterlibSceDiscMap},
          {"libSceRtc.sprx", &Libraries::Rtc::RegisterlibSceRtc},
-         {"libSceJpegEnc.sprx", nullptr}},
+         {"libSceJpegEnc.sprx", nullptr},
+         {"libSceFont.sprx", nullptr}},
     };
 
     std::vector<std::filesystem::path> found_modules;

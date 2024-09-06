@@ -101,44 +101,50 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
                                     VideoCore::TextureCache& texture_cache) const {
     // Bind resource buffers and textures.
     boost::container::static_vector<vk::BufferView, 8> buffer_views;
-    boost::container::static_vector<vk::DescriptorBufferInfo, 32> buffer_infos;
-    boost::container::static_vector<vk::DescriptorImageInfo, 32> image_infos;
-    boost::container::small_vector<vk::WriteDescriptorSet, 32> set_writes;
+    boost::container::static_vector<vk::DescriptorBufferInfo, 16> buffer_infos;
+    boost::container::static_vector<vk::DescriptorImageInfo, 16> image_infos;
+    boost::container::small_vector<vk::WriteDescriptorSet, 16> set_writes;
+    boost::container::small_vector<vk::BufferMemoryBarrier2, 16> buffer_barriers;
     Shader::PushData push_data{};
     u32 binding{};
 
     for (const auto& desc : info->buffers) {
-        const auto vsharp = desc.GetSharp(*info);
-        const bool is_storage = desc.IsStorage(vsharp);
-        const VAddr address = vsharp.base_address;
-        // Most of the time when a metadata is updated with a shader it gets cleared. It means we
-        // can skip the whole dispatch and update the tracked state instead. Also, it is not
-        // intended to be consumed and in such rare cases (e.g. HTile introspection, CRAA) we will
-        // need its full emulation anyways. For cases of metadata read a warning will be logged.
-        if (desc.is_written) {
-            if (texture_cache.TouchMeta(address, true)) {
-                LOG_TRACE(Render_Vulkan, "Metadata update skipped");
-                return false;
-            }
+        bool is_storage = true;
+        if (desc.is_gds_buffer) {
+            auto* vk_buffer = buffer_cache.GetGdsBuffer();
+            buffer_infos.emplace_back(vk_buffer->Handle(), 0, vk_buffer->SizeBytes());
         } else {
-            if (texture_cache.IsMeta(address)) {
-                LOG_WARNING(Render_Vulkan, "Unexpected metadata read by a CS shader (buffer)");
+            const auto vsharp = desc.GetSharp(*info);
+            is_storage = desc.IsStorage(vsharp);
+            const VAddr address = vsharp.base_address;
+            // Most of the time when a metadata is updated with a shader it gets cleared. It means
+            // we can skip the whole dispatch and update the tracked state instead. Also, it is not
+            // intended to be consumed and in such rare cases (e.g. HTile introspection, CRAA) we
+            // will need its full emulation anyways. For cases of metadata read a warning will be
+            // logged.
+            if (desc.is_written) {
+                if (texture_cache.TouchMeta(address, true)) {
+                    LOG_TRACE(Render_Vulkan, "Metadata update skipped");
+                    return false;
+                }
+            } else {
+                if (texture_cache.IsMeta(address)) {
+                    LOG_WARNING(Render_Vulkan, "Unexpected metadata read by a CS shader (buffer)");
+                }
             }
+            const u32 size = vsharp.GetSize();
+            const u32 alignment =
+                is_storage ? instance.StorageMinAlignment() : instance.UniformMinAlignment();
+            const auto [vk_buffer, offset] =
+                buffer_cache.ObtainBuffer(address, size, desc.is_written);
+            const u32 offset_aligned = Common::AlignDown(offset, alignment);
+            const u32 adjust = offset - offset_aligned;
+            if (adjust != 0) {
+                ASSERT(adjust % 4 == 0);
+                push_data.AddOffset(binding, adjust);
+            }
+            buffer_infos.emplace_back(vk_buffer->Handle(), offset_aligned, size + adjust);
         }
-        const u32 size = vsharp.GetSize();
-        if (desc.is_written) {
-            texture_cache.InvalidateMemory(address, size);
-        }
-        const u32 alignment =
-            is_storage ? instance.StorageMinAlignment() : instance.UniformMinAlignment();
-        const auto [vk_buffer, offset] = buffer_cache.ObtainBuffer(address, size, desc.is_written);
-        const u32 offset_aligned = Common::AlignDown(offset, alignment);
-        const u32 adjust = offset - offset_aligned;
-        if (adjust != 0) {
-            ASSERT(adjust % 4 == 0);
-            push_data.AddOffset(binding, adjust);
-        }
-        buffer_infos.emplace_back(vk_buffer->Handle(), offset_aligned, size + adjust);
         set_writes.push_back({
             .dstSet = VK_NULL_HANDLE,
             .dstBinding = binding++,
@@ -153,9 +159,9 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
     for (const auto& desc : info->texture_buffers) {
         const auto vsharp = desc.GetSharp(*info);
         vk::BufferView& buffer_view = buffer_views.emplace_back(VK_NULL_HANDLE);
-        if (vsharp.GetDataFmt() != AmdGpu::DataFormat::FormatInvalid) {
+        const u32 size = vsharp.GetSize();
+        if (vsharp.GetDataFmt() != AmdGpu::DataFormat::FormatInvalid && size != 0) {
             const VAddr address = vsharp.base_address;
-            const u32 size = vsharp.GetSize();
             if (desc.is_written) {
                 if (texture_cache.TouchMeta(address, true)) {
                     LOG_TRACE(Render_Vulkan, "Metadata update skipped");
@@ -165,9 +171,6 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
                 if (texture_cache.IsMeta(address)) {
                     LOG_WARNING(Render_Vulkan, "Unexpected metadata read by a CS shader (buffer)");
                 }
-            }
-            if (desc.is_written) {
-                texture_cache.InvalidateMemory(address, size);
             }
             const u32 alignment = instance.TexelBufferMinAlignment();
             const auto [vk_buffer, offset] =
@@ -183,6 +186,15 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
             }
             buffer_view = vk_buffer->View(offset_aligned, size + adjust, desc.is_written,
                                           vsharp.GetDataFmt(), vsharp.GetNumberFmt());
+            if (auto barrier =
+                    vk_buffer->GetBarrier(desc.is_written ? vk::AccessFlagBits2::eShaderWrite
+                                                          : vk::AccessFlagBits2::eShaderRead,
+                                          vk::PipelineStageFlagBits2::eComputeShader)) {
+                buffer_barriers.emplace_back(*barrier);
+            }
+            if (desc.is_written) {
+                texture_cache.MarkWritten(address, size);
+            }
         }
         set_writes.push_back({
             .dstSet = VK_NULL_HANDLE,
@@ -198,7 +210,7 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
     for (const auto& image_desc : info->images) {
         const auto tsharp = image_desc.GetSharp(*info);
         if (tsharp.GetDataFmt() != AmdGpu::DataFormat::FormatInvalid) {
-            VideoCore::ImageInfo image_info{tsharp};
+            VideoCore::ImageInfo image_info{tsharp, image_desc.is_depth};
             VideoCore::ImageViewInfo view_info{tsharp, image_desc.is_storage};
             const auto& image_view = texture_cache.FindTexture(image_info, view_info);
             const auto& image = texture_cache.GetImage(image_view.image_id);
@@ -222,6 +234,9 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
     }
     for (const auto& sampler : info->samplers) {
         const auto ssharp = sampler.GetSharp(*info);
+        if (ssharp.force_degamma) {
+            LOG_WARNING(Render_Vulkan, "Texture requires gamma correction");
+        }
         const auto vk_sampler = texture_cache.GetSampler(ssharp);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
         set_writes.push_back({
@@ -239,6 +254,17 @@ bool ComputePipeline::BindResources(VideoCore::BufferCache& buffer_cache,
     }
 
     const auto cmdbuf = scheduler.CommandBuffer();
+
+    if (!buffer_barriers.empty()) {
+        const auto dependencies = vk::DependencyInfo{
+            .dependencyFlags = vk::DependencyFlagBits::eByRegion,
+            .bufferMemoryBarrierCount = u32(buffer_barriers.size()),
+            .pBufferMemoryBarriers = buffer_barriers.data(),
+        };
+        scheduler.EndRendering();
+        cmdbuf.pipelineBarrier2(dependencies);
+    }
+
     cmdbuf.pushConstants(*pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0u, sizeof(push_data),
                          &push_data);
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *pipeline_layout, 0, set_writes);

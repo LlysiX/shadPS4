@@ -98,22 +98,7 @@ bool UseFP16(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format) {
 }
 
 IR::Type BufferDataType(const IR::Inst& inst, AmdGpu::NumberFormat num_format) {
-    switch (inst.GetOpcode()) {
-    case IR::Opcode::LoadBufferU32:
-    case IR::Opcode::LoadBufferU32x2:
-    case IR::Opcode::LoadBufferU32x3:
-    case IR::Opcode::LoadBufferU32x4:
-    case IR::Opcode::StoreBufferU32:
-    case IR::Opcode::StoreBufferU32x2:
-    case IR::Opcode::StoreBufferU32x3:
-    case IR::Opcode::StoreBufferU32x4:
-    case IR::Opcode::ReadConstBuffer:
-    case IR::Opcode::BufferAtomicIAdd32:
-    case IR::Opcode::BufferAtomicSwap32:
-        return IR::Type::U32;
-    default:
-        UNREACHABLE();
-    }
+    return IR::Type::U32;
 }
 
 bool IsImageAtomicInstruction(const IR::Inst& inst) {
@@ -223,12 +208,8 @@ public:
 
     u32 Add(const SamplerResource& desc) {
         const u32 index{Add(sampler_resources, desc, [this, &desc](const auto& existing) {
-            if (desc.sgpr_base == existing.sgpr_base &&
-                desc.dword_offset == existing.dword_offset) {
-                return true;
-            }
-            // Samplers with different bindings might still be the same.
-            return existing.GetSharp(info) == desc.GetSharp(info);
+            return desc.sgpr_base == existing.sgpr_base &&
+                   desc.dword_offset == existing.dword_offset;
         })};
         return index;
     }
@@ -397,24 +378,45 @@ void PatchBufferInstruction(IR::Block& block, IR::Inst& inst, Info& info,
     // Replace handle with binding index in buffer resource list.
     IR::IREmitter ir{block, IR::Block::InstructionList::s_iterator_to(inst)};
     inst.SetArg(0, ir.Imm32(binding));
-    ASSERT(!buffer.swizzle_enable && !buffer.add_tid_enable);
+    ASSERT(!buffer.add_tid_enable);
 
     // Address of constant buffer reads can be calculated at IR emittion time.
     if (inst.GetOpcode() == IR::Opcode::ReadConstBuffer) {
         return;
     }
 
+    const IR::U32 index_stride = ir.Imm32(buffer.index_stride);
+    const IR::U32 element_size = ir.Imm32(buffer.element_size);
+
     // Compute address of the buffer using the stride.
     IR::U32 address = ir.Imm32(inst_info.inst_offset.Value());
     if (inst_info.index_enable) {
         const IR::U32 index = inst_info.offset_enable ? IR::U32{ir.CompositeExtract(inst.Arg(1), 0)}
                                                       : IR::U32{inst.Arg(1)};
-        address = ir.IAdd(address, ir.IMul(index, ir.Imm32(buffer.GetStride())));
+        if (buffer.swizzle_enable) {
+            const IR::U32 stride_index_stride =
+                ir.Imm32(static_cast<u32>(buffer.stride * buffer.index_stride));
+            const IR::U32 index_msb = ir.IDiv(index, index_stride);
+            const IR::U32 index_lsb = ir.IMod(index, index_stride);
+            address = ir.IAdd(address, ir.IAdd(ir.IMul(index_msb, stride_index_stride),
+                                               ir.IMul(index_lsb, element_size)));
+        } else {
+            address = ir.IAdd(address, ir.IMul(index, ir.Imm32(buffer.GetStride())));
+        }
     }
     if (inst_info.offset_enable) {
         const IR::U32 offset = inst_info.index_enable ? IR::U32{ir.CompositeExtract(inst.Arg(1), 1)}
                                                       : IR::U32{inst.Arg(1)};
-        address = ir.IAdd(address, offset);
+        if (buffer.swizzle_enable) {
+            const IR::U32 element_size_index_stride =
+                ir.Imm32(buffer.element_size * buffer.index_stride);
+            const IR::U32 offset_msb = ir.IDiv(offset, element_size);
+            const IR::U32 offset_lsb = ir.IMod(offset, element_size);
+            address = ir.IAdd(address,
+                              ir.IAdd(ir.IMul(offset_msb, element_size_index_stride), offset_lsb));
+        } else {
+            address = ir.IAdd(address, offset);
+        }
     }
     inst.SetArg(1, address);
 }

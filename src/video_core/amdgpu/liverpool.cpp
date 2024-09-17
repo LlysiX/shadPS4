@@ -221,11 +221,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     const auto marker_sz = nop->header.count.Value() * 2;
                     const std::string_view label{reinterpret_cast<const char*>(&nop->data_block[1]),
                                                  marker_sz};
-                    rasterizer->ScopeMarkerBegin(label);
+                    if (rasterizer) {
+                        rasterizer->ScopeMarkerBegin(label);
+                    }
                     break;
                 }
                 case PM4CmdNop::PayloadType::DebugMarkerPop: {
-                    rasterizer->ScopeMarkerEnd();
+                    if (rasterizer) {
+                        rasterizer->ScopeMarkerEnd();
+                    }
                     break;
                 }
                 default:
@@ -539,7 +543,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::PfpSyncMe: {
-                rasterizer->CpSync();
+                if (rasterizer) {
+                    rasterizer->CpSync();
+                }
                 break;
             }
             default:
@@ -656,6 +662,12 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, int vqid) {
 std::pair<std::span<const u32>, std::span<const u32>> Liverpool::CopyCmdBuffers(
     std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
+
+    // std::vector resize can invalidate spans for commands in flight
+    ASSERT_MSG(queue.dcb_buffer.capacity() >= queue.dcb_buffer_offset + dcb.size(),
+               "dcb copy buffer out of reserved space");
+    ASSERT_MSG(queue.ccb_buffer.capacity() >= queue.ccb_buffer_offset + ccb.size(),
+               "ccb copy buffer out of reserved space");
 
     queue.dcb_buffer.resize(
         std::max(queue.dcb_buffer.size(), queue.dcb_buffer_offset + dcb.size()));

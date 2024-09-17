@@ -85,6 +85,9 @@ void EmitContext::DefineArithmeticTypes() {
         F16[1] = Name(TypeFloat(16), "f16_id");
         U16 = Name(TypeUInt(16), "u16_id");
     }
+    if (info.uses_fp64) {
+        F64[1] = Name(TypeFloat(64), "f64_id");
+    }
     F32[1] = Name(TypeFloat(32), "f32_id");
     S32[1] = Name(TypeSInt(32), "i32_id");
     U32[1] = Name(TypeUInt(32), "u32_id");
@@ -93,6 +96,9 @@ void EmitContext::DefineArithmeticTypes() {
     for (u32 i = 2; i <= 4; i++) {
         if (info.uses_fp16) {
             F16[i] = Name(TypeVector(F16[1], i), fmt::format("f16vec{}_id", i));
+        }
+        if (info.uses_fp64) {
+            F64[i] = Name(TypeVector(F64[1], i), fmt::format("f64vec{}_id", i));
         }
         F32[i] = Name(TypeVector(F32[1], i), fmt::format("f32vec{}_id", i));
         S32[i] = Name(TypeVector(S32[1], i), fmt::format("i32vec{}_id", i));
@@ -324,16 +330,18 @@ void EmitContext::DefineOutputs() {
 
 void EmitContext::DefinePushDataBlock() {
     // Create push constants block for instance steps rates
-    const Id struct_type{Name(TypeStruct(U32[1], U32[1], U32[4], U32[4]), "AuxData")};
+    const Id struct_type{Name(TypeStruct(U32[1], U32[1], U32[4], U32[4], U32[4]), "AuxData")};
     Decorate(struct_type, spv::Decoration::Block);
     MemberName(struct_type, 0, "sr0");
     MemberName(struct_type, 1, "sr1");
     MemberName(struct_type, 2, "buf_offsets0");
     MemberName(struct_type, 3, "buf_offsets1");
+    MemberName(struct_type, 4, "buf_offsets2");
     MemberDecorate(struct_type, 0, spv::Decoration::Offset, 0U);
     MemberDecorate(struct_type, 1, spv::Decoration::Offset, 4U);
     MemberDecorate(struct_type, 2, spv::Decoration::Offset, 8U);
     MemberDecorate(struct_type, 3, spv::Decoration::Offset, 24U);
+    MemberDecorate(struct_type, 4, spv::Decoration::Offset, 40U);
     push_data_block = DefineVar(struct_type, spv::StorageClass::PushConstant);
     Name(push_data_block, "push_data");
     interfaces.push_back(push_data_block);

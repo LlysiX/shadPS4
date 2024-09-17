@@ -20,6 +20,17 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+// The av_err2str macro in libavutil/error.h does not play nice with C++
+#ifdef av_err2str
+#undef av_err2str
+#include <string>
+av_always_inline std::string av_err2string(int errnum) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    return av_make_error_string(errbuf, AV_ERROR_MAX_STRING_SIZE, errnum);
+}
+#define av_err2str(err) av_err2string(err).c_str()
+#endif // av_err2str
+
 namespace Libraries::AvPlayer {
 
 using namespace Kernel;
@@ -428,7 +439,8 @@ void AvPlayerSource::DemuxerThread(std::stop_token stop) {
     LOG_INFO(Lib_AvPlayer, "Demuxer Thread started");
 
     while (!stop.stop_requested()) {
-        if (m_video_packets.Size() > 30 && m_audio_packets.Size() > 8) {
+        if (m_video_packets.Size() > 30 &&
+            (!m_audio_stream_index.has_value() || m_audio_packets.Size() > 8)) {
             std::this_thread::sleep_for(milliseconds(5));
             continue;
         }

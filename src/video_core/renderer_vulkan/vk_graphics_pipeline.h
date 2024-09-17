@@ -19,6 +19,7 @@ static constexpr u32 MaxShaderStages = 5;
 
 class Instance;
 class Scheduler;
+class DescriptorHeap;
 
 using Liverpool = AmdGpu::Liverpool;
 
@@ -29,17 +30,10 @@ struct GraphicsPipelineKey {
     vk::Format depth_format;
     vk::Format stencil_format;
 
-    Liverpool::DepthControl depth;
-    float depth_bounds_min;
-    float depth_bounds_max;
-    float depth_bias_const_factor;
-    float depth_bias_slope_factor;
-    float depth_bias_clamp;
+    Liverpool::DepthControl depth_stencil;
     u32 depth_bias_enable;
-    u32 num_samples = 1;
+    u32 num_samples;
     Liverpool::StencilControl stencil;
-    Liverpool::StencilRefMask stencil_ref_front;
-    Liverpool::StencilRefMask stencil_ref_back;
     Liverpool::PrimitiveType prim_type;
     u32 enable_primitive_restart;
     u32 primitive_restart_index;
@@ -47,7 +41,7 @@ struct GraphicsPipelineKey {
     Liverpool::CullMode cull_mode;
     Liverpool::FrontFace front_face;
     Liverpool::ClipSpace clip_space;
-    Liverpool::ColorBufferMask cb_shader_mask{};
+    Liverpool::ColorBufferMask cb_shader_mask;
     std::array<Liverpool::BlendControl, Liverpool::NumColorBuffers> blend_controls;
     std::array<vk::ColorComponentFlags, Liverpool::NumColorBuffers> write_masks;
 
@@ -59,7 +53,8 @@ struct GraphicsPipelineKey {
 class GraphicsPipeline {
 public:
     explicit GraphicsPipeline(const Instance& instance, Scheduler& scheduler,
-                              const GraphicsPipelineKey& key, vk::PipelineCache pipeline_cache,
+                              DescriptorHeap& desc_heap, const GraphicsPipelineKey& key,
+                              vk::PipelineCache pipeline_cache,
                               std::span<const Shader::Info*, MaxShaderStages> stages,
                               std::span<const vk::ShaderModule> modules);
     ~GraphicsPipeline();
@@ -89,7 +84,7 @@ public:
     }
 
     bool IsDepthEnabled() const {
-        return key.depth.depth_enable.Value();
+        return key.depth_stencil.depth_enable.Value();
     }
 
 private:
@@ -98,11 +93,13 @@ private:
 private:
     const Instance& instance;
     Scheduler& scheduler;
+    DescriptorHeap& desc_heap;
     vk::UniquePipeline pipeline;
     vk::UniquePipelineLayout pipeline_layout;
     vk::UniqueDescriptorSetLayout desc_layout;
     std::array<const Shader::Info*, MaxShaderStages> stages{};
     GraphicsPipelineKey key;
+    bool uses_push_descriptors{};
 };
 
 } // namespace Vulkan

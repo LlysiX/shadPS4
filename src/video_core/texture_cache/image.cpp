@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#define VULKAN_HPP_NO_EXCEPTIONS
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -73,7 +74,6 @@ static vk::ImageUsageFlags ImageUsageFlags(const ImageInfo& info) {
         if (!info.IsBlockCoded() && !info.IsPacked()) {
             usage |= vk::ImageUsageFlagBits::eColorAttachment;
         }
-
         // In cases where an image is created as a render/depth target and cleared with compute,
         // we cannot predict whether it will be used as a storage image. A proper solution would
         // involve re-creating the resource with a new configuration and copying previous content
@@ -147,10 +147,18 @@ Image::Image(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
         break;
     }
 
+    constexpr auto tiling = vk::ImageTiling::eOptimal;
+    const auto supported_format = instance->GetSupportedFormat(info.pixel_format);
+    const auto properties = instance->GetPhysicalDevice().getImageFormatProperties(
+        supported_format, info.type, tiling, usage, flags);
+    const auto supported_samples = properties.result == vk::Result::eSuccess
+                                       ? properties.value.sampleCounts
+                                       : vk::SampleCountFlagBits::e1;
+
     const vk::ImageCreateInfo image_ci = {
         .flags = flags,
         .imageType = info.type,
-        .format = instance->GetSupportedFormat(info.pixel_format),
+        .format = supported_format,
         .extent{
             .width = info.size.width,
             .height = info.size.height,
@@ -158,8 +166,8 @@ Image::Image(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
         },
         .mipLevels = static_cast<u32>(info.resources.levels),
         .arrayLayers = static_cast<u32>(info.resources.layers),
-        .samples = LiverpoolToVK::NumSamples(info.num_samples),
-        .tiling = vk::ImageTiling::eOptimal,
+        .samples = LiverpoolToVK::NumSamples(info.num_samples, supported_samples),
+        .tiling = tiling,
         .usage = usage,
         .initialLayout = vk::ImageLayout::eUndefined,
     };

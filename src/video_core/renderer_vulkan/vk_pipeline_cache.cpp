@@ -24,6 +24,15 @@ using Shader::VsOutput;
     return seed ^ (hash + 0x9e3779b9 + (seed << 6) + (seed >> 2));
 }
 
+constexpr static std::array DescriptorHeapSizes = {
+    vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 8192},
+    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1024},
+    vk::DescriptorPoolSize{vk::DescriptorType::eUniformTexelBuffer, 128},
+    vk::DescriptorPoolSize{vk::DescriptorType::eStorageTexelBuffer, 128},
+    vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8192},
+    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1024},
+};
+
 void GatherVertexOutputs(Shader::VertexRuntimeInfo& info,
                          const AmdGpu::Liverpool::VsOutputControl& ctl) {
     const auto add_output = [&](VsOutput x, VsOutput y, VsOutput z, VsOutput w) {
@@ -120,7 +129,8 @@ Shader::RuntimeInfo PipelineCache::BuildRuntimeInfo(Shader::Stage stage) {
 
 PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_)
-    : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_} {
+    : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
+      desc_heap{instance, scheduler.GetMasterSemaphore(), DescriptorHeapSizes} {
     profile = Shader::Profile{
         .supported_spirv = instance.ApiVersion() >= VK_API_VERSION_1_3 ? 0x00010600U : 0x00010500U,
         .subgroup_size = instance.SubgroupSize(),
@@ -148,16 +158,19 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
         LOG_TRACE(Render_Vulkan, "FMask decompression pass skipped");
         return nullptr;
     }
+    if (regs.primitive_type == Liverpool::PrimitiveType::None) {
+        LOG_TRACE(Render_Vulkan, "Primitive type 'None' skipped");
+        return nullptr;
+    }
     if (!RefreshGraphicsKey()) {
         return nullptr;
     }
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
     if (is_new) {
-        it.value() = std::make_unique<GraphicsPipeline>(instance, scheduler, graphics_key,
-                                                        *pipeline_cache, infos, modules);
+        it.value() = graphics_pipeline_pool.Create(instance, scheduler, desc_heap, graphics_key,
+                                                   *pipeline_cache, infos, modules);
     }
-    const GraphicsPipeline* pipeline = it->second.get();
-    return pipeline;
+    return it->second;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
@@ -166,11 +179,10 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     }
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
-        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, *pipeline_cache,
-                                                       compute_key, *infos[0], modules[0]);
+        it.value() = compute_pipeline_pool.Create(instance, scheduler, desc_heap, *pipeline_cache,
+                                                  compute_key, *infos[0], modules[0]);
     }
-    const ComputePipeline* pipeline = it->second.get();
-    return pipeline;
+    return it->second;
 }
 
 // 0x3f84ec55ULL - Amplitude V_MOVRELD_B32
@@ -189,28 +201,36 @@ bool ShouldSkipShader(u64 shader_hash, const char* shader_type) {
 }
 
 bool PipelineCache::RefreshGraphicsKey() {
+    std::memset(&graphics_key, 0, sizeof(GraphicsPipelineKey));
+
     auto& regs = liverpool->regs;
     auto& key = graphics_key;
 
-    key.depth = regs.depth_control;
-    key.depth.depth_write_enable.Assign(regs.depth_control.depth_write_enable.Value() &&
-                                        !regs.depth_render_control.depth_clear_enable);
-    key.depth_bounds_min = regs.depth_bounds_min;
-    key.depth_bounds_max = regs.depth_bounds_max;
-    key.depth_bias_enable = regs.polygon_control.enable_polygon_offset_back ||
-                            regs.polygon_control.enable_polygon_offset_front ||
-                            regs.polygon_control.enable_polygon_offset_para;
-    if (regs.polygon_control.enable_polygon_offset_front) {
-        key.depth_bias_const_factor = regs.poly_offset.front_offset;
-        key.depth_bias_slope_factor = regs.poly_offset.front_scale;
+    key.depth_stencil = regs.depth_control;
+    key.depth_stencil.depth_write_enable.Assign(regs.depth_control.depth_write_enable.Value() &&
+                                                !regs.depth_render_control.depth_clear_enable);
+    key.depth_bias_enable = regs.polygon_control.NeedsBias();
+
+    const auto& db = regs.depth_buffer;
+    const auto ds_format = LiverpoolToVK::DepthFormat(db.z_info.format, db.stencil_info.format);
+    if (db.z_info.format != AmdGpu::Liverpool::DepthBuffer::ZFormat::Invalid) {
+        key.depth_format = ds_format;
     } else {
-        key.depth_bias_const_factor = regs.poly_offset.back_offset;
-        key.depth_bias_slope_factor = regs.poly_offset.back_scale;
+        key.depth_format = vk::Format::eUndefined;
     }
-    key.depth_bias_clamp = regs.poly_offset.depth_bias;
+    if (regs.depth_control.depth_enable) {
+        key.depth_stencil.depth_enable.Assign(key.depth_format != vk::Format::eUndefined);
+    }
     key.stencil = regs.stencil_control;
-    key.stencil_ref_front = regs.stencil_ref_front;
-    key.stencil_ref_back = regs.stencil_ref_back;
+
+    if (db.stencil_info.format != AmdGpu::Liverpool::DepthBuffer::StencilFormat::Invalid) {
+        key.stencil_format = key.depth_format;
+    } else {
+        key.stencil_format = vk::Format::eUndefined;
+    }
+    if (key.depth_stencil.stencil_enable) {
+        key.depth_stencil.stencil_enable.Assign(key.stencil_format != vk::Format::eUndefined);
+    }
     key.prim_type = regs.primitive_type;
     key.enable_primitive_restart = regs.enable_primitive_restart & 1;
     key.primitive_restart_index = regs.primitive_restart_index;
@@ -219,27 +239,6 @@ bool PipelineCache::RefreshGraphicsKey() {
     key.clip_space = regs.clipper_control.clip_space;
     key.front_face = regs.polygon_control.front_face;
     key.num_samples = regs.aa_config.NumSamples();
-
-    const auto& db = regs.depth_buffer;
-    const auto ds_format = LiverpoolToVK::DepthFormat(db.z_info.format, db.stencil_info.format);
-
-    if (db.z_info.format != AmdGpu::Liverpool::DepthBuffer::ZFormat::Invalid) {
-        key.depth_format = ds_format;
-    } else {
-        key.depth_format = vk::Format::eUndefined;
-    }
-    if (key.depth.depth_enable) {
-        key.depth.depth_enable.Assign(key.depth_format != vk::Format::eUndefined);
-    }
-
-    if (db.stencil_info.format != AmdGpu::Liverpool::DepthBuffer::StencilFormat::Invalid) {
-        key.stencil_format = key.depth_format;
-    } else {
-        key.stencil_format = vk::Format::eUndefined;
-    }
-    if (key.depth.stencil_enable) {
-        key.depth.stencil_enable.Assign(key.stencil_format != vk::Format::eUndefined);
-    }
 
     const auto skip_cb_binding =
         regs.color_control.mode == AmdGpu::Liverpool::ColorControl::OperationMode::Disable;
@@ -269,7 +268,7 @@ bool PipelineCache::RefreshGraphicsKey() {
         key.blend_controls[remapped_cb].enable.Assign(key.blend_controls[remapped_cb].enable &&
                                                       !col_buf.info.blend_bypass);
         key.write_masks[remapped_cb] = vk::ColorComponentFlags{regs.color_target_mask.GetMask(cb)};
-        key.cb_shader_mask = regs.color_shader_mask;
+        key.cb_shader_mask.SetMask(remapped_cb, regs.color_shader_mask.GetMask(cb));
 
         ++remapped_cb;
     }

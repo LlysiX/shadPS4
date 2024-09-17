@@ -142,6 +142,8 @@ public:
     [[nodiscard]] U64 PackUint2x32(const Value& vector);
     [[nodiscard]] Value UnpackUint2x32(const U64& value);
 
+    [[nodiscard]] F64 PackFloat2x32(const Value& vector);
+
     [[nodiscard]] U32 PackFloat2x16(const Value& vector);
     [[nodiscard]] Value UnpackFloat2x16(const U32& value);
 
@@ -194,6 +196,7 @@ public:
     [[nodiscard]] Value IMulExt(const U32& a, const U32& b, bool is_signed = false);
     [[nodiscard]] U32U64 IMul(const U32U64& a, const U32U64& b);
     [[nodiscard]] U32 IDiv(const U32& a, const U32& b, bool is_signed = false);
+    [[nodiscard]] U32 IMod(const U32& a, const U32& b, bool is_signed = false);
     [[nodiscard]] U32U64 INeg(const U32U64& value);
     [[nodiscard]] U32 IAbs(const U32& value);
     [[nodiscard]] U32U64 ShiftLeftLogical(const U32U64& base, const U32& shift);

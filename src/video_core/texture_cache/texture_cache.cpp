@@ -29,7 +29,7 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
     info.UpdateSize();
     const ImageId null_id = slot_images.insert(instance, scheduler, info);
     ASSERT(null_id.index == 0);
-    slot_images[null_id].flags = ImageFlagBits{};
+    slot_images[null_id].flags = ImageFlagBits::Tracked;
 
     ImageViewInfo view_info;
     void(slot_image_views.insert(instance, view_info, slot_images[null_id], null_id));
@@ -243,16 +243,7 @@ ImageView& TextureCache::RegisterImageView(ImageId image_id, const ImageViewInfo
         return slot_image_views[view_id];
     }
 
-    // All tiled images are created with storage usage flag. This makes set of formats (e.g. sRGB)
-    // impossible to use. However, during view creation, if an image isn't used as storage we can
-    // temporary remove its storage bit.
-    std::optional<vk::ImageUsageFlags> usage_override;
-    if (!image.info.usage.storage) {
-        usage_override = image.usage & ~vk::ImageUsageFlagBits::eStorage;
-    }
-
-    const ImageViewId view_id =
-        slot_image_views.insert(instance, view_info, image, image_id, usage_override);
+    const ImageViewId view_id = slot_image_views.insert(instance, view_info, image, image_id);
     image.image_view_infos.emplace_back(view_info);
     image.image_view_ids.emplace_back(view_id);
     return slot_image_views[view_id];

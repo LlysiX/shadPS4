@@ -84,9 +84,10 @@ public:
     void S_OR_B64(NegateMode negate, bool is_xor, const GcnInst& inst);
     void S_AND_B64(NegateMode negate, const GcnInst& inst);
     void S_ADD_I32(const GcnInst& inst);
-    void S_AND_B32(const GcnInst& inst);
+    void S_AND_B32(NegateMode negate, const GcnInst& inst);
     void S_ASHR_I32(const GcnInst& inst);
     void S_OR_B32(const GcnInst& inst);
+    void S_XOR_B32(const GcnInst& inst);
     void S_LSHR_B32(const GcnInst& inst);
     void S_CSELECT_B32(const GcnInst& inst);
     void S_CSELECT_B64(const GcnInst& inst);
@@ -103,6 +104,7 @@ public:
     void S_ADDK_I32(const GcnInst& inst);
     void S_MAX_U32(bool is_signed, const GcnInst& inst);
     void S_MIN_U32(bool is_signed, const GcnInst& inst);
+    void S_ABSDIFF_I32(const GcnInst& inst);
     void S_CMPK(ConditionOp cond, bool is_signed, const GcnInst& inst);
 
     // Scalar Memory
@@ -136,9 +138,13 @@ public:
     void V_FLOOR_F32(const GcnInst& inst);
     void V_SUB_F32(const GcnInst& inst);
     void V_RCP_F32(const GcnInst& inst);
+    void V_RCP_F64(const GcnInst& inst);
     void V_FMA_F32(const GcnInst& inst);
+    void V_FMA_F64(const GcnInst& inst);
     void V_CMP_F32(ConditionOp op, bool set_exec, const GcnInst& inst);
     void V_MAX_F32(const GcnInst& inst, bool is_legacy = false);
+    void V_MUL_F64(const GcnInst& inst);
+    void V_MAX_F64(const GcnInst& inst);
     void V_MAX_U32(bool is_signed, const GcnInst& inst);
     void V_RSQ_F32(const GcnInst& inst);
     void V_SIN_F32(const GcnInst& inst);
@@ -209,7 +215,7 @@ public:
 
     // Data share
     void DS_SWIZZLE_B32(const GcnInst& inst);
-    void DS_READ(int bit_size, bool is_signed, bool is_pair, const GcnInst& inst);
+    void DS_READ(int bit_size, bool is_signed, bool is_pair, bool stride64, const GcnInst& inst);
     void DS_WRITE(int bit_size, bool is_signed, bool is_pair, bool stride64, const GcnInst& inst);
     void DS_ADD_U32(const GcnInst& inst, bool rtn);
     void DS_MIN_U32(const GcnInst& inst, bool is_signed, bool rtn);

@@ -17,11 +17,11 @@
 namespace Vulkan {
 
 GraphicsPipeline::GraphicsPipeline(const Instance& instance_, Scheduler& scheduler_,
-                                   const GraphicsPipelineKey& key_,
+                                   DescriptorHeap& desc_heap_, const GraphicsPipelineKey& key_,
                                    vk::PipelineCache pipeline_cache,
                                    std::span<const Shader::Info*, MaxShaderStages> infos,
                                    std::span<const vk::ShaderModule> modules)
-    : instance{instance_}, scheduler{scheduler_}, key{key_} {
+    : instance{instance_}, scheduler{scheduler_}, desc_heap{desc_heap_}, key{key_} {
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
     BuildDescSetLayout();
@@ -95,14 +95,12 @@ GraphicsPipeline::GraphicsPipeline(const Instance& instance_, Scheduler& schedul
                          ? vk::FrontFace::eClockwise
                          : vk::FrontFace::eCounterClockwise,
         .depthBiasEnable = bool(key.depth_bias_enable),
-        .depthBiasConstantFactor = key.depth_bias_const_factor,
-        .depthBiasClamp = key.depth_bias_clamp,
-        .depthBiasSlopeFactor = key.depth_bias_slope_factor,
         .lineWidth = 1.0f,
     };
 
     const vk::PipelineMultisampleStateCreateInfo multisampling = {
-        .rasterizationSamples = LiverpoolToVK::NumSamples(key.num_samples),
+        .rasterizationSamples =
+            LiverpoolToVK::NumSamples(key.num_samples, instance.GetFramebufferSampleCounts()),
         .sampleShadingEnable = false,
     };
 
@@ -133,9 +131,10 @@ GraphicsPipeline::GraphicsPipeline(const Instance& instance_, Scheduler& schedul
     };
 
     boost::container::static_vector<vk::DynamicState, 14> dynamic_states = {
-        vk::DynamicState::eViewport,
-        vk::DynamicState::eScissor,
-        vk::DynamicState::eBlendConstants,
+        vk::DynamicState::eViewport,           vk::DynamicState::eScissor,
+        vk::DynamicState::eBlendConstants,     vk::DynamicState::eDepthBounds,
+        vk::DynamicState::eDepthBias,          vk::DynamicState::eStencilReference,
+        vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
     };
 
     if (instance.IsColorWriteEnableSupported()) {
@@ -152,39 +151,31 @@ GraphicsPipeline::GraphicsPipeline(const Instance& instance_, Scheduler& schedul
     };
 
     const vk::PipelineDepthStencilStateCreateInfo depth_info = {
-        .depthTestEnable = key.depth.depth_enable,
-        .depthWriteEnable = key.depth.depth_write_enable,
-        .depthCompareOp = LiverpoolToVK::CompareOp(key.depth.depth_func),
-        .depthBoundsTestEnable = key.depth.depth_bounds_enable,
-        .stencilTestEnable = key.depth.stencil_enable,
+        .depthTestEnable = key.depth_stencil.depth_enable,
+        .depthWriteEnable = key.depth_stencil.depth_write_enable,
+        .depthCompareOp = LiverpoolToVK::CompareOp(key.depth_stencil.depth_func),
+        .depthBoundsTestEnable = key.depth_stencil.depth_bounds_enable,
+        .stencilTestEnable = key.depth_stencil.stencil_enable,
         .front{
             .failOp = LiverpoolToVK::StencilOp(key.stencil.stencil_fail_front),
             .passOp = LiverpoolToVK::StencilOp(key.stencil.stencil_zpass_front),
             .depthFailOp = LiverpoolToVK::StencilOp(key.stencil.stencil_zfail_front),
-            .compareOp = LiverpoolToVK::CompareOp(key.depth.stencil_ref_func),
-            .compareMask = key.stencil_ref_front.stencil_mask,
-            .writeMask = key.stencil_ref_front.stencil_write_mask,
-            .reference = key.stencil_ref_front.stencil_test_val,
+            .compareOp = LiverpoolToVK::CompareOp(key.depth_stencil.stencil_ref_func),
         },
         .back{
-            .failOp = LiverpoolToVK::StencilOp(key.depth.backface_enable
+            .failOp = LiverpoolToVK::StencilOp(key.depth_stencil.backface_enable
                                                    ? key.stencil.stencil_fail_back.Value()
                                                    : key.stencil.stencil_fail_front.Value()),
-            .passOp = LiverpoolToVK::StencilOp(key.depth.backface_enable
+            .passOp = LiverpoolToVK::StencilOp(key.depth_stencil.backface_enable
                                                    ? key.stencil.stencil_zpass_back.Value()
                                                    : key.stencil.stencil_zpass_front.Value()),
-            .depthFailOp = LiverpoolToVK::StencilOp(key.depth.backface_enable
+            .depthFailOp = LiverpoolToVK::StencilOp(key.depth_stencil.backface_enable
                                                         ? key.stencil.stencil_zfail_back.Value()
                                                         : key.stencil.stencil_zfail_front.Value()),
-            .compareOp = LiverpoolToVK::CompareOp(key.depth.backface_enable
-                                                      ? key.depth.stencil_bf_func.Value()
-                                                      : key.depth.stencil_ref_func.Value()),
-            .compareMask = key.stencil_ref_back.stencil_mask,
-            .writeMask = key.stencil_ref_back.stencil_write_mask,
-            .reference = key.stencil_ref_back.stencil_test_val,
+            .compareOp = LiverpoolToVK::CompareOp(key.depth_stencil.backface_enable
+                                                      ? key.depth_stencil.stencil_bf_func.Value()
+                                                      : key.depth_stencil.stencil_ref_func.Value()),
         },
-        .minDepthBounds = key.depth_bounds_min,
-        .maxDepthBounds = key.depth_bounds_max,
     };
 
     auto stage = u32(Shader::Stage::Vertex);
@@ -343,8 +334,12 @@ void GraphicsPipeline::BuildDescSetLayout() {
             });
         }
     }
+    uses_push_descriptors = binding < instance.MaxPushDescriptors();
+    const auto flags = uses_push_descriptors
+                           ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
+                           : vk::DescriptorSetLayoutCreateFlagBits{};
     const vk::DescriptorSetLayoutCreateInfo desc_layout_ci = {
-        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .flags = flags,
         .bindingCount = static_cast<u32>(bindings.size()),
         .pBindings = bindings.data(),
     };
@@ -446,10 +441,10 @@ void GraphicsPipeline::BindResources(const Liverpool::Regs& regs,
             });
         }
 
-        boost::container::static_vector<AmdGpu::Image, 16> tsharps;
+        boost::container::static_vector<AmdGpu::Image, 32> tsharps;
         for (const auto& image_desc : stage->images) {
             const auto tsharp = image_desc.GetSharp(*stage);
-            if (tsharp) {
+            if (tsharp.GetDataFmt() != AmdGpu::DataFormat::FormatInvalid) {
                 tsharps.emplace_back(tsharp);
                 VideoCore::ImageInfo image_info{tsharp, image_desc.is_depth};
                 VideoCore::ImageViewInfo view_info{tsharp, image_desc.is_storage};
@@ -510,8 +505,18 @@ void GraphicsPipeline::BindResources(const Liverpool::Regs& regs,
     }
 
     if (!set_writes.empty()) {
-        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0,
-                                    set_writes);
+        if (uses_push_descriptors) {
+            cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0,
+                                        set_writes);
+        } else {
+            const auto desc_set = desc_heap.Commit(*desc_layout);
+            for (auto& set_write : set_writes) {
+                set_write.dstSet = desc_set;
+            }
+            instance.GetDevice().updateDescriptorSets(set_writes, {});
+            cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0,
+                                      desc_set, {});
+        }
     }
     cmdbuf.pushConstants(*pipeline_layout,
                          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0U,

@@ -58,9 +58,11 @@ PAddr MemoryManager::Allocate(PAddr search_start, PAddr search_end, size_t size,
     auto dmem_area = FindDmemArea(search_start);
 
     const auto is_suitable = [&] {
-        const auto area_addr = dmem_area->second.base;
-        const auto aligned_addr = alignment > 0 ? Common::AlignUp(area_addr, alignment) : area_addr;
-        const auto remaining_size = dmem_area->second.size - (aligned_addr - area_addr);
+        const auto aligned_base = alignment > 0 ? Common::AlignUp(dmem_area->second.base, alignment)
+                                                : dmem_area->second.base;
+        const auto alignment_size = aligned_base - dmem_area->second.base;
+        const auto remaining_size =
+            dmem_area->second.size >= alignment_size ? dmem_area->second.size - alignment_size : 0;
         return dmem_area->second.is_free && remaining_size >= size;
     };
     while (!is_suitable() && dmem_area->second.GetEnd() <= search_end) {
@@ -417,9 +419,9 @@ int MemoryManager::DirectQueryAvailable(PAddr search_start, PAddr search_end, si
 
         const auto aligned_base = alignment > 0 ? Common::AlignUp(dmem_area->second.base, alignment)
                                                 : dmem_area->second.base;
+        const auto alignment_size = aligned_base - dmem_area->second.base;
         const auto remaining_size =
-            dmem_area->second.size - (aligned_base - dmem_area->second.base);
-
+            dmem_area->second.size >= alignment_size ? dmem_area->second.size - alignment_size : 0;
         if (remaining_size > max_size) {
             paddr = aligned_base;
             max_size = remaining_size;

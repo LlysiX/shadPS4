@@ -75,10 +75,14 @@ void Linker::Execute() {
 
     // Configure used flexible memory size.
     if (const auto* proc_param = GetProcParam()) {
-        if (proc_param->entry_count >= 3) {
+        if (proc_param->size >=
+            offsetof(OrbisProcParam, mem_param) + sizeof(OrbisKernelMemParam*)) {
             if (const auto* mem_param = proc_param->mem_param) {
-                if (const auto* flexible_size = mem_param->flexible_memory_size) {
-                    memory->SetupMemoryRegions(*flexible_size);
+                if (mem_param->size >=
+                    offsetof(OrbisKernelMemParam, flexible_memory_size) + sizeof(u64*)) {
+                    if (const auto* flexible_size = mem_param->flexible_memory_size) {
+                        memory->SetupMemoryRegions(*flexible_size);
+                    }
                 }
             }
         }

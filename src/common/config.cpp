@@ -48,8 +48,8 @@ static std::array<std::string, 4> userNames = {"shadPS4"
 static std::string updateChannel;
 static std::string chooseHomeTab;
 static std::string backButtonBehavior = "left";
-static bool useSpecialPad = false;
-static int specialPadClass = 1;
+static bool useSpecialPads[4] = {false, false, false, false};
+static int specialPadClasses[4] = {1, 1, 1, 1};
 static bool isMotionControlsEnabled = true;
 static bool isDebugDump = false;
 static bool isShaderDebug = false;
@@ -253,12 +253,12 @@ std::string getBackButtonBehavior() {
     return backButtonBehavior;
 }
 
-bool getUseSpecialPad() {
-    return useSpecialPad;
+bool getUseSpecialPad(int pad) {
+    return useSpecialPads[pad - 1];
 }
 
-int getSpecialPadClass() {
-    return specialPadClass;
+int getSpecialPadClass(int pad) {
+    return specialPadClasses[pad - 1];
 }
 
 bool getIsMotionControlsEnabled() {
@@ -503,11 +503,11 @@ void setBackButtonBehavior(const std::string& type) {
 }
 
 void setUseSpecialPad(bool use) {
-    useSpecialPad = use;
+    useSpecialPads[0] = use;
 }
 
 void setSpecialPadClass(int type) {
-    specialPadClass = type;
+    specialPadClasses[0] = type;
 }
 
 void setIsMotionControlsEnabled(bool use) {
@@ -786,8 +786,14 @@ void load(const std::filesystem::path& path) {
         cursorState = toml::find_or<int>(input, "cursorState", HideCursorState::Idle);
         cursorHideTimeout = toml::find_or<int>(input, "cursorHideTimeout", 5);
         backButtonBehavior = toml::find_or<std::string>(input, "backButtonBehavior", "left");
-        useSpecialPad = toml::find_or<bool>(input, "useSpecialPad", false);
-        specialPadClass = toml::find_or<int>(input, "specialPadClass", 1);
+        useSpecialPads[0] = toml::find_or<bool>(input, "useSpecialPad1", false);
+        useSpecialPads[1] = toml::find_or<bool>(input, "useSpecialPad2", false);
+        useSpecialPads[2] = toml::find_or<bool>(input, "useSpecialPad3", false);
+        useSpecialPads[3] = toml::find_or<bool>(input, "useSpecialPad4", false);
+        specialPadClasses[0] = toml::find_or<int>(input, "specialPadClass1", 1);
+        specialPadClasses[1] = toml::find_or<int>(input, "specialPadClass2", 1);
+        specialPadClasses[2] = toml::find_or<int>(input, "specialPadClass3", 1);
+        specialPadClasses[3] = toml::find_or<int>(input, "specialPadClass4", 1);
         isMotionControlsEnabled = toml::find_or<bool>(input, "isMotionControlsEnabled", true);
         useUnifiedInputConfig = toml::find_or<bool>(input, "useUnifiedInputConfig", true);
     }
@@ -974,8 +980,14 @@ void save(const std::filesystem::path& path) {
     data["Input"]["cursorState"] = cursorState;
     data["Input"]["cursorHideTimeout"] = cursorHideTimeout;
     data["Input"]["backButtonBehavior"] = backButtonBehavior;
-    data["Input"]["useSpecialPad"] = useSpecialPad;
-    data["Input"]["specialPadClass"] = specialPadClass;
+    data["Input"]["useSpecialPad1"] = useSpecialPads[0];
+    data["Input"]["useSpecialPad2"] = useSpecialPads[1];
+    data["Input"]["useSpecialPad3"] = useSpecialPads[2];
+    data["Input"]["useSpecialPad4"] = useSpecialPads[3];
+    data["Input"]["specialPadClass1"] = specialPadClasses[0];
+    data["Input"]["specialPadClass2"] = specialPadClasses[1];
+    data["Input"]["specialPadClass3"] = specialPadClasses[2];
+    data["Input"]["specialPadClass4"] = specialPadClasses[3];
     data["Input"]["isMotionControlsEnabled"] = isMotionControlsEnabled;
     data["Input"]["useUnifiedInputConfig"] = useUnifiedInputConfig;
     data["GPU"]["screenWidth"] = screenWidth;
@@ -1120,8 +1132,14 @@ void setDefaultValues() {
     cursorHideTimeout = 5;
     trophyNotificationDuration = 6.0;
     backButtonBehavior = "left";
-    useSpecialPad = false;
-    specialPadClass = 1;
+    useSpecialPads[0] = false;
+    useSpecialPads[1] = false;
+    useSpecialPads[2] = false;
+    useSpecialPads[3] = false;
+    specialPadClasses[0] = 1;
+    specialPadClasses[1] = 1;
+    specialPadClasses[2] = 1;
+    specialPadClasses[3] = 1;
     isDebugDump = false;
     isShaderDebug = false;
     isShowSplash = false;

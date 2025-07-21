@@ -74,7 +74,6 @@ public:
     static void CalculateOrientation(Libraries::Pad::OrbisFVector3& acceleration,
                                      Libraries::Pad::OrbisFVector3& angularVelocity,
                                      float deltaTime,
-                                     Libraries::Pad::OrbisFQuaternion& lastOrientation,
                                      Libraries::Pad::OrbisFQuaternion& orientation);
 
 private:

@@ -533,11 +533,16 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
     old_param = *new_param;
     if (button != SDL_GAMEPAD_BUTTON_INVALID) {
         switch (button) {
-        case SDL_GAMEPAD_BUTTON_TOUCHPAD:
-            touchpad_x = Config::getBackButtonBehavior() == "left"    ? 0.25f
-                         : Config::getBackButtonBehavior() == "right" ? 0.75f
-                                                                      : 0.5f;
-            controllers[0]->SetTouchpadState(0, new_button_state, touchpad_x, 0.5f);
+        case SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT:
+            controllers[0]->SetTouchpadState(0, new_button_state, 0.25f, 0.5f);
+            controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
+            break;
+        case SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER:
+            controllers[0]->SetTouchpadState(0, new_button_state, 0.50f, 0.5f);
+            controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
+            break;
+        case SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT:
+            controllers[0]->SetTouchpadState(0, new_button_state, 0.75f, 0.5f);
             controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
             break;
         case LEFTJOYSTICK_HALFMODE:

@@ -94,6 +94,21 @@ public:
         return features.shaderFloat64;
     }
 
+    /// Returns true if 64-bit ints are supported in shaders
+    bool IsShaderInt64Supported() const {
+        return features.shaderInt64;
+    }
+
+    /// Returns true if 16-bit ints are supported in shaders
+    bool IsShaderInt16Supported() const {
+        return features.shaderInt16;
+    }
+
+    /// Returns true if 8-bit ints are supported in shaders
+    bool IsShaderInt8Supported() const {
+        return vk12_features.shaderInt8;
+    }
+
     /// Returns true when VK_EXT_custom_border_color is supported
     bool IsCustomBorderColorSupported() const {
         return custom_border_color;
@@ -107,6 +122,11 @@ public:
     /// Returns true when VK_EXT_depth_clip_control is supported
     bool IsDepthClipControlSupported() const {
         return depth_clip_control;
+    }
+
+    /// Returns true when VK_EXT_depth_clip_enable is supported
+    bool IsDepthClipEnableSupported() const {
+        return depth_clip_enable;
     }
 
     /// Returns true when VK_EXT_depth_range_unrestricted is supported
@@ -140,6 +160,11 @@ public:
         return fragment_shader_barycentric;
     }
 
+    /// Returns true when VK_AMD_shader_explicit_vertex_parameter is supported.
+    bool IsAmdShaderExplicitVertexParameterSupported() const {
+        return amd_shader_explicit_vertex_parameter;
+    }
+
     /// Returns true when VK_EXT_primitive_topology_list_restart is supported.
     bool IsListRestartSupported() const {
         return list_restart;
@@ -148,6 +173,11 @@ public:
     /// Returns true when VK_EXT_legacy_vertex_attributes is supported.
     bool IsLegacyVertexAttributesSupported() const {
         return legacy_vertex_attributes;
+    }
+
+    /// Returns true when VK_EXT_provoking_vertex is supported.
+    bool IsProvokingVertexSupported() const {
+        return provoking_vertex;
     }
 
     /// Returns true when VK_AMD_shader_image_load_store_lod is supported.
@@ -165,10 +195,33 @@ public:
         return amd_shader_trinary_minmax;
     }
 
+    /// Returns true when the shaderBufferFloat32AtomicMinMax feature of
+    /// VK_EXT_shader_atomic_float2 is supported.
+    bool IsShaderAtomicFloatBuffer32MinMaxSupported() const {
+        return shader_atomic_float2 &&
+               shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax;
+    }
+
     /// Returns true when the shaderImageFloat32AtomicMinMax feature of
     /// VK_EXT_shader_atomic_float2 is supported.
     bool IsShaderAtomicFloatImage32MinMaxSupported() const {
         return shader_atomic_float2 && shader_atomic_float2_features.shaderImageFloat32AtomicMinMax;
+    }
+
+    /// Returns true if 64-bit integer atomic operations can be used on buffers
+    bool IsBufferInt64AtomicsSupported() const {
+        return vk12_features.shaderBufferInt64Atomics;
+    }
+
+    /// Returns true if 64-bit integer atomic operations can be used on shared memory
+    bool IsSharedInt64AtomicsSupported() const {
+        return vk12_features.shaderSharedInt64Atomics;
+    }
+
+    /// Returns true when VK_KHR_workgroup_memory_explicit_layout is supported.
+    bool IsWorkgroupMemoryExplicitLayoutSupported() const {
+        return workgroup_memory_explicit_layout &&
+               workgroup_memory_explicit_layout_features.workgroupMemoryExplicitLayout16BitAccess;
     }
 
     /// Returns true when geometry shaders are supported by the device
@@ -301,9 +354,19 @@ public:
         return properties.limits.maxViewportDimensions[0];
     }
 
-    ///  Returns the maximum viewport height.
+    /// Returns the maximum viewport height.
     u32 GetMaxViewportHeight() const {
         return properties.limits.maxViewportDimensions[1];
+    }
+
+    /// Returns the maximum render area width.
+    u32 GetMaxFramebufferWidth() const {
+        return properties.limits.maxFramebufferWidth;
+    }
+
+    /// Returns the maximum render area height.
+    u32 GetMaxFramebufferHeight() const {
+        return properties.limits.maxFramebufferHeight;
     }
 
     /// Returns the sample count flags supported by framebuffers.
@@ -317,6 +380,14 @@ public:
     bool IsPrimitiveRestartDisableSupported() const {
         return driver_id != vk::DriverId::eMoltenvk;
     }
+
+    /// Returns true if logic ops are supported by the device.
+    bool IsLogicOpSupported() const {
+        return features.logicOp;
+    }
+
+    /// Determines if a format is supported for a set of feature flags.
+    [[nodiscard]] bool IsFormatSupported(vk::Format format, vk::FormatFeatureFlags2 flags) const;
 
 private:
     /// Creates the logical device opportunistically enabling extensions
@@ -332,9 +403,6 @@ private:
     /// Gets the supported feature flags for a format.
     [[nodiscard]] vk::FormatFeatureFlags2 GetFormatFeatureFlags(vk::Format format) const;
 
-    /// Determines if a format is supported for a set of feature flags.
-    [[nodiscard]] bool IsFormatSupported(vk::Format format, vk::FormatFeatureFlags2 flags) const;
-
 private:
     vk::UniqueInstance instance;
     vk::PhysicalDevice physical_device;
@@ -345,10 +413,13 @@ private:
     vk::PhysicalDeviceVulkan12Properties vk12_props;
     vk::PhysicalDevicePushDescriptorPropertiesKHR push_descriptor_props;
     vk::PhysicalDeviceFeatures features;
+    vk::PhysicalDeviceVulkan12Features vk12_features;
     vk::PhysicalDevicePortabilitySubsetFeaturesKHR portability_features;
     vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT dynamic_state_3_features;
     vk::PhysicalDeviceRobustness2FeaturesEXT robustness2_features;
     vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT shader_atomic_float2_features;
+    vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR
+        workgroup_memory_explicit_layout_features;
     vk::DriverIdKHR driver_id;
     vk::UniqueDebugUtilsMessengerEXT debug_callback{};
     std::string vendor_name;
@@ -362,18 +433,22 @@ private:
     u32 queue_family_index{0};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
+    bool amd_shader_explicit_vertex_parameter{};
     bool depth_clip_control{};
+    bool depth_clip_enable{};
     bool depth_range_unrestricted{};
     bool dynamic_state_3{};
     bool vertex_input_dynamic_state{};
     bool robustness2{};
     bool list_restart{};
     bool legacy_vertex_attributes{};
+    bool provoking_vertex{};
     bool shader_stencil_export{};
     bool image_load_store_lod{};
     bool amd_gcn_shader{};
     bool amd_shader_trinary_minmax{};
     bool shader_atomic_float2{};
+    bool workgroup_memory_explicit_layout{};
     bool portability_subset{};
 };
 

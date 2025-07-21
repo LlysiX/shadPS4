@@ -118,14 +118,16 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
             return -1;
         }
 
-        if (read_only) {
-            // Can't create files in a read only directory
-            h->DeleteHandle(handle);
-            *__Error() = POSIX_EROFS;
-            return -1;
+        if (!exists) {
+            if (read_only) {
+                // Can't create files in a read only directory
+                h->DeleteHandle(handle);
+                *__Error() = POSIX_EROFS;
+                return -1;
+            }
+            // Create a file if it doesn't exist
+            Common::FS::IOFile out(file->m_host_name, Common::FS::FileAccessMode::Write);
         }
-        // Create a file if it doesn't exist
-        Common::FS::IOFile out(file->m_host_name, Common::FS::FileAccessMode::Write);
     } else if (!exists) {
         // If we're not creating a file, and it doesn't exist, return ENOENT
         h->DeleteHandle(handle);
@@ -293,6 +295,7 @@ s64 PS4_SYSV_ABI write(s32 fd, const void* buf, size_t nbytes) {
         }
         return result;
     }
+
     return file->f.WriteRaw<u8>(buf, nbytes);
 }
 
@@ -750,7 +753,24 @@ s32 PS4_SYSV_ABI posix_rename(const char* from, const char* to) {
         *__Error() = POSIX_ENOTEMPTY;
         return -1;
     }
+
+    // On Windows, std::filesystem::rename will error if the file has been opened before.
     std::filesystem::copy(src_path, dst_path, std::filesystem::copy_options::overwrite_existing);
+    auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
+    auto file = h->GetFile(src_path);
+    if (file) {
+        // We need to force ReadWrite if the file had Write access before
+        // Otherwise f.Open will clear the file contents.
+        auto access_mode = file->f.GetAccessMode() == Common::FS::FileAccessMode::Write
+                               ? Common::FS::FileAccessMode::ReadWrite
+                               : file->f.GetAccessMode();
+        file->f.Close();
+        std::filesystem::remove(src_path);
+        file->f.Open(dst_path, access_mode);
+    } else {
+        std::filesystem::remove(src_path);
+    }
+
     return ORBIS_OK;
 }
 
@@ -1050,6 +1070,7 @@ void RegisterFileSystem(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("4wSze92BhLI", "libkernel", 1, "libkernel", 1, 1, sceKernelWrite);
     LIB_FUNCTION("+WRlkKjZvag", "libkernel", 1, "libkernel", 1, 1, readv);
     LIB_FUNCTION("YSHRBRLn2pI", "libkernel", 1, "libkernel", 1, 1, writev);
+    LIB_FUNCTION("kAt6VDbHmro", "libkernel", 1, "libkernel", 1, 1, sceKernelWritev);
     LIB_FUNCTION("Oy6IpwgtYOk", "libScePosix", 1, "libkernel", 1, 1, posix_lseek);
     LIB_FUNCTION("Oy6IpwgtYOk", "libkernel", 1, "libkernel", 1, 1, posix_lseek);
     LIB_FUNCTION("oib76F-12fk", "libkernel", 1, "libkernel", 1, 1, sceKernelLseek);
@@ -1072,6 +1093,8 @@ void RegisterFileSystem(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("kBwCPsYX-m4", "libkernel", 1, "libkernel", 1, 1, sceKernelFstat);
     LIB_FUNCTION("ih4CD9-gghM", "libkernel", 1, "libkernel", 1, 1, posix_ftruncate);
     LIB_FUNCTION("VW3TVZiM4-E", "libkernel", 1, "libkernel", 1, 1, sceKernelFtruncate);
+    LIB_FUNCTION("NN01qLRhiqU", "libScePosix", 1, "libkernel", 1, 1, posix_rename);
+    LIB_FUNCTION("NN01qLRhiqU", "libkernel", 1, "libkernel", 1, 1, posix_rename);
     LIB_FUNCTION("52NcYU9+lEo", "libkernel", 1, "libkernel", 1, 1, sceKernelRename);
     LIB_FUNCTION("yTj62I7kw4s", "libkernel", 1, "libkernel", 1, 1, sceKernelPreadv);
     LIB_FUNCTION("ezv-RSBNKqI", "libScePosix", 1, "libkernel", 1, 1, posix_pread);

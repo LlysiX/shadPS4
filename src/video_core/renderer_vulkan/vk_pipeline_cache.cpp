@@ -94,15 +94,10 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
     switch (stage) {
     case Stage::Local: {
         BuildCommon(regs.ls_program);
-        if (regs.stage_enable.IsStageEnabled(static_cast<u32>(Stage::Hull))) {
-            info.ls_info.links_with_tcs = true;
-            Shader::TessellationDataConstantBuffer tess_constants;
-            const auto* pgm = regs.ProgramForStage(static_cast<u32>(Stage::Hull));
-            const auto params = Liverpool::GetParams(*pgm);
-            const auto& hull_info = program_cache.at(params.hash)->info;
-            hull_info.ReadTessConstantBuffer(tess_constants);
-            info.ls_info.ls_stride = tess_constants.ls_stride;
-        }
+        Shader::TessellationDataConstantBuffer tess_constants;
+        const auto* hull_info = infos[u32(Shader::LogicalStage::TessellationControl)];
+        hull_info->ReadTessConstantBuffer(tess_constants);
+        info.ls_info.ls_stride = tess_constants.ls_stride;
         break;
     }
     case Stage::Hull: {
@@ -122,6 +117,8 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
     case Stage::Vertex: {
         BuildCommon(regs.vs_program);
         GatherVertexOutputs(info.vs_info, regs.vs_output_control);
+        info.vs_info.step_rate_0 = regs.vgt_instance_step_rate_0;
+        info.vs_info.step_rate_1 = regs.vgt_instance_step_rate_1;
         info.vs_info.emulate_depth_negative_one_to_one =
             !instance.IsDepthClipControlSupported() &&
             regs.clipper_control.clip_space == Liverpool::ClipSpace::MinusWToW;
@@ -146,6 +143,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
         }
         gs_info.in_vertex_data_size = regs.vgt_esgs_ring_itemsize;
         gs_info.out_vertex_data_size = regs.vgt_gs_vert_itemsize[0];
+        gs_info.mode = regs.vgt_gs_mode.mode;
         const auto params_vc = Liverpool::GetParams(regs.vs_program);
         gs_info.vs_copy = params_vc.code;
         gs_info.vs_copy_hash = params_vc.hash;
@@ -158,6 +156,15 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
         info.fs_info.addr_flags = regs.ps_input_addr;
         const auto& ps_inputs = regs.ps_inputs;
         info.fs_info.num_inputs = regs.num_interp;
+        const auto& cb0_blend = regs.blend_control[0];
+        info.fs_info.dual_source_blending =
+            LiverpoolToVK::IsDualSourceBlendFactor(cb0_blend.color_dst_factor) ||
+            LiverpoolToVK::IsDualSourceBlendFactor(cb0_blend.color_src_factor);
+        if (cb0_blend.separate_alpha_blend) {
+            info.fs_info.dual_source_blending |=
+                LiverpoolToVK::IsDualSourceBlendFactor(cb0_blend.alpha_dst_factor) ||
+                LiverpoolToVK::IsDualSourceBlendFactor(cb0_blend.alpha_src_factor);
+        }
         for (u32 i = 0; i < regs.num_interp; i++) {
             info.fs_info.inputs[i] = {
                 .param_index = u8(ps_inputs[i].input_offset.Value()),
@@ -196,22 +203,37 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     profile = Shader::Profile{
         .supported_spirv = SpirvVersion1_6,
         .subgroup_size = instance.SubgroupSize(),
+        .support_int8 = instance.IsShaderInt8Supported(),
+        .support_int16 = instance.IsShaderInt16Supported(),
+        .support_int64 = instance.IsShaderInt64Supported(),
         .support_float64 = instance.IsShaderFloat64Supported(),
         .support_fp32_denorm_preserve = bool(vk12_props.shaderDenormPreserveFloat32),
         .support_fp32_denorm_flush = bool(vk12_props.shaderDenormFlushToZeroFloat32),
         .support_fp32_round_to_zero = bool(vk12_props.shaderRoundingModeRTZFloat32),
-        .support_explicit_workgroup_layout = true,
         .support_legacy_vertex_attributes = instance_.IsLegacyVertexAttributesSupported(),
         .supports_image_load_store_lod = instance_.IsImageLoadStoreLodSupported(),
         .supports_native_cube_calc = instance_.IsAmdGcnShaderSupported(),
         .supports_trinary_minmax = instance_.IsAmdShaderTrinaryMinMaxSupported(),
         // TODO: Emitted bounds checks cause problems with phi control flow; needs to be fixed.
         .supports_robust_buffer_access = true, // instance_.IsRobustBufferAccess2Supported(),
+        .supports_buffer_fp32_atomic_min_max =
+            instance_.IsShaderAtomicFloatBuffer32MinMaxSupported(),
         .supports_image_fp32_atomic_min_max = instance_.IsShaderAtomicFloatImage32MinMaxSupported(),
+        .supports_buffer_int64_atomics = instance_.IsBufferInt64AtomicsSupported(),
+        .supports_shared_int64_atomics = instance_.IsSharedInt64AtomicsSupported(),
+        .supports_workgroup_explicit_memory_layout =
+            instance_.IsWorkgroupMemoryExplicitLayoutSupported(),
+        .supports_amd_shader_explicit_vertex_parameter =
+            instance_.IsAmdShaderExplicitVertexParameterSupported(),
+        .supports_fragment_shader_barycentric = instance_.IsFragmentShaderBarycentricSupported(),
+        .has_incomplete_fragment_shader_barycentric =
+            instance_.IsFragmentShaderBarycentricSupported() &&
+            instance.GetDriverID() == vk::DriverId::eMoltenvk,
         .needs_manual_interpolation = instance.IsFragmentShaderBarycentricSupported() &&
                                       instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMoltenvk,
+        .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
         // When binding a UBO, we calculate its size considering the offset in the larger buffer
         // cache underlying resource. In some cases, it may produce sizes exceeding the system
         // maximum allowed UBO range, so we need to reduce the threshold to prevent issues.
@@ -272,24 +294,18 @@ bool PipelineCache::RefreshGraphicsKey() {
     auto& regs = liverpool->regs;
     auto& key = graphics_key;
 
-    const auto depth_format = instance.GetSupportedFormat(
-        LiverpoolToVK::DepthFormat(regs.depth_buffer.z_info.format,
-                                   regs.depth_buffer.stencil_info.format),
-        vk::FormatFeatureFlagBits2::eDepthStencilAttachment);
-    if (regs.depth_buffer.DepthValid()) {
-        key.depth_format = depth_format;
-    } else {
-        key.depth_format = vk::Format::eUndefined;
-    }
-    if (regs.depth_buffer.StencilValid()) {
-        key.stencil_format = depth_format;
-    } else {
-        key.stencil_format = vk::Format::eUndefined;
-    }
-
+    key.z_format = regs.depth_buffer.DepthValid() ? regs.depth_buffer.z_info.format.Value()
+                                                  : Liverpool::DepthBuffer::ZFormat::Invalid;
+    key.stencil_format = regs.depth_buffer.StencilValid()
+                             ? regs.depth_buffer.stencil_info.format.Value()
+                             : Liverpool::DepthBuffer::StencilFormat::Invalid;
+    key.depth_clamp_enable = !regs.depth_render_override.disable_viewport_clamp;
+    key.depth_clip_enable = regs.clipper_control.ZclipEnable();
+    key.clip_space = regs.clipper_control.clip_space;
+    key.provoking_vtx_last = regs.polygon_control.provoking_vtx_last;
     key.prim_type = regs.primitive_type;
     key.polygon_mode = regs.polygon_control.PolyMode();
-    key.clip_space = regs.clipper_control.clip_space;
+    key.logic_op = regs.color_control.rop3;
     key.num_samples = regs.NumSamples();
 
     const bool skip_cb_binding =
@@ -299,7 +315,6 @@ bool PipelineCache::RefreshGraphicsKey() {
     // attachments. This might be not a case as HW color buffers can be bound in an arbitrary
     // order. We need to do some arrays compaction at this stage
     key.num_color_attachments = 0;
-    key.color_formats.fill(vk::Format::eUndefined);
     key.color_buffers.fill({});
     key.blend_controls.fill({});
     key.write_masks.fill({});
@@ -335,9 +350,8 @@ bool PipelineCache::RefreshGraphicsKey() {
                                         col_buf.GetDataFmt() == AmdGpu::DataFormat::Format8_8 ||
                                         col_buf.GetDataFmt() == AmdGpu::DataFormat::Format8_8_8_8);
 
-        key.color_formats[remapped_cb] =
-            LiverpoolToVK::SurfaceFormat(col_buf.GetDataFmt(), col_buf.GetNumberFmt());
         key.color_buffers[remapped_cb] = Shader::PsColorBuffer{
+            .data_format = col_buf.GetDataFmt(),
             .num_format = col_buf.GetNumberFmt(),
             .num_conversion = col_buf.GetNumberConversion(),
             .export_format = regs.color_export_format.GetFormat(cb),
@@ -437,10 +451,6 @@ bool PipelineCache::RefreshGraphicsKey() {
         // Stride will still be handled outside the pipeline using dynamic state.
         u32 vertex_binding = 0;
         for (const auto& attrib : fetch_shader->attributes) {
-            if (attrib.UsesStepRates()) {
-                // Skip attribute binding as the data will be pulled by shader.
-                continue;
-            }
             const auto& buffer = attrib.GetSharp(*vs_info);
             ASSERT(vertex_binding < MaxVertexBufferCount);
             key.vertex_buffer_formats[vertex_binding++] =
@@ -460,9 +470,7 @@ bool PipelineCache::RefreshGraphicsKey() {
             // Attachment is masked out by either color_target_mask or shader mrt_mask. In the case
             // of the latter we need to change format to undefined, and either way we need to
             // increment the index for the null attachment binding.
-            key.color_formats[remapped_cb] = vk::Format::eUndefined;
-            key.color_buffers[remapped_cb] = {};
-            ++remapped_cb;
+            key.color_buffers[remapped_cb++] = {};
             continue;
         }
 
@@ -475,7 +483,7 @@ bool PipelineCache::RefreshGraphicsKey() {
     }
 
     return true;
-} // namespace Vulkan
+}
 
 bool PipelineCache::RefreshComputeKey() {
     Shader::Backend::Bindings binding{};

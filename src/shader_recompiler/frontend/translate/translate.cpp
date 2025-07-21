@@ -21,16 +21,57 @@
 
 namespace Shader::Gcn {
 
-static u32 next_vgpr_num;
-static std::unordered_map<u32, IR::VectorReg> vgpr_map;
-
-Translator::Translator(IR::Block* block_, Info& info_, const RuntimeInfo& runtime_info_,
-                       const Profile& profile_)
-    : ir{*block_, block_->begin()}, info{info_}, runtime_info{runtime_info_}, profile{profile_} {
-    next_vgpr_num = vgpr_map.empty() ? runtime_info.num_allocated_vgprs : next_vgpr_num;
+static IR::VectorReg IterateBarycentrics(const RuntimeInfo& runtime_info, auto&& set_attribute) {
+    if (runtime_info.stage != Stage::Fragment) {
+        return IR::VectorReg::V0;
+    }
+    u32 dst_vreg{};
+    if (runtime_info.fs_info.addr_flags.persp_sample_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmoothSample, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmoothSample, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.persp_center_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmooth, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmooth, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.persp_centroid_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmoothCentroid, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordSmoothCentroid, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.persp_pull_model_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordPullModel, 0); // I/W
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordPullModel, 1); // J/W
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordPullModel, 2); // 1/W
+    }
+    if (runtime_info.fs_info.addr_flags.linear_sample_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPerspSample, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPerspSample, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.linear_center_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPersp, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPersp, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.linear_centroid_ena) {
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPerspCentroid, 0); // I
+        set_attribute(dst_vreg++, IR::Attribute::BaryCoordNoPerspCentroid, 1); // J
+    }
+    if (runtime_info.fs_info.addr_flags.line_stipple_tex_ena) {
+        ++dst_vreg;
+    }
+    return IR::VectorReg(dst_vreg);
 }
 
-void Translator::EmitPrologue() {
+Translator::Translator(Info& info_, const RuntimeInfo& runtime_info_, const Profile& profile_)
+    : info{info_}, runtime_info{runtime_info_}, profile{profile_},
+      next_vgpr_num{runtime_info.num_allocated_vgprs} {
+    IterateBarycentrics(runtime_info, [this](u32 vreg, IR::Attribute attrib, u32) {
+        vgpr_to_interp[vreg] = attrib;
+    });
+}
+
+void Translator::EmitPrologue(IR::Block* first_block) {
+    ir = IR::IREmitter(*first_block, first_block->begin());
+
     ir.Prologue();
     ir.SetExec(ir.Imm1(true));
 
@@ -46,53 +87,47 @@ void Translator::EmitPrologue() {
     case LogicalStage::Vertex:
         // v0: vertex ID, always present
         ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::VertexId));
-        // v1: instance ID, step rate 0
-        if (runtime_info.num_input_vgprs > 0) {
-            ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId0));
-        }
-        // v2: instance ID, step rate 1
-        if (runtime_info.num_input_vgprs > 1) {
-            ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId1));
-        }
-        // v3: instance ID, plain
-        if (runtime_info.num_input_vgprs > 2) {
-            ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId));
+        if (info.stage == Stage::Local) {
+            // v1: rel patch ID
+            if (runtime_info.num_input_vgprs > 0) {
+                ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
+            }
+            // v2: instance ID
+            if (runtime_info.num_input_vgprs > 1) {
+                ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId));
+            }
+        } else {
+            // v1: instance ID, step rate 0
+            if (runtime_info.num_input_vgprs > 0) {
+                if (runtime_info.vs_info.step_rate_0 != 0) {
+                    ir.SetVectorReg(dst_vreg++,
+                                    ir.IDiv(ir.GetAttributeU32(IR::Attribute::InstanceId),
+                                            ir.Imm32(runtime_info.vs_info.step_rate_0)));
+                } else {
+                    ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
+                }
+            }
+            // v2: instance ID, step rate 1
+            if (runtime_info.num_input_vgprs > 1) {
+                if (runtime_info.vs_info.step_rate_1 != 0) {
+                    ir.SetVectorReg(dst_vreg++,
+                                    ir.IDiv(ir.GetAttributeU32(IR::Attribute::InstanceId),
+                                            ir.Imm32(runtime_info.vs_info.step_rate_1)));
+                } else {
+                    ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
+                }
+            }
+            // v3: instance ID, plain
+            if (runtime_info.num_input_vgprs > 2) {
+                ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId));
+            }
         }
         break;
     case LogicalStage::Fragment:
-        dst_vreg = IR::VectorReg::V0;
-        if (runtime_info.fs_info.addr_flags.persp_sample_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.persp_center_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.persp_centroid_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.persp_pull_model_ena) {
-            ++dst_vreg; // I/W
-            ++dst_vreg; // J/W
-            ++dst_vreg; // 1/W
-        }
-        if (runtime_info.fs_info.addr_flags.linear_sample_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.linear_center_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.linear_centroid_ena) {
-            ++dst_vreg; // I
-            ++dst_vreg; // J
-        }
-        if (runtime_info.fs_info.addr_flags.line_stipple_tex_ena) {
-            ++dst_vreg;
-        }
+        dst_vreg =
+            IterateBarycentrics(runtime_info, [this](u32 vreg, IR::Attribute attrib, u32 comp) {
+                ir.SetVectorReg(IR::VectorReg(vreg), ir.GetAttribute(attrib, comp));
+            });
         if (runtime_info.fs_info.addr_flags.pos_x_float_ena) {
             if (runtime_info.fs_info.en_flags.pos_x_float_ena) {
                 ir.SetVectorReg(dst_vreg++, ir.GetAttribute(IR::Attribute::FragCoord, 0));
@@ -116,7 +151,8 @@ void Translator::EmitPrologue() {
         }
         if (runtime_info.fs_info.addr_flags.pos_w_float_ena) {
             if (runtime_info.fs_info.en_flags.pos_w_float_ena) {
-                ir.SetVectorReg(dst_vreg++, ir.GetAttribute(IR::Attribute::FragCoord, 3));
+                ir.SetVectorReg(dst_vreg++,
+                                ir.FPRecip(ir.GetAttribute(IR::Attribute::FragCoord, 3)));
             } else {
                 ir.SetVectorReg(dst_vreg++, ir.Imm32(0.0f));
             }
@@ -171,10 +207,8 @@ void Translator::EmitPrologue() {
         switch (runtime_info.gs_info.out_primitive[0]) {
         case AmdGpu::GsOutputPrimitiveType::TriangleStrip:
             ir.SetVectorReg(IR::VectorReg::V3, ir.Imm32(2u)); // vertex 2
-            [[fallthrough]];
         case AmdGpu::GsOutputPrimitiveType::LineStrip:
             ir.SetVectorReg(IR::VectorReg::V1, ir.Imm32(1u)); // vertex 1
-            [[fallthrough]];
         default:
             ir.SetVectorReg(IR::VectorReg::V0, ir.Imm32(0u)); // vertex 0
             break;
@@ -380,7 +414,7 @@ T Translator::GetSrc64(const InstOperand& operand) {
         break;
     case OperandField::VccLo:
         if constexpr (is_float) {
-            UNREACHABLE();
+            value = ir.PackDouble2x32(ir.CompositeConstruct(ir.GetVccLo(), ir.GetVccHi()));
         } else {
             value = ir.PackUint2x32(ir.CompositeConstruct(ir.GetVccLo(), ir.GetVccHi()));
         }
@@ -469,11 +503,11 @@ void Translator::SetDst64(const InstOperand& operand, const IR::U64F64& value_ra
 }
 
 void Translator::EmitFetch(const GcnInst& inst) {
-    // Read the pointer to the fetch shader assembly.
     const auto code_sgpr_base = inst.src[0].code;
+
+    // The fetch shader must be inlined to access as regular buffers, so that
+    // bounds checks can be emitted to emulate robust buffer access.
     if (!profile.supports_robust_buffer_access) {
-        // The fetch shader must be inlined to access as regular buffers, so that
-        // bounds checks can be emitted to emulate robust buffer access.
         const auto* code = GetFetchShaderCode(info, code_sgpr_base);
         GcnCodeSlice slice(code, code + std::numeric_limits<u32>::max());
         GcnDecodeContext decoder;
@@ -523,16 +557,6 @@ void Translator::EmitFetch(const GcnInst& inst) {
         for (u32 i = 0; i < 4; i++) {
             ir.SetVectorReg(dst_reg++, IR::F32{ir.CompositeExtract(swizzled, i)});
         }
-
-        // In case of programmable step rates we need to fallback to instance data pulling in
-        // shader, so VBs should be bound as regular data buffers
-        if (attrib.UsesStepRates()) {
-            info.buffers.push_back({
-                .sharp_idx = info.srt_info.ReserveSharp(attrib.sgpr_base, attrib.dword_offset, 4),
-                .used_types = IR::Type::F32,
-                .instance_attrib = attrib.semantic,
-            });
-        }
     }
 }
 
@@ -541,6 +565,26 @@ void Translator::LogMissingOpcode(const GcnInst& inst) {
               magic_enum::enum_name(inst.opcode), u32(inst.opcode),
               magic_enum::enum_name(inst.category));
     info.translation_failed = true;
+}
+
+void Translator::Translate(IR::Block* block, u32 pc, std::span<const GcnInst> inst_list) {
+    if (inst_list.empty()) {
+        return;
+    }
+    ir = IR::IREmitter{*block, block->begin()};
+    for (const auto& inst : inst_list) {
+        pc += inst.length;
+
+        // Special case for emitting fetch shader.
+        if (inst.opcode == Opcode::S_SWAPPC_B64) {
+            ASSERT(info.stage == Stage::Vertex || info.stage == Stage::Export ||
+                   info.stage == Stage::Local);
+            EmitFetch(inst);
+            continue;
+        }
+
+        TranslateInstruction(inst, pc);
+    }
 }
 
 void Translator::TranslateInstruction(const GcnInst& inst, const u32 pc) {
@@ -574,27 +618,6 @@ void Translator::TranslateInstruction(const GcnInst& inst, const u32 pc) {
         break;
     default:
         UNREACHABLE();
-    }
-}
-
-void Translate(IR::Block* block, u32 pc, std::span<const GcnInst> inst_list, Info& info,
-               const RuntimeInfo& runtime_info, const Profile& profile) {
-    if (inst_list.empty()) {
-        return;
-    }
-    Translator translator{block, info, runtime_info, profile};
-    for (const auto& inst : inst_list) {
-        pc += inst.length;
-
-        // Special case for emitting fetch shader.
-        if (inst.opcode == Opcode::S_SWAPPC_B64) {
-            ASSERT(info.stage == Stage::Vertex || info.stage == Stage::Export ||
-                   info.stage == Stage::Local);
-            translator.EmitFetch(inst);
-            continue;
-        }
-
-        translator.TranslateInstruction(inst, pc);
     }
 }
 

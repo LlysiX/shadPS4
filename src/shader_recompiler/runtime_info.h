@@ -42,7 +42,6 @@ constexpr u32 MaxStageTypes = static_cast<u32>(LogicalStage::NumLogicalStages);
 
 struct LocalRuntimeInfo {
     u32 ls_stride;
-    bool links_with_tcs;
 
     auto operator<=>(const LocalRuntimeInfo&) const noexcept = default;
 };
@@ -85,6 +84,8 @@ struct VertexRuntimeInfo {
     std::array<VsOutputMap, 3> outputs;
     bool emulate_depth_negative_one_to_one{};
     bool clip_disable{};
+    u32 step_rate_0;
+    u32 step_rate_1;
     // Domain
     AmdGpu::TessellationType tess_type;
     AmdGpu::TessellationTopology tess_topology;
@@ -96,7 +97,8 @@ struct VertexRuntimeInfo {
                clip_disable == other.clip_disable && tess_type == other.tess_type &&
                tess_topology == other.tess_topology &&
                tess_partitioning == other.tess_partitioning &&
-               hs_output_cp_stride == other.hs_output_cp_stride;
+               hs_output_cp_stride == other.hs_output_cp_stride &&
+               step_rate_0 == other.step_rate_0 && step_rate_1 == other.step_rate_1;
     }
 
     void InitFromTessConstants(Shader::TessellationDataConstantBuffer& tess_constants) {
@@ -149,6 +151,7 @@ struct GeometryRuntimeInfo {
     u32 out_vertex_data_size{};
     AmdGpu::PrimitiveType in_primitive;
     GsOutputPrimTypes out_primitive;
+    AmdGpu::Liverpool::GsMode::Mode mode;
     std::span<const u32> vs_copy;
     u64 vs_copy_hash;
 
@@ -168,6 +171,7 @@ enum class MrtSwizzle : u8 {
 static constexpr u32 MaxColorBuffers = 8;
 
 struct PsColorBuffer {
+    AmdGpu::DataFormat data_format : 6;
     AmdGpu::NumberFormat num_format : 4;
     AmdGpu::NumberConversion num_conversion : 3;
     AmdGpu::Liverpool::ShaderExportFormat export_format : 4;
@@ -196,11 +200,13 @@ struct FragmentRuntimeInfo {
     u32 num_inputs;
     std::array<PsInput, 32> inputs;
     std::array<PsColorBuffer, MaxColorBuffers> color_buffers;
+    bool dual_source_blending;
 
     bool operator==(const FragmentRuntimeInfo& other) const noexcept {
         return std::ranges::equal(color_buffers, other.color_buffers) &&
                en_flags.raw == other.en_flags.raw && addr_flags.raw == other.addr_flags.raw &&
                num_inputs == other.num_inputs &&
+               dual_source_blending == other.dual_source_blending &&
                std::ranges::equal(inputs.begin(), inputs.begin() + num_inputs, other.inputs.begin(),
                                   other.inputs.begin() + num_inputs);
     }

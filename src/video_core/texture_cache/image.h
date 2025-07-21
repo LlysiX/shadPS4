@@ -27,10 +27,9 @@ enum ImageFlagBits : u32 {
     CpuDirty = 1 << 1,      ///< Contents have been modified from the CPU
     GpuDirty = 1 << 2, ///< Contents have been modified from the GPU (valid data in buffer cache)
     Dirty = MaybeCpuDirty | CpuDirty | GpuDirty,
-    GpuModified = 1 << 3,    ///< Contents have been modified from the GPU
-    Registered = 1 << 6,     ///< True when the image is registered
-    Picked = 1 << 7,         ///< Temporary flag to mark the image as picked
-    MetaRegistered = 1 << 8, ///< True when metadata for this surface is known and registered
+    GpuModified = 1 << 3, ///< Contents have been modified from the GPU
+    Registered = 1 << 6,  ///< True when the image is registered
+    Picked = 1 << 7,      ///< Temporary flag to mark the image as picked
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
@@ -104,7 +103,8 @@ struct Image {
                  std::optional<SubresourceRange> range, vk::CommandBuffer cmdbuf = {});
     void Upload(vk::Buffer buffer, u64 offset);
 
-    void CopyImage(const Image& image);
+    void CopyImage(const Image& src_image);
+    void CopyImageWithBuffer(Image& src_image, vk::Buffer buffer, u64 offset);
     void CopyMip(const Image& src_image, u32 mip, u32 slice);
 
     bool IsTracked() {

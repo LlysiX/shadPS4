@@ -20,6 +20,10 @@ class SymbolsResolver;
 
 namespace Libraries::Net {
 
+enum OrbisNetFamily : u32 {
+    ORBIS_NET_AF_INET = 2,
+    ORBIS_NET_AF_INET6 = 28,
+};
 enum OrbisNetSocketType : u32 {
     ORBIS_NET_SOCK_STREAM = 1,
     ORBIS_NET_SOCK_DGRAM = 2,
@@ -332,5 +336,5 @@ int PS4_SYSV_ABI Func_0E707A589F751C68();
 int PS4_SYSV_ABI sceNetEmulationGet();
 int PS4_SYSV_ABI sceNetEmulationSet();
 
-void RegisterlibSceNet(Core::Loader::SymbolsResolver* sym);
+void RegisterLib(Core::Loader::SymbolsResolver* sym);
 } // namespace Libraries::Net

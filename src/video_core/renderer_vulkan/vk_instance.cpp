@@ -212,7 +212,8 @@ bool Instance::CreateDevice() {
                           vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
                           vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT,
                           vk::PhysicalDevicePortabilitySubsetFeaturesKHR,
-                          vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT>();
+                          vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT,
+                          vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -247,6 +248,7 @@ bool Instance::CreateDevice() {
     // Required
     ASSERT(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME));
     ASSERT(add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME));
+    ASSERT(add_extension(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME));
 
     // Optional
     depth_range_unrestricted = add_extension(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
@@ -268,10 +270,17 @@ bool Instance::CreateDevice() {
     }
     custom_border_color = add_extension(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
+    depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
     vertex_input_dynamic_state = add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     list_restart = add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
-    fragment_shader_barycentric = add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+    amd_shader_explicit_vertex_parameter =
+        add_extension(VK_AMD_SHADER_EXPLICIT_VERTEX_PARAMETER_EXTENSION_NAME);
+    if (!amd_shader_explicit_vertex_parameter) {
+        fragment_shader_barycentric =
+            add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+    }
     legacy_vertex_attributes = add_extension(VK_EXT_LEGACY_VERTEX_ATTRIBUTES_EXTENSION_NAME);
+    provoking_vertex = add_extension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
     shader_stencil_export = add_extension(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
     image_load_store_lod = add_extension(VK_AMD_SHADER_IMAGE_LOAD_STORE_LOD_EXTENSION_NAME);
     amd_gcn_shader = add_extension(VK_AMD_GCN_SHADER_EXTENSION_NAME);
@@ -280,8 +289,24 @@ bool Instance::CreateDevice() {
     if (shader_atomic_float2) {
         shader_atomic_float2_features =
             feature_chain.get<vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT>();
+        LOG_INFO(Render_Vulkan, "- shaderBufferFloat32AtomicMinMax: {}",
+                 shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax);
         LOG_INFO(Render_Vulkan, "- shaderImageFloat32AtomicMinMax: {}",
                  shader_atomic_float2_features.shaderImageFloat32AtomicMinMax);
+    }
+    workgroup_memory_explicit_layout =
+        add_extension(VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME);
+    if (workgroup_memory_explicit_layout) {
+        workgroup_memory_explicit_layout_features =
+            feature_chain.get<vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR>();
+        LOG_INFO(Render_Vulkan, "- workgroupMemoryExplicitLayout: {}",
+                 workgroup_memory_explicit_layout_features.workgroupMemoryExplicitLayout);
+        LOG_INFO(Render_Vulkan, "- workgroupMemoryExplicitLayoutScalarBlockLayout: {}",
+                 workgroup_memory_explicit_layout_features
+                     .workgroupMemoryExplicitLayoutScalarBlockLayout);
+        LOG_INFO(
+            Render_Vulkan, "- workgroupMemoryExplicitLayout16BitAccess: {}",
+            workgroup_memory_explicit_layout_features.workgroupMemoryExplicitLayout16BitAccess);
     }
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
@@ -324,7 +349,7 @@ bool Instance::CreateDevice() {
     const auto topology_list_restart_features =
         feature_chain.get<vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT>();
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
-    const auto vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
+    vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     const auto vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
@@ -340,12 +365,15 @@ bool Instance::CreateDevice() {
                 .independentBlend = features.independentBlend,
                 .geometryShader = features.geometryShader,
                 .tessellationShader = features.tessellationShader,
+                .sampleRateShading = features.sampleRateShading,
                 .dualSrcBlend = features.dualSrcBlend,
                 .logicOp = features.logicOp,
                 .multiDrawIndirect = features.multiDrawIndirect,
+                .depthClamp = features.depthClamp,
                 .depthBiasClamp = features.depthBiasClamp,
                 .fillModeNonSolid = features.fillModeNonSolid,
                 .depthBounds = features.depthBounds,
+                .wideLines = features.wideLines,
                 .multiViewport = features.multiViewport,
                 .samplerAnisotropy = features.samplerAnisotropy,
                 .vertexPipelineStoresAndAtomics = features.vertexPipelineStoresAndAtomics,
@@ -369,6 +397,8 @@ bool Instance::CreateDevice() {
             .drawIndirectCount = vk12_features.drawIndirectCount,
             .storageBuffer8BitAccess = vk12_features.storageBuffer8BitAccess,
             .uniformAndStorageBuffer8BitAccess = vk12_features.uniformAndStorageBuffer8BitAccess,
+            .shaderBufferInt64Atomics = vk12_features.shaderBufferInt64Atomics,
+            .shaderSharedInt64Atomics = vk12_features.shaderSharedInt64Atomics,
             .shaderFloat16 = vk12_features.shaderFloat16,
             .shaderInt8 = vk12_features.shaderInt8,
             .scalarBlockLayout = vk12_features.scalarBlockLayout,
@@ -397,6 +427,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceDepthClipControlFeaturesEXT{
             .depthClipControl = true,
         },
+        vk::PhysicalDeviceDepthClipEnableFeaturesEXT{
+            .depthClipEnable = true,
+        },
         vk::PhysicalDeviceRobustness2FeaturesEXT{
             .robustBufferAccess2 = robustness2_features.robustBufferAccess2,
             .robustImageAccess2 = robustness2_features.robustImageAccess2,
@@ -416,12 +449,47 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceLegacyVertexAttributesFeaturesEXT{
             .legacyVertexAttributes = true,
         },
+        vk::PhysicalDeviceProvokingVertexFeaturesEXT{
+            .provokingVertexLast = true,
+        },
+        vk::PhysicalDeviceVertexAttributeDivisorFeatures{
+            .vertexAttributeInstanceRateDivisor = true,
+        },
         vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT{
+            .shaderBufferFloat32AtomicMinMax =
+                shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax,
             .shaderImageFloat32AtomicMinMax =
                 shader_atomic_float2_features.shaderImageFloat32AtomicMinMax,
         },
+        vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR{
+            .workgroupMemoryExplicitLayout =
+                workgroup_memory_explicit_layout_features.workgroupMemoryExplicitLayout,
+            .workgroupMemoryExplicitLayoutScalarBlockLayout =
+                workgroup_memory_explicit_layout_features
+                    .workgroupMemoryExplicitLayoutScalarBlockLayout,
+            .workgroupMemoryExplicitLayout16BitAccess =
+                workgroup_memory_explicit_layout_features.workgroupMemoryExplicitLayout16BitAccess,
+        },
 #ifdef __APPLE__
-        portability_features,
+        vk::PhysicalDevicePortabilitySubsetFeaturesKHR{
+            .constantAlphaColorBlendFactors = portability_features.constantAlphaColorBlendFactors,
+            .events = portability_features.events,
+            .imageViewFormatReinterpretation = portability_features.imageViewFormatReinterpretation,
+            .imageViewFormatSwizzle = portability_features.imageViewFormatSwizzle,
+            .imageView2DOn3DImage = portability_features.imageView2DOn3DImage,
+            .multisampleArrayImage = portability_features.multisampleArrayImage,
+            .mutableComparisonSamplers = portability_features.mutableComparisonSamplers,
+            .pointPolygons = portability_features.pointPolygons,
+            .samplerMipLodBias = portability_features.samplerMipLodBias,
+            .separateStencilMaskRef = portability_features.separateStencilMaskRef,
+            .shaderSampleRateInterpolationFunctions =
+                portability_features.shaderSampleRateInterpolationFunctions,
+            .tessellationIsolines = portability_features.tessellationIsolines,
+            .tessellationPointMode = portability_features.tessellationPointMode,
+            .triangleFans = portability_features.triangleFans,
+            .vertexAttributeAccessBeyondStride =
+                portability_features.vertexAttributeAccessBeyondStride,
+        },
 #endif
     };
 
@@ -433,6 +501,9 @@ bool Instance::CreateDevice() {
     }
     if (!depth_clip_control) {
         device_chain.unlink<vk::PhysicalDeviceDepthClipControlFeaturesEXT>();
+    }
+    if (!depth_clip_enable) {
+        device_chain.unlink<vk::PhysicalDeviceDepthClipEnableFeaturesEXT>();
     }
     if (!robustness2) {
         device_chain.unlink<vk::PhysicalDeviceRobustness2FeaturesEXT>();
@@ -449,8 +520,14 @@ bool Instance::CreateDevice() {
     if (!legacy_vertex_attributes) {
         device_chain.unlink<vk::PhysicalDeviceLegacyVertexAttributesFeaturesEXT>();
     }
+    if (!provoking_vertex) {
+        device_chain.unlink<vk::PhysicalDeviceProvokingVertexFeaturesEXT>();
+    }
     if (!shader_atomic_float2) {
         device_chain.unlink<vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT>();
+    }
+    if (!workgroup_memory_explicit_layout) {
+        device_chain.unlink<vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR>();
     }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
@@ -592,6 +669,12 @@ vk::Format Instance::GetSupportedFormat(const vk::Format format,
             if (IsFormatSupported(vk::Format::eD32SfloatS8Uint, flags)) {
                 return vk::Format::eD32SfloatS8Uint;
             }
+            break;
+        case vk::Format::eR8Srgb:
+            if (IsFormatSupported(vk::Format::eR8Unorm, flags)) {
+                return vk::Format::eR8Unorm;
+            }
+            break;
         default:
             break;
         }

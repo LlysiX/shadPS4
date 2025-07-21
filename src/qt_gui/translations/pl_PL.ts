@@ -454,32 +454,8 @@
       <translation>Użyj osobnej konfiguracji dla każdej gry</translation>
     </message>
     <message>
-      <source>L1 / LB</source>
-      <translation>L1 / LB</translation>
-    </message>
-    <message>
-      <source>L2 / LT</source>
-      <translation>L2 / LT</translation>
-    </message>
-    <message>
-      <source>Back</source>
-      <translation>Wstecz</translation>
-    </message>
-    <message>
-      <source>R1 / RB</source>
-      <translation>R1 / RB</translation>
-    </message>
-    <message>
-      <source>R2 / RT</source>
-      <translation>R2 / RT</translation>
-    </message>
-    <message>
       <source>L3</source>
       <translation>L3</translation>
-    </message>
-    <message>
-      <source>Options / Start</source>
-      <translation>Opcje / Start</translation>
     </message>
     <message>
       <source>R3</source>
@@ -488,22 +464,6 @@
     <message>
       <source>Face Buttons</source>
       <translation>Przyciski akcji</translation>
-    </message>
-    <message>
-      <source>Triangle / Y</source>
-      <translation>Trójkąt / Y</translation>
-    </message>
-    <message>
-      <source>Square / X</source>
-      <translation>Kwadrat / X</translation>
-    </message>
-    <message>
-      <source>Circle / B</source>
-      <translation>Kółko / B</translation>
-    </message>
-    <message>
-      <source>Cross / A</source>
-      <translation>Krzyżyk / A</translation>
     </message>
     <message>
       <source>Right Stick Deadzone (def:2, max:127)</source>
@@ -564,6 +524,74 @@
     <message>
       <source>Cancel</source>
       <translation>Anuluj</translation>
+    </message>
+    <message>
+      <source>unmapped</source>
+      <translation>nieprzypisane</translation>
+    </message>
+    <message>
+      <source>L1</source>
+      <translation>L1</translation>
+    </message>
+    <message>
+      <source>R1</source>
+      <translation>R1</translation>
+    </message>
+    <message>
+      <source>L2</source>
+      <translation>L2</translation>
+    </message>
+    <message>
+      <source>Options</source>
+      <translation>Options</translation>
+    </message>
+    <message>
+      <source>R2</source>
+      <translation>R2</translation>
+    </message>
+    <message>
+      <source>Touchpad Left</source>
+      <translation>Lewy Touchpad</translation>
+    </message>
+    <message>
+      <source>Touchpad Center</source>
+      <translation>Środkowy Touchpad</translation>
+    </message>
+    <message>
+      <source>Touchpad Right</source>
+      <translation>Prawy Touchpad</translation>
+    </message>
+    <message>
+      <source>Triangle</source>
+      <translation>Trójkąt</translation>
+    </message>
+    <message>
+      <source>Square</source>
+      <translation>Kwadrat</translation>
+    </message>
+    <message>
+      <source>Circle</source>
+      <translation>Kółko</translation>
+    </message>
+    <message>
+      <source>Cross</source>
+      <translation>Krzyżyk</translation>
+    </message>
+    <message>
+      <source>Cannot bind any unique input more than once. Duplicate inputs mapped to the following buttons:
+
+%1</source>
+      <translation>Nie można zbindować unikalnych akcji więcej niż raz. Zduplikowane akcje są przepisane do następujących przycisków:
+
+%1</translation>
+    </message>
+    <message>
+      <source>Press a button</source>
+      <translation>Naciśnij przycisk</translation>
+    </message>
+    <message>
+      <source>Move analog stick</source>
+      <translation>Rusz gałką analogową</translation>
     </message>
   </context>
   <context>
@@ -747,6 +775,10 @@
     <message>
       <source>Last updated</source>
       <translation>Ostatnia aktualizacja</translation>
+    </message>
+    <message>
+      <source>Favorite</source>
+      <translation>Ulubione</translation>
     </message>
   </context>
   <context>
@@ -950,6 +982,14 @@
       <source>SFO Viewer for </source>
       <translation>Menedżer plików SFO dla </translation>
     </message>
+    <message>
+      <source>Remove from Favorites</source>
+      <translation>Usuń z Ulubionych</translation>
+    </message>
+    <message>
+      <source>Add to Favorites</source>
+      <translation>Dodaj do Ulubionych</translation>
+    </message>
   </context>
   <context>
     <name>HelpDialog</name>
@@ -1057,10 +1097,6 @@
       <translation>L3</translation>
     </message>
     <message>
-      <source>Touchpad Click</source>
-      <translation>Kliknięcie Touchpada</translation>
-    </message>
-    <message>
       <source>Mouse to Joystick</source>
       <translation>Mysz na Joystick</translation>
     </message>
@@ -1153,10 +1189,6 @@
       <translation>Zapisywanie nie powiodło się</translation>
     </message>
     <message>
-      <source>Cannot bind any unique input more than once</source>
-      <translation>Nie można powiązać żadnych unikalnych danych wejściowych więcej niż raz</translation>
-    </message>
-    <message>
       <source>Press a key</source>
       <translation>Naciśnij klawisz</translation>
     </message>
@@ -1183,6 +1215,26 @@
     <message>
       <source>Cancel</source>
       <translation>Anuluj</translation>
+    </message>
+    <message>
+      <source>Cannot bind any unique input more than once. Duplicate inputs mapped to the following buttons:
+
+%1</source>
+      <translation>Nie można zbindować unikalnych akcji więcej niż raz. Zduplikowane akcje są przepisane do następujących przycisków:
+
+%1</translation>
+    </message>
+    <message>
+      <source>Touchpad Left</source>
+      <translation>Lewy Touchpad</translation>
+    </message>
+    <message>
+      <source>Touchpad Center</source>
+      <translation>Środkowy Touchpad</translation>
+    </message>
+    <message>
+      <source>Touchpad Right</source>
+      <translation>Prawy Touchpad</translation>
     </message>
   </context>
   <context>
@@ -1405,43 +1457,43 @@
     </message>
     <message>
       <source>Play</source>
-      <translation type="unfinished">Play</translation>
+      <translation>Graj</translation>
     </message>
     <message>
       <source>Pause</source>
-      <translation type="unfinished">Pause</translation>
+      <translation>Pauza</translation>
     </message>
     <message>
       <source>Stop</source>
-      <translation type="unfinished">Stop</translation>
+      <translation>Stop</translation>
     </message>
     <message>
       <source>Restart</source>
-      <translation type="unfinished">Restart</translation>
+      <translation>Restart</translation>
     </message>
     <message>
       <source>Full Screen</source>
-      <translation type="unfinished">Full Screen</translation>
+      <translation>Pełny ekran</translation>
     </message>
     <message>
       <source>Controllers</source>
-      <translation type="unfinished">Controllers</translation>
+      <translation>Kontrolery</translation>
     </message>
     <message>
       <source>Keyboard</source>
-      <translation type="unfinished">Keyboard</translation>
+      <translation>Klawiatura</translation>
     </message>
     <message>
       <source>Refresh List</source>
-      <translation type="unfinished">Refresh List</translation>
+      <translation>Odśwież Listę</translation>
     </message>
     <message>
       <source>Resume</source>
-      <translation type="unfinished">Resume</translation>
+      <translation>Wznów</translation>
     </message>
     <message>
       <source>Show Labels Under Icons</source>
-      <translation type="unfinished">Show Labels Under Icons</translation>
+      <translation>Pokaż etykiety pod ikonami</translation>
     </message>
   </context>
   <context>
@@ -1541,10 +1593,6 @@
     <message>
       <source>Controller</source>
       <translation>Kontroler</translation>
-    </message>
-    <message>
-      <source>Back Button Behavior</source>
-      <translation>Zachowanie przycisku wstecz</translation>
     </message>
     <message>
       <source>Graphics</source>
@@ -1783,10 +1831,6 @@
       <translation>Ustaw czas, po którym mysz zniknie po bezczynności.</translation>
     </message>
     <message>
-      <source>Back Button Behavior:\nSets the controller&apos;s back button to emulate tapping the specified position on the PS4 touchpad.</source>
-      <translation>Zachowanie przycisku Wstecz:\nUstawia przycisk Wstecz kontrolera tak, aby emulował dotknięcie określonego miejsca na panelu dotykowym PS4.</translation>
-    </message>
-    <message>
       <source>Display Compatibility Data:\nDisplays game compatibility information in table view. Enable &quot;Update Compatibility On Startup&quot; to get up-to-date information.</source>
       <translation>Wyświetl dane zgodności:\nWyświetla informacje o kompatybilności gry w widoku tabeli. Włącz opcję „Aktualizuj zgodność przy uruchomieniu”, aby uzyskać aktualne informacje.</translation>
     </message>
@@ -1809,22 +1853,6 @@
     <message>
       <source>Always</source>
       <translation>Zawsze</translation>
-    </message>
-    <message>
-      <source>Touchpad Left</source>
-      <translation>Touchpad Lewy</translation>
-    </message>
-    <message>
-      <source>Touchpad Right</source>
-      <translation>Touchpad Prawy</translation>
-    </message>
-    <message>
-      <source>Touchpad Center</source>
-      <translation>Touchpad Środkowy</translation>
-    </message>
-    <message>
-      <source>None</source>
-      <translation>Brak</translation>
     </message>
     <message>
       <source>Graphics Device:\nOn multiple GPU systems, select the GPU the emulator will use from the drop down list,\nor select &quot;Auto Select&quot; to automatically determine it.</source>
@@ -2048,7 +2076,7 @@
     </message>
     <message>
       <source> * Unsupported Vulkan Version</source>
-      <translation type="unfinished"> * Unsupported Vulkan Version</translation>
+      <translation> * Nieobsługiwana wersja Vulkan</translation>
     </message>
   </context>
   <context>

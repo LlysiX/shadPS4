@@ -100,6 +100,8 @@ int PS4_SYSV_ABI sceAudioInGetSilentState() {
 int PS4_SYSV_ABI sceAudioInHqOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                   u32 index, u32 len, u32 freq, u32 param) {
     LOG_ERROR(Lib_AudioIn, "called");
+    if (userId != 1)
+        return ORBIS_OK;
     int result = audio->AudioInOpen(type, len, freq, param);
     if (result == -1) {
         LOG_ERROR(Lib_AudioOut, "Audio ports are full");
@@ -135,6 +137,8 @@ int PS4_SYSV_ABI sceAudioInIsSharedDevice() {
 int PS4_SYSV_ABI sceAudioInOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                 u32 index, u32 len, u32 freq, u32 param) {
     LOG_ERROR(Lib_AudioIn, "called");
+    if (userId != 1)
+        return 0x80260005;
     int result = audio->AudioInOpen(type, len, freq, param);
     if (result == -1) {
         LOG_ERROR(Lib_AudioOut, "Audio ports are full");

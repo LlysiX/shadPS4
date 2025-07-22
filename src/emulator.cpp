@@ -81,9 +81,9 @@ void Emulator::Run(std::filesystem::path file, const std::vector<std::string> ar
 
     // Applications expect to be run from /app0 so mount the file's parent path as app0.
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
-    mnt->Mount(game_folder, "/app0", true);
+    mnt->Mount(game_folder, "/app0");
     // Certain games may use /hostapp as well such as CUSA001100
-    mnt->Mount(game_folder, "/hostapp", true);
+    mnt->Mount(game_folder, "/hostapp");
 
     const auto param_sfo_path = mnt->GetHostPath("/app0/sce_sys/param.sfo");
     const auto param_sfo_exists = std::filesystem::exists(param_sfo_path);
@@ -235,15 +235,11 @@ void Emulator::Run(std::filesystem::path file, const std::vector<std::string> ar
         std::filesystem::create_directory(mount_data_dir);
     }
     mnt->Mount(mount_data_dir, "/data"); // should just exist, manually create with game serial
-
-    // Mounting temp folders
     const auto& mount_temp_dir = Common::FS::GetUserPath(Common::FS::PathType::TempDataDir) / id;
-    if (std::filesystem::exists(mount_temp_dir)) {
-        // Temp folder should be cleared on each boot.
-        std::filesystem::remove_all(mount_temp_dir);
+    if (!std::filesystem::exists(mount_temp_dir)) {
+        std::filesystem::create_directory(mount_temp_dir);
     }
-    std::filesystem::create_directory(mount_temp_dir);
-    mnt->Mount(mount_temp_dir, "/temp0");
+    mnt->Mount(mount_temp_dir, "/temp0"); // called in app_content ==> stat/mkdir
     mnt->Mount(mount_temp_dir, "/temp");
 
     const auto& mount_download_dir =

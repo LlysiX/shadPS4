@@ -23,10 +23,6 @@
 #define SDL_MOUSE_WHEEL_LEFT SDL_EVENT_MOUSE_WHEEL + 5
 #define SDL_MOUSE_WHEEL_RIGHT SDL_EVENT_MOUSE_WHEEL + 7
 
-#define SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT SDL_GAMEPAD_BUTTON_COUNT + 1
-#define SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER SDL_GAMEPAD_BUTTON_COUNT + 2
-#define SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT SDL_GAMEPAD_BUTTON_COUNT + 3
-
 // idk who already used what where so I just chose a big number
 #define SDL_EVENT_MOUSE_WHEEL_OFF SDL_EVENT_USER + 10
 
@@ -35,9 +31,6 @@
 #define BACK_BUTTON 0x00040000
 
 #define KEY_TOGGLE 0x00200000
-#define MOUSE_GYRO_ROLL_MODE 0x00400000
-
-#define SDL_UNMAPPED UINT32_MAX - 1
 
 namespace Input {
 using Input::Axis;
@@ -106,19 +99,12 @@ const std::map<std::string, u32> string_to_cbutton_map = {
     {"options", SDL_GAMEPAD_BUTTON_START},
 
     // these are outputs only (touchpad can only be bound to itself)
-    {"touchpad_left", SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT},
-    {"touchpad_center", SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER},
-    {"touchpad_right", SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT},
+    {"touchpad", SDL_GAMEPAD_BUTTON_TOUCHPAD},
     {"leftjoystick_halfmode", LEFTJOYSTICK_HALFMODE},
     {"rightjoystick_halfmode", RIGHTJOYSTICK_HALFMODE},
 
     // this is only for input
     {"back", SDL_GAMEPAD_BUTTON_BACK},
-    {"lpaddle_high", SDL_GAMEPAD_BUTTON_LEFT_PADDLE1},
-    {"lpaddle_low", SDL_GAMEPAD_BUTTON_LEFT_PADDLE2},
-    {"rpaddle_high", SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1},
-    {"rpaddle_low", SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2},
-    {"mouse_gyro_roll_mode", MOUSE_GYRO_ROLL_MODE},
 };
 
 const std::map<std::string, AxisMapping> string_to_axis_map = {
@@ -141,7 +127,6 @@ const std::map<std::string, AxisMapping> string_to_axis_map = {
     {"axis_right_y", {SDL_GAMEPAD_AXIS_RIGHTY, 127}},
 };
 const std::map<std::string, u32> string_to_keyboard_key_map = {
-    // alphanumeric
     {"a", SDLK_A},
     {"b", SDLK_B},
     {"c", SDLK_C},
@@ -178,73 +163,6 @@ const std::map<std::string, u32> string_to_keyboard_key_map = {
     {"7", SDLK_7},
     {"8", SDLK_8},
     {"9", SDLK_9},
-
-    // symbols
-    {"grave", SDLK_GRAVE},
-    {"tilde", SDLK_TILDE},
-    {"exclamation", SDLK_EXCLAIM},
-    {"at", SDLK_AT},
-    {"hash", SDLK_HASH},
-    {"dollar", SDLK_DOLLAR},
-    {"percent", SDLK_PERCENT},
-    {"caret", SDLK_CARET},
-    {"ampersand", SDLK_AMPERSAND},
-    {"asterisk", SDLK_ASTERISK},
-    {"lparen", SDLK_LEFTPAREN},
-    {"rparen", SDLK_RIGHTPAREN},
-    {"minus", SDLK_MINUS},
-    {"underscore", SDLK_UNDERSCORE},
-    {"equals", SDLK_EQUALS},
-    {"plus", SDLK_PLUS},
-    {"lbracket", SDLK_LEFTBRACKET},
-    {"rbracket", SDLK_RIGHTBRACKET},
-    {"lbrace", SDLK_LEFTBRACE},
-    {"rbrace", SDLK_RIGHTBRACE},
-    {"backslash", SDLK_BACKSLASH},
-    {"pipe", SDLK_PIPE},
-    {"semicolon", SDLK_SEMICOLON},
-    {"colon", SDLK_COLON},
-    {"apostrophe", SDLK_APOSTROPHE},
-    {"quote", SDLK_DBLAPOSTROPHE},
-    {"comma", SDLK_COMMA},
-    {"less", SDLK_LESS},
-    {"period", SDLK_PERIOD},
-    {"greater", SDLK_GREATER},
-    {"slash", SDLK_SLASH},
-    {"question", SDLK_QUESTION},
-
-    // special keys
-    {"escape", SDLK_ESCAPE},
-    {"printscreen", SDLK_PRINTSCREEN},
-    {"scrolllock", SDLK_SCROLLLOCK},
-    {"pausebreak", SDLK_PAUSE},
-    {"backspace", SDLK_BACKSPACE},
-    {"delete", SDLK_DELETE},
-    {"insert", SDLK_INSERT},
-    {"home", SDLK_HOME},
-    {"end", SDLK_END},
-    {"pgup", SDLK_PAGEUP},
-    {"pgdown", SDLK_PAGEDOWN},
-    {"tab", SDLK_TAB},
-    {"capslock", SDLK_CAPSLOCK},
-    {"enter", SDLK_RETURN},
-    {"lshift", SDLK_LSHIFT},
-    {"rshift", SDLK_RSHIFT},
-    {"lctrl", SDLK_LCTRL},
-    {"rctrl", SDLK_RCTRL},
-    {"lalt", SDLK_LALT},
-    {"ralt", SDLK_RALT},
-    {"lmeta", SDLK_LGUI},
-    {"rmeta", SDLK_RGUI},
-    {"lwin", SDLK_LGUI},
-    {"rwin", SDLK_RGUI},
-    {"space", SDLK_SPACE},
-    {"up", SDLK_UP},
-    {"down", SDLK_DOWN},
-    {"left", SDLK_LEFT},
-    {"right", SDLK_RIGHT},
-
-    // keypad
     {"kp0", SDLK_KP_0},
     {"kp1", SDLK_KP_1},
     {"kp2", SDLK_KP_2},
@@ -255,16 +173,43 @@ const std::map<std::string, u32> string_to_keyboard_key_map = {
     {"kp7", SDLK_KP_7},
     {"kp8", SDLK_KP_8},
     {"kp9", SDLK_KP_9},
-    {"kpperiod", SDLK_KP_PERIOD},
-    {"kpcomma", SDLK_KP_COMMA},
-    {"kpslash", SDLK_KP_DIVIDE},
-    {"kpasterisk", SDLK_KP_MULTIPLY},
-    {"kpminus", SDLK_KP_MINUS},
-    {"kpplus", SDLK_KP_PLUS},
-    {"kpequals", SDLK_KP_EQUALS},
-    {"kpenter", SDLK_KP_ENTER},
-
-    // mouse
+    {"comma", SDLK_COMMA},
+    {"period", SDLK_PERIOD},
+    {"question", SDLK_QUESTION},
+    {"semicolon", SDLK_SEMICOLON},
+    {"minus", SDLK_MINUS},
+    {"underscore", SDLK_UNDERSCORE},
+    {"lparenthesis", SDLK_LEFTPAREN},
+    {"rparenthesis", SDLK_RIGHTPAREN},
+    {"lbracket", SDLK_LEFTBRACKET},
+    {"rbracket", SDLK_RIGHTBRACKET},
+    {"lbrace", SDLK_LEFTBRACE},
+    {"rbrace", SDLK_RIGHTBRACE},
+    {"backslash", SDLK_BACKSLASH},
+    {"dash", SDLK_SLASH},
+    {"enter", SDLK_RETURN},
+    {"space", SDLK_SPACE},
+    {"tab", SDLK_TAB},
+    {"backspace", SDLK_BACKSPACE},
+    {"escape", SDLK_ESCAPE},
+    {"left", SDLK_LEFT},
+    {"right", SDLK_RIGHT},
+    {"up", SDLK_UP},
+    {"down", SDLK_DOWN},
+    {"lctrl", SDLK_LCTRL},
+    {"rctrl", SDLK_RCTRL},
+    {"lshift", SDLK_LSHIFT},
+    {"rshift", SDLK_RSHIFT},
+    {"lalt", SDLK_LALT},
+    {"ralt", SDLK_RALT},
+    {"lmeta", SDLK_LGUI},
+    {"rmeta", SDLK_RGUI},
+    {"lwin", SDLK_LGUI},
+    {"rwin", SDLK_RGUI},
+    {"home", SDLK_HOME},
+    {"end", SDLK_END},
+    {"pgup", SDLK_PAGEUP},
+    {"pgdown", SDLK_PAGEDOWN},
     {"leftbutton", SDL_BUTTON_LEFT},
     {"rightbutton", SDL_BUTTON_RIGHT},
     {"middlebutton", SDL_BUTTON_MIDDLE},
@@ -274,9 +219,15 @@ const std::map<std::string, u32> string_to_keyboard_key_map = {
     {"mousewheeldown", SDL_MOUSE_WHEEL_DOWN},
     {"mousewheelleft", SDL_MOUSE_WHEEL_LEFT},
     {"mousewheelright", SDL_MOUSE_WHEEL_RIGHT},
-
-    // no binding
-    {"unmapped", SDL_UNMAPPED},
+    {"kpperiod", SDLK_KP_PERIOD},
+    {"kpcomma", SDLK_KP_COMMA},
+    {"kpdivide", SDLK_KP_DIVIDE},
+    {"kpmultiply", SDLK_KP_MULTIPLY},
+    {"kpminus", SDLK_KP_MINUS},
+    {"kpplus", SDLK_KP_PLUS},
+    {"kpenter", SDLK_KP_ENTER},
+    {"kpequals", SDLK_KP_EQUALS},
+    {"capslock", SDLK_CAPSLOCK},
 };
 
 void ParseInputConfig(const std::string game_id);
@@ -372,7 +323,6 @@ public:
     // returns an InputEvent based on the event type (keyboard, mouse buttons/wheel, or controller)
     static InputEvent GetInputEventFromSDLEvent(const SDL_Event& e);
 };
-
 class ControllerOutput {
     static GameControllers controllers;
 

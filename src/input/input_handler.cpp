@@ -100,12 +100,6 @@ static OrbisPadButtonDataOffset SDLGamepadToOrbisButton(u8 button) {
         return OPBDO::Options;
     case SDL_GAMEPAD_BUTTON_TOUCHPAD:
         return OPBDO::TouchPad;
-    case SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT:
-        return OPBDO::TouchPad;
-    case SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER:
-        return OPBDO::TouchPad;
-    case SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT:
-        return OPBDO::TouchPad;
     case SDL_GAMEPAD_BUTTON_BACK:
         return OPBDO::TouchPad;
     case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
@@ -152,7 +146,7 @@ InputBinding GetBindingFromString(std::string& line) {
         if (string_to_keyboard_key_map.find(t) != string_to_keyboard_key_map.end()) {
             input = InputID(InputType::KeyboardMouse, string_to_keyboard_key_map.at(t));
         } else if (string_to_axis_map.find(t) != string_to_axis_map.end()) {
-            input = InputID(InputType::Axis, string_to_axis_map.at(t).axis);
+            input = InputID(InputType::Axis, (u32)string_to_axis_map.at(t).axis);
         } else if (string_to_cbutton_map.find(t) != string_to_cbutton_map.end()) {
             input = InputID(InputType::Controller, string_to_cbutton_map.at(t));
         } else {
@@ -211,14 +205,18 @@ void ParseInputConfig(const std::string game_id = "") {
         line.erase(std::remove_if(line.begin(), line.end(),
                                   [](unsigned char c) { return std::isspace(c); }),
                    line.end());
+
         if (line.empty()) {
             continue;
         }
-
         // Truncate lines starting at #
         std::size_t comment_pos = line.find('#');
         if (comment_pos != std::string::npos) {
             line = line.substr(0, comment_pos);
+        }
+        // Remove trailing semicolon
+        if (!line.empty() && line[line.length() - 1] == ';') {
+            line = line.substr(0, line.length() - 1);
         }
         if (line.empty()) {
             continue;
@@ -376,6 +374,7 @@ void ParseInputConfig(const std::string game_id = "") {
         BindingConnection connection(InputID(), nullptr);
         auto button_it = string_to_cbutton_map.find(output_string);
         auto axis_it = string_to_axis_map.find(output_string);
+
         if (binding.IsEmpty()) {
             LOG_WARNING(Input, "Invalid format at line: {}, data: \"{}\", skipping line.",
                         lineCount, line);
@@ -439,7 +438,7 @@ BindingConnection BindingConnection::CopyWithChangedGamepadId(u8 gamepad) {
 u32 GetMouseWheelEvent(const SDL_Event& event) {
     if (event.type != SDL_EVENT_MOUSE_WHEEL && event.type != SDL_EVENT_MOUSE_WHEEL_OFF) {
         LOG_WARNING(Input, "Something went wrong with wheel input parsing!");
-        return SDL_UNMAPPED;
+        return (u32)-1;
     }
     if (event.wheel.y > 0) {
         return SDL_MOUSE_WHEEL_UP;
@@ -450,7 +449,7 @@ u32 GetMouseWheelEvent(const SDL_Event& event) {
     } else if (event.wheel.x < 0) {
         return SDL_MOUSE_WHEEL_LEFT;
     }
-    return SDL_UNMAPPED;
+    return (u32)-1;
 }
 
 InputEvent InputBinding::GetInputEventFromSDLEvent(const SDL_Event& e) {
@@ -462,8 +461,7 @@ InputEvent InputBinding::GetInputEventFromSDLEvent(const SDL_Event& e) {
         return InputEvent(InputType::KeyboardMouse, e.key.key, e.key.down, 0);
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        return InputEvent(InputType::KeyboardMouse, static_cast<u32>(e.button.button),
-                          e.button.down, 0);
+        return InputEvent(InputType::KeyboardMouse, (u32)e.button.button, e.button.down, 0);
     case SDL_EVENT_MOUSE_WHEEL:
     case SDL_EVENT_MOUSE_WHEEL_OFF:
         return InputEvent(InputType::KeyboardMouse, GetMouseWheelEvent(e),
@@ -531,18 +529,12 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
     }
     old_button_state = new_button_state;
     old_param = *new_param;
+    float touchpad_x = 0;
     if (button != SDL_GAMEPAD_BUTTON_INVALID) {
         switch (button) {
-        case SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT:
-            controllers[0]->SetTouchpadState(0, new_button_state, 0.25f, 0.5f);
-            controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
-            break;
-        case SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER:
-            controllers[0]->SetTouchpadState(0, new_button_state, 0.50f, 0.5f);
-            controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
-            break;
-        case SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT:
-            controllers[0]->SetTouchpadState(0, new_button_state, 0.75f, 0.5f);
+        case SDL_GAMEPAD_BUTTON_TOUCHPAD:
+            touchpad_x = 0.5f;
+            controllers[0]->SetTouchpadState(0, new_button_state, touchpad_x, 0.5f);
             controllers[0]->CheckButton(0, SDLGamepadToOrbisButton(button), new_button_state);
             break;
         case LEFTJOYSTICK_HALFMODE:
@@ -555,9 +547,6 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         // to do it, and it would be inconvenient to force it here, when AddUpdate does the job just
         // fine, and a toggle doesn't have to checked against every input that's bound to it, it's
         // enough that one is pressed
-        case MOUSE_GYRO_ROLL_MODE:
-            SetMouseGyroRollMode(new_button_state);
-            break;
         default: // is a normal key (hopefully)
             controllers[gamepad_index]->CheckButton(0, SDLGamepadToOrbisButton(button),
                                                     new_button_state);
@@ -612,7 +601,7 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
 bool UpdatePressedKeys(InputEvent event) {
     // Skip invalid inputs
     InputID input = event.input;
-    if (input.sdl_id == SDL_UNMAPPED) {
+    if (input.sdl_id == (u32)-1) {
         return false;
     }
     if (input.type == InputType::Axis) {

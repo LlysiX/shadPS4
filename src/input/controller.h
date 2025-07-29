@@ -25,7 +25,6 @@ enum class Axis {
 };
 
 struct TouchpadEntry {
-    u8 ID = 0;
     bool state{};
     u16 x{};
     u16 y{};
@@ -87,15 +86,8 @@ private:
     int m_connected_count = 0;
     u32 m_states_num = 0;
     u32 m_first_state = 0;
-    u8 m_touch_count = 0;
-    u8 m_secondary_touch_count = 0;
-    u8 m_previous_touch_count = 0;
-    u8 m_previous_touchnum = 0;
-    bool m_was_secondary_reset = false;
     std::array<State, MAX_STATES> m_states;
     std::array<StateInternal, MAX_STATES> m_private;
-    std::chrono::steady_clock::time_point m_last_update = {};
-    Libraries::Pad::OrbisFQuaternion m_orientation = {0.0f, 0.0f, 0.0f, 1.0f};
 
     SDL_Gamepad* m_sdl_gamepad = nullptr;
     u8 player_index = -1;

@@ -214,7 +214,7 @@ void KBMSettings::SaveKBMConfig(bool close_on_save) {
     lines.push_back("");
 
     add_mapping(ui->TouchpadLeftButton->text(), "touchpad_left");
-    add_mapping(ui->TouchpadCenterButton->text(), "touchpad_center");
+    add_mapping(ui->TouchpadCenterButton->text(), "touchpad");
     add_mapping(ui->TouchpadRightButton->text(), "touchpad_right");
     add_mapping(ui->OptionsButton->text(), "options");
 
@@ -449,7 +449,7 @@ void KBMSettings::SetUIValuestoMappings(std::string config_id) {
                 ui->OptionsButton->setText(QString::fromStdString(input_string));
             } else if (output_string == "touchpad_left") {
                 ui->TouchpadLeftButton->setText(QString::fromStdString(input_string));
-            } else if (output_string == "touchpad_center") {
+            } else if (output_string == "touchpad") {
                 ui->TouchpadCenterButton->setText(QString::fromStdString(input_string));
             } else if (output_string == "touchpad_right") {
                 ui->TouchpadRightButton->setText(QString::fromStdString(input_string));

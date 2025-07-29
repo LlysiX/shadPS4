@@ -1039,7 +1039,7 @@ l3 = x
 r3 = m
 
 options = enter
-touchpad_center = space
+touchpad = space
 
 pad_up = up
 pad_down = down
@@ -1071,7 +1071,7 @@ r2 = r2
 r3 = r3
 
 options = options
-touchpad_center = back
+touchpad = back
 
 pad_up = pad_up
 pad_down = pad_down

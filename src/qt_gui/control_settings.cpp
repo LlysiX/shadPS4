@@ -231,7 +231,7 @@ void ControlSettings::SaveControllerConfig(bool CloseOnSave) {
     lines.push_back("");
 
     add_mapping(ui->TouchpadLeftButton->text(), "touchpad_left");
-    add_mapping(ui->TouchpadCenterButton->text(), "touchpad_center");
+    add_mapping(ui->TouchpadCenterButton->text(), "touchpad");
     add_mapping(ui->TouchpadRightButton->text(), "touchpad_right");
     add_mapping(ui->OptionsButton->text(), "options");
 
@@ -475,7 +475,7 @@ void ControlSettings::SetUIValuestoMappings() {
             } else if (output_string == "touchpad_left") {
                 ui->TouchpadLeftButton->setText(QString::fromStdString(input_string));
                 TouchpadLeftExists = true;
-            } else if (output_string == "touchpad_center") {
+            } else if (output_string == "touchpad") {
                 ui->TouchpadCenterButton->setText(QString::fromStdString(input_string));
                 TouchpadCenterExists = true;
             } else if (output_string == "touchpad_right") {

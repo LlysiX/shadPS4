@@ -640,9 +640,10 @@ void load(const std::filesystem::path& path) {
         isNeo = toml::find_or<bool>(general, "isPS4Pro", isNeo);
         isDevKit = toml::find_or<bool>(general, "isDevKit", isDevKit);
         isPSNSignedIn = toml::find_or<bool>(general, "isPSNSignedIn", isPSNSignedIn);
-        isTrophyPopupDisabled = toml::find_or<bool>(general, "isTrophyPopupDisabled", isTrophyPopupDisabled);
-        trophyNotificationDuration =
-            toml::find_or<double>(general, "trophyNotificationDuration", trophyNotificationDuration);
+        isTrophyPopupDisabled =
+            toml::find_or<bool>(general, "isTrophyPopupDisabled", isTrophyPopupDisabled);
+        trophyNotificationDuration = toml::find_or<double>(general, "trophyNotificationDuration",
+                                                           trophyNotificationDuration);
         enableDiscordRPC = toml::find_or<bool>(general, "enableDiscordRPC", enableDiscordRPC);
         logFilter = toml::find_or<std::string>(general, "logFilter", logFilter);
         logType = toml::find_or<std::string>(general, "logType", logType);
@@ -650,8 +651,8 @@ void load(const std::filesystem::path& path) {
         isShowSplash = toml::find_or<bool>(general, "showSplash", isShowSplash);
         isSideTrophy = toml::find_or<std::string>(general, "sideTrophy", isSideTrophy);
         compatibilityData = toml::find_or<bool>(general, "compatibilityEnabled", compatibilityData);
-        checkCompatibilityOnStartup =
-            toml::find_or<bool>(general, "checkCompatibilityOnStartup", checkCompatibilityOnStartup);
+        checkCompatibilityOnStartup = toml::find_or<bool>(general, "checkCompatibilityOnStartup",
+                                                          checkCompatibilityOnStartup);
         chooseHomeTab = toml::find_or<std::string>(general, "chooseHomeTab", chooseHomeTab);
 
         entry_count += general.size();

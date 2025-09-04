@@ -245,6 +245,7 @@ public:
     boost::container::small_vector<Id, 16> interfaces;
 
     Id output_position{};
+    Id output_layer{};
     Id primitive_id{};
     Id vertex_index{};
     Id instance_id{};
@@ -280,6 +281,7 @@ public:
     Id shared_memory_u64_type{};
 
     Id bary_coord_smooth{};
+    Id bary_coord_smooth_centroid{};
     Id bary_coord_smooth_sample{};
     Id bary_coord_nopersp{};
 
@@ -387,6 +389,7 @@ private:
     void DefineArithmeticTypes();
     void DefineInterfaces();
     void DefineInputs();
+    void DefineVertexBlock();
     void DefineOutputs();
     void DefinePushDataBlock();
     void DefineBuffers();

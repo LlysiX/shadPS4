@@ -384,8 +384,16 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric) {
                 bary_coord_smooth =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
-            } else {
-                bary_coord_smooth = ConstF32(0.f, 0.f);
+            }
+        }
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid)) {
+            if (profile.supports_amd_shader_explicit_vertex_parameter) {
+                bary_coord_smooth_centroid = DefineVariable(
+                    F32[2], spv::BuiltIn::BaryCoordSmoothCentroidAMD, spv::StorageClass::Input);
+            } else if (profile.supports_fragment_shader_barycentric) {
+                bary_coord_smooth_centroid =
+                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+                // Decorate(bary_coord_smooth_centroid, spv::Decoration::Centroid);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
@@ -396,8 +404,6 @@ void EmitContext::DefineInputs() {
                 bary_coord_smooth_sample =
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
                 // Decorate(bary_coord_smooth_sample, spv::Decoration::Sample);
-            } else {
-                bary_coord_smooth_sample = ConstF32(0.f, 0.f);
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp)) {
@@ -407,8 +413,6 @@ void EmitContext::DefineInputs() {
             } else if (profile.supports_fragment_shader_barycentric) {
                 bary_coord_nopersp = DefineVariable(F32[3], spv::BuiltIn::BaryCoordNoPerspKHR,
                                                     spv::StorageClass::Input);
-            } else {
-                bary_coord_nopersp = ConstF32(0.f, 0.f);
             }
         }
         for (s32 i = 0; i < runtime_info.fs_info.num_inputs; i++) {
@@ -535,24 +539,32 @@ void EmitContext::DefineInputs() {
     }
 }
 
+void EmitContext::DefineVertexBlock() {
+    const std::array<Id, 8> zero{f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value,
+                                 f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value};
+    output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
+    if (info.stores.GetAny(IR::Attribute::ClipDistance)) {
+        const Id type{TypeArray(F32[1], ConstU32(8U))};
+        const Id initializer{ConstantComposite(type, zero)};
+        clip_distances = DefineVariable(type, spv::BuiltIn::ClipDistance, spv::StorageClass::Output,
+                                        initializer);
+    }
+    if (info.stores.GetAny(IR::Attribute::CullDistance)) {
+        const Id type{TypeArray(F32[1], ConstU32(8U))};
+        const Id initializer{ConstantComposite(type, zero)};
+        cull_distances = DefineVariable(type, spv::BuiltIn::CullDistance, spv::StorageClass::Output,
+                                        initializer);
+    }
+    if (info.stores.GetAny(IR::Attribute::RenderTargetId)) {
+        output_layer = DefineVariable(S32[1], spv::BuiltIn::Layer, spv::StorageClass::Output);
+    }
+}
+
 void EmitContext::DefineOutputs() {
     switch (l_stage) {
     case LogicalStage::Vertex: {
-        // No point in defining builtin outputs (i.e. position) unless next stage is fragment?
-        // Might cause problems linking with tcs
-
-        output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
-        const bool has_extra_pos_stores = info.stores.Get(IR::Attribute::Position1) ||
-                                          info.stores.Get(IR::Attribute::Position2) ||
-                                          info.stores.Get(IR::Attribute::Position3);
-        if (has_extra_pos_stores) {
-            const Id type{TypeArray(F32[1], ConstU32(8U))};
-            clip_distances =
-                DefineVariable(type, spv::BuiltIn::ClipDistance, spv::StorageClass::Output);
-            cull_distances =
-                DefineVariable(type, spv::BuiltIn::CullDistance, spv::StorageClass::Output);
-        }
-        if (stage == Stage::Local) {
+        DefineVertexBlock();
+        if (stage == Shader::Stage::Local) {
             const u32 num_attrs = Common::AlignUp(runtime_info.ls_info.ls_stride, 16) >> 4;
             if (num_attrs > 0) {
                 const Id type{TypeArray(F32[4], ConstU32(num_attrs))};
@@ -611,17 +623,7 @@ void EmitContext::DefineOutputs() {
         break;
     }
     case LogicalStage::TessellationEval: {
-        output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
-        const bool has_extra_pos_stores = info.stores.Get(IR::Attribute::Position1) ||
-                                          info.stores.Get(IR::Attribute::Position2) ||
-                                          info.stores.Get(IR::Attribute::Position3);
-        if (has_extra_pos_stores) {
-            const Id type{TypeArray(F32[1], ConstU32(8U))};
-            clip_distances =
-                DefineVariable(type, spv::BuiltIn::ClipDistance, spv::StorageClass::Output);
-            cull_distances =
-                DefineVariable(type, spv::BuiltIn::CullDistance, spv::StorageClass::Output);
-        }
+        DefineVertexBlock();
         for (u32 i = 0; i < IR::NumParams; i++) {
             const IR::Attribute param{IR::Attribute::Param0 + i};
             if (!info.stores.GetAny(param)) {
@@ -656,13 +658,14 @@ void EmitContext::DefineOutputs() {
             frag_outputs[i] = GetAttributeInfo(num_format, id, num_components, true);
             ++num_render_targets;
         }
-        ASSERT_MSG(!runtime_info.fs_info.dual_source_blending || num_render_targets == 2,
-                   "Dual source blending enabled, there must be exactly two MRT exports");
+        // Dual source blending allows at most 2 render targets, one for each source.
+        // Fewer targets are allowed but the missing blending source values will be undefined.
+        ASSERT_MSG(!runtime_info.fs_info.dual_source_blending || num_render_targets <= 2,
+                   "Dual source blending enabled, there must be at most two MRT exports");
         break;
     }
     case LogicalStage::Geometry: {
-        output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
-
+        DefineVertexBlock();
         for (u32 attr_id = 0; attr_id < info.gs_copy_data.num_attrs; attr_id++) {
             const Id id{DefineOutput(F32[4], attr_id)};
             Name(id, fmt::format("out_attr{}", attr_id));
@@ -941,11 +944,11 @@ void EmitContext::DefineImagesAndSamplers() {
         const Id id{AddGlobalVariable(sampler_pointer_type, spv::StorageClass::UniformConstant)};
         Decorate(id, spv::Decoration::Binding, binding.unified++);
         Decorate(id, spv::Decoration::DescriptorSet, 0U);
-        auto sharp_desc = std::holds_alternative<u32>(samp_desc.sampler)
-                              ? fmt::format("sgpr:{}", std::get<u32>(samp_desc.sampler))
-                              : fmt::format("inline:{:#x}:{:#x}",
-                                            std::get<AmdGpu::Sampler>(samp_desc.sampler).raw0,
-                                            std::get<AmdGpu::Sampler>(samp_desc.sampler).raw1);
+        const auto sharp_desc =
+            samp_desc.is_inline_sampler
+                ? fmt::format("inline:{:#x}:{:#x}", samp_desc.inline_sampler.raw0,
+                              samp_desc.inline_sampler.raw1)
+                : fmt::format("sgpr:{}", samp_desc.sharp_idx);
         Name(id, fmt::format("{}_{}{}", stage, "samp", sharp_desc));
         samplers.push_back(id);
         interfaces.push_back(id);

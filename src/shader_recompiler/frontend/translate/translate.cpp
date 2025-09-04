@@ -92,8 +92,12 @@ void Translator::EmitPrologue(IR::Block* first_block) {
             if (runtime_info.num_input_vgprs > 0) {
                 ir.SetVectorReg(dst_vreg++, ir.Imm32(0));
             }
-            // v2: instance ID
+            // v2: unknown
             if (runtime_info.num_input_vgprs > 1) {
+                ++dst_vreg;
+            }
+            // v3: instance ID, plain
+            if (runtime_info.num_input_vgprs > 2) {
                 ir.SetVectorReg(dst_vreg++, ir.GetAttributeU32(IR::Attribute::InstanceId));
             }
         } else {
@@ -126,7 +130,10 @@ void Translator::EmitPrologue(IR::Block* first_block) {
     case LogicalStage::Fragment:
         dst_vreg =
             IterateBarycentrics(runtime_info, [this](u32 vreg, IR::Attribute attrib, u32 comp) {
-                ir.SetVectorReg(IR::VectorReg(vreg), ir.GetAttribute(attrib, comp));
+                if (profile.supports_amd_shader_explicit_vertex_parameter ||
+                    profile.supports_fragment_shader_barycentric) {
+                    ir.SetVectorReg(IR::VectorReg(vreg), ir.GetAttribute(attrib, comp));
+                }
             });
         if (runtime_info.fs_info.addr_flags.pos_x_float_ena) {
             if (runtime_info.fs_info.en_flags.pos_x_float_ena) {
@@ -172,6 +179,14 @@ void Translator::EmitPrologue(IR::Block* first_block) {
         // [8:12]: output control point id
         ir.SetVectorReg(IR::VectorReg::V1,
                         ir.GetAttributeU32(IR::Attribute::PackedHullInvocationInfo));
+
+        if (runtime_info.hs_info.offchip_lds_enable) {
+            // No off-chip tessellation has been observed yet. If this survives dead code elim,
+            // revisit
+            ir.SetScalarReg(dst_sreg++, ir.GetAttributeU32(IR::Attribute::OffChipLdsBase));
+        }
+        ir.SetScalarReg(dst_sreg++, ir.GetAttributeU32(IR::Attribute::TessFactorsBufferBase));
+
         break;
     }
     case LogicalStage::TessellationEval:
@@ -360,7 +375,7 @@ T Translator::GetSrc64(const InstOperand& operand) {
         const auto value_lo = ir.GetScalarReg(IR::ScalarReg(operand.code));
         const auto value_hi = ir.GetScalarReg(IR::ScalarReg(operand.code + 1));
         if constexpr (is_float) {
-            UNREACHABLE();
+            value = ir.PackDouble2x32(ir.CompositeConstruct(value_lo, value_hi));
         } else {
             value = ir.PackUint2x32(ir.CompositeConstruct(value_lo, value_hi));
         }
@@ -513,14 +528,13 @@ void Translator::EmitFetch(const GcnInst& inst) {
         GcnDecodeContext decoder;
 
         // Decode and save instructions
-        u32 sub_pc = 0;
         while (!slice.atEnd()) {
             const auto sub_inst = decoder.decodeInstruction(slice);
             if (sub_inst.opcode == Opcode::S_SETPC_B64) {
                 // Assume we're swapping back to the main shader.
                 break;
             }
-            TranslateInstruction(sub_inst, sub_pc++);
+            TranslateInstruction(sub_inst);
         }
         return;
     }
@@ -547,7 +561,7 @@ void Translator::EmitFetch(const GcnInst& inst) {
         IR::VectorReg dst_reg{attrib.dest_vgpr};
 
         // Read the V# of the attribute to figure out component number and type.
-        const auto buffer = info.ReadUdReg<AmdGpu::Buffer>(attrib.sgpr_base, attrib.dword_offset);
+        const auto buffer = attrib.GetSharp(info);
         const auto values =
             ir.CompositeConstruct(ir.GetAttribute(attr, 0), ir.GetAttribute(attr, 1),
                                   ir.GetAttribute(attr, 2), ir.GetAttribute(attr, 3));
@@ -567,11 +581,12 @@ void Translator::LogMissingOpcode(const GcnInst& inst) {
     info.translation_failed = true;
 }
 
-void Translator::Translate(IR::Block* block, u32 pc, std::span<const GcnInst> inst_list) {
+void Translator::Translate(IR::Block* block, u32 start_pc, std::span<const GcnInst> inst_list) {
     if (inst_list.empty()) {
         return;
     }
     ir = IR::IREmitter{*block, block->begin()};
+    pc = start_pc;
     for (const auto& inst : inst_list) {
         pc += inst.length;
 
@@ -583,11 +598,11 @@ void Translator::Translate(IR::Block* block, u32 pc, std::span<const GcnInst> in
             continue;
         }
 
-        TranslateInstruction(inst, pc);
+        TranslateInstruction(inst);
     }
 }
 
-void Translator::TranslateInstruction(const GcnInst& inst, const u32 pc) {
+void Translator::TranslateInstruction(const GcnInst& inst) {
     // Emit instructions for each category.
     switch (inst.category) {
     case InstCategory::DataShare:
@@ -606,7 +621,7 @@ void Translator::TranslateInstruction(const GcnInst& inst, const u32 pc) {
         EmitExport(inst);
         break;
     case InstCategory::FlowControl:
-        EmitFlowControl(pc, inst);
+        EmitFlowControl(inst);
         break;
     case InstCategory::ScalarALU:
         EmitScalarAlu(inst);

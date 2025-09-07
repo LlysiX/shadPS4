@@ -892,6 +892,7 @@ set(SHADER_RECOMPILER src/shader_recompiler/exception.h
                       src/shader_recompiler/ir/attribute.h
                       src/shader_recompiler/ir/basic_block.cpp
                       src/shader_recompiler/ir/basic_block.h
+                      src/shader_recompiler/ir/breadth_first_search.h
                       src/shader_recompiler/ir/condition.h
                       src/shader_recompiler/ir/ir_emitter.cpp
                       src/shader_recompiler/ir/ir_emitter.h
@@ -899,8 +900,10 @@ set(SHADER_RECOMPILER src/shader_recompiler/exception.h
                       src/shader_recompiler/ir/opcodes.cpp
                       src/shader_recompiler/ir/opcodes.h
                       src/shader_recompiler/ir/opcodes.inc
+                      src/shader_recompiler/ir/operand_helper.h
                       src/shader_recompiler/ir/patch.cpp
                       src/shader_recompiler/ir/patch.h
+                      src/shader_recompiler/ir/position.h
                       src/shader_recompiler/ir/post_order.cpp
                       src/shader_recompiler/ir/post_order.h
                       src/shader_recompiler/ir/program.cpp

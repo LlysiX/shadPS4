@@ -77,7 +77,7 @@ static bool readbackLinearImagesEnabled = false;
 static bool directMemoryAccessEnabled = false;
 static bool shouldDumpShaders = false;
 static bool shouldPatchShaders = false;
-static u32 vblankDivider = 1;
+static u32 vblankFrequency = 60;
 static bool isFullscreen = false;
 static std::string fullscreenMode = "Windowed";
 static bool isHDRAllowed = false;
@@ -318,8 +318,8 @@ bool fpsColor() {
     return isFpsColor;
 }
 
-u32 vblankDiv() {
-    return vblankDivider;
+u32 vblankFreq() {
+    return vblankFrequency;
 }
 
 bool vkValidationEnabled() {
@@ -438,8 +438,8 @@ void setRdocEnabled(bool enable) {
     rdocEnable = enable;
 }
 
-void setVblankDiv(u32 value) {
-    vblankDivider = value;
+void setVblankFreq(u32 value) {
+    vblankFrequency = value;
 }
 
 void setIsFullscreen(bool enable) {
@@ -697,7 +697,7 @@ void load(const std::filesystem::path& path) {
             toml::find_or<bool>(gpu, "directMemoryAccess", directMemoryAccessEnabled);
         shouldDumpShaders = toml::find_or<bool>(gpu, "dumpShaders", shouldDumpShaders);
         shouldPatchShaders = toml::find_or<bool>(gpu, "patchShaders", shouldPatchShaders);
-        vblankDivider = toml::find_or<int>(gpu, "vblankDivider", vblankDivider);
+        vblankFrequency = toml::find_or<int>(gpu, "vblankFrequency", vblankFrequency);
         isFullscreen = toml::find_or<bool>(gpu, "Fullscreen", isFullscreen);
         fullscreenMode = toml::find_or<std::string>(gpu, "FullscreenMode", fullscreenMode);
         isHDRAllowed = toml::find_or<bool>(gpu, "allowHDR", isHDRAllowed);
@@ -878,7 +878,7 @@ void save(const std::filesystem::path& path) {
     data["GPU"]["directMemoryAccess"] = directMemoryAccessEnabled;
     data["GPU"]["dumpShaders"] = shouldDumpShaders;
     data["GPU"]["patchShaders"] = shouldPatchShaders;
-    data["GPU"]["vblankDivider"] = vblankDivider;
+    data["GPU"]["vblankFrequency"] = vblankFrequency;
     data["GPU"]["Fullscreen"] = isFullscreen;
     data["GPU"]["FullscreenMode"] = fullscreenMode;
     data["GPU"]["allowHDR"] = isHDRAllowed;
@@ -989,7 +989,7 @@ void setDefaultValues() {
     directMemoryAccessEnabled = false;
     shouldDumpShaders = false;
     shouldPatchShaders = false;
-    vblankDivider = 1;
+    vblankFrequency = 60;
     isFullscreen = false;
     fullscreenMode = "Windowed";
     isHDRAllowed = false;

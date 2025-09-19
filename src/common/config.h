@@ -59,7 +59,7 @@ void setDirectMemoryAccess(bool enable);
 bool dumpShaders();
 void setDumpShaders(bool enable);
 u32 vblankFreq();
-void setvblankFreq(u32 value);
+void setVblankFreq(u32 value);
 bool getisTrophyPopupDisabled();
 void setisTrophyPopupDisabled(bool disable);
 s16 getCursorState();

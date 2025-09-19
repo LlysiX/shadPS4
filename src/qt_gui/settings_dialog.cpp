@@ -815,7 +815,7 @@ void SettingsDialog::UpdateSettings() {
     Config::setEnableDiscordRPC(ui->discordRPCCheckbox->isChecked());
     Config::setWindowWidth(ui->widthSpinBox->value());
     Config::setWindowHeight(ui->heightSpinBox->value());
-    Config::setvblankFreq(ui->vblankSpinBox->value());
+    Config::setVblankFreq(ui->vblankSpinBox->value());
     Config::setDumpShaders(ui->dumpShadersCheckBox->isChecked());
     Config::setNullGpu(ui->nullGpuCheckBox->isChecked());
     Config::setLoadGameSizeEnabled(ui->gameSizeCheckBox->isChecked());

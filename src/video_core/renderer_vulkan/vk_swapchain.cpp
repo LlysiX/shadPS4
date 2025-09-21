@@ -207,8 +207,7 @@ void Swapchain::FindPresentMode() {
     } else if (requested_mode == "Immediate") {
         present_mode = vk::PresentModeKHR::eImmediate;
     } else {
-        LOG_ERROR(Render_Vulkan, "Unknown present mode {}, defaulting to Mailbox.",
-                  "Mailbox");
+        LOG_ERROR(Render_Vulkan, "Unknown present mode {}, defaulting to Mailbox.", "Mailbox");
         present_mode = vk::PresentModeKHR::eMailbox;
     }
 

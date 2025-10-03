@@ -145,7 +145,6 @@ public:
     VAddr track_addr = 0;
     VAddr track_addr_end = 0;
     ImageId depth_id{};
-    u64 lru_id{};
 
     // Resource state tracking
     vk::ImageUsageFlags usage_flags;

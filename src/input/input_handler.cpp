@@ -556,30 +556,6 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
         case RIGHTJOYSTICK_HALFMODE:
             rightjoystick_halfmode = new_button_state;
             break;
-        case HOTKEY_FULLSCREEN:
-            PushSDLEvent(SDL_EVENT_TOGGLE_FULLSCREEN);
-            break;
-        case HOTKEY_PAUSE:
-            PushSDLEvent(SDL_EVENT_TOGGLE_PAUSE);
-            break;
-        case HOTKEY_SIMPLE_FPS:
-            PushSDLEvent(SDL_EVENT_TOGGLE_SIMPLE_FPS);
-            break;
-        case HOTKEY_RELOAD_INPUTS:
-            PushSDLEvent(SDL_EVENT_RELOAD_INPUTS);
-            break;
-        case HOTKEY_TOGGLE_MOUSE_TO_JOYSTICK:
-            PushSDLEvent(SDL_EVENT_MOUSE_TO_JOYSTICK);
-            break;
-        case HOTKEY_TOGGLE_MOUSE_TO_GYRO:
-            PushSDLEvent(SDL_EVENT_MOUSE_TO_GYRO);
-            break;
-        case HOTKEY_RENDERDOC:
-            PushSDLEvent(SDL_EVENT_RDOC_CAPTURE);
-            break;
-        case HOTKEY_QUIT:
-            PushSDLEvent(SDL_EVENT_QUIT_DIALOG);
-            break;
         case KEY_TOGGLE:
             // noop
             break;

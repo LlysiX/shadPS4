@@ -359,10 +359,6 @@ std::string getPadSpkOutputDevice() {
     return padSpkOutputDevice.get();
 }
 
-std::string getMicDevice() {
-    return micDevice;
-}
-
 double getTrophyNotificationDuration() {
     return trophyNotificationDuration.get();
 }
@@ -405,13 +401,13 @@ string getChooseHomeTab() {
 
 bool getUseSpecialPad(int pad) {
     switch(pad){
-        case 0:
-            return useSpecialPad1.get();
         case 1:
-            return useSpecialPad2.get();
+            return useSpecialPad1.get();
         case 2:
-            return useSpecialPad3.get();
+            return useSpecialPad2.get();
         case 3:
+            return useSpecialPad3.get();
+        case 4:
             return useSpecialPad4.get();
     }
     return useSpecialPad1.get();
@@ -419,13 +415,13 @@ bool getUseSpecialPad(int pad) {
 
 int getSpecialPadClass(int pad) {
     switch(pad){
-        case 0:
-            return specialPadClass1.get();
         case 1:
-            return specialPadClass2.get();
+            return specialPadClass1.get();
         case 2:
-            return specialPadClass3.get();
+            return specialPadClass2.get();
         case 3:
+            return specialPadClass3.get();
+        case 4:
             return specialPadClass4.get();
     }
     return specialPadClass1.get();

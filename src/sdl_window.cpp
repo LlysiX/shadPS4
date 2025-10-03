@@ -11,7 +11,6 @@
 #include "common/config.h"
 #include "common/elf_info.h"
 #include "core/debug_state.h"
-#include "core/devtools/layer.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/pad/pad.h"
 #include "core/libraries/system/userservice.h"
@@ -150,9 +149,6 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
     Input::GameControllers::TryOpenSDLControllers(controllers);
     using namespace Libraries::UserService;
-    if (Config::getBackgroundControllerInput()) {
-        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    }
 }
 
 WindowSDL::~WindowSDL() = default;
@@ -223,9 +219,6 @@ void WindowSDL::WaitEvent() {
     case SDL_EVENT_QUIT:
         is_open = false;
         break;
-    case SDL_EVENT_QUIT_DIALOG:
-        Overlay::ToggleQuitWindow();
-        break;
     case SDL_EVENT_TOGGLE_FULLSCREEN: {
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) {
             SDL_SetWindowFullscreen(window, 0);
@@ -235,33 +228,15 @@ void WindowSDL::WaitEvent() {
         break;
     }
     case SDL_EVENT_TOGGLE_PAUSE:
+        SDL_Log("Received SDL_EVENT_TOGGLE_PAUSE");
+
         if (DebugState.IsGuestThreadsPaused()) {
-            LOG_INFO(Frontend, "Game Resumed");
+            SDL_Log("Game Resumed");
             DebugState.ResumeGuestThreads();
         } else {
-            LOG_INFO(Frontend, "Game Paused");
+            SDL_Log("Game Paused");
             DebugState.PauseGuestThreads();
         }
-        break;
-    case SDL_EVENT_CHANGE_CONTROLLER:
-        controller->GetEngine()->Init();
-        break;
-    case SDL_EVENT_TOGGLE_SIMPLE_FPS:
-        Overlay::ToggleSimpleFps();
-        break;
-    case SDL_EVENT_RELOAD_INPUTS:
-        Input::ParseInputConfig(std::string(Common::ElfInfo::Instance().GameSerial()));
-        break;
-    case SDL_EVENT_MOUSE_TO_JOYSTICK:
-        SDL_SetWindowRelativeMouseMode(this->GetSDLWindow(),
-                                       Input::ToggleMouseModeTo(Input::MouseMode::Joystick));
-        break;
-    case SDL_EVENT_MOUSE_TO_GYRO:
-        SDL_SetWindowRelativeMouseMode(this->GetSDLWindow(),
-                                       Input::ToggleMouseModeTo(Input::MouseMode::Gyro));
-        break;
-    case SDL_EVENT_RDOC_CAPTURE:
-        VideoCore::TriggerCapture();
         break;
     default:
         break;
@@ -387,6 +362,7 @@ void WindowSDL::OnKeyboardMouseInput(const SDL_Event* event) {
 }
 
 void WindowSDL::OnGamepadEvent(const SDL_Event* event) {
+
     bool input_down = event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION ||
                       event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
     Input::InputEvent input_event = Input::InputBinding::GetInputEventFromSDLEvent(*event);
@@ -430,8 +406,8 @@ void WindowSDL::OnGamepadEvent(const SDL_Event* event) {
     // add/remove it from the list
     bool inputs_changed = Input::UpdatePressedKeys(input_event);
 
+    // update bindings
     if (inputs_changed) {
-        // update bindings
         Input::ActivateOutputsFromInputs();
     }
 }

@@ -6,12 +6,14 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 #include "common/va_ctx.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/error_codes.h"
+#include "core/libraries/kernel/debug.h"
 #include "core/libraries/kernel/equeue.h"
 #include "core/libraries/kernel/file_system.h"
 #include "core/libraries/kernel/kernel.h"
@@ -23,9 +25,12 @@
 #include "core/libraries/kernel/threads/exception.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/network/sys_net.h"
 
 #ifdef _WIN64
 #include <Rpc.h>
+#else
+#include <uuid/uuid.h>
 #endif
 #include <common/singleton.h>
 #include <core/libraries/network/net_error.h>
@@ -52,7 +57,7 @@ void KernelSignalRequest() {
 }
 
 static void KernelServiceThread(std::stop_token stoken) {
-    Common::SetCurrentThreadName("shadPS4:Kernel_ServiceThread");
+    Common::SetCurrentThreadName("shadPS4:KernelServiceThread");
 
     while (!stoken.stop_requested()) {
         HLE_TRACE;
@@ -65,7 +70,7 @@ static void KernelServiceThread(std::stop_token stoken) {
         }
 
         io_context.run();
-        io_context.reset();
+        io_context.restart();
 
         asio_requests = 0;
     }
@@ -75,31 +80,47 @@ static PS4_SYSV_ABI void stack_chk_fail() {
     UNREACHABLE();
 }
 
-static thread_local int g_posix_errno = 0;
+static thread_local s32 g_posix_errno = 0;
 
-int* PS4_SYSV_ABI __Error() {
+s32* PS4_SYSV_ABI __Error() {
     return &g_posix_errno;
 }
 
-void ErrSceToPosix(int error) {
+void ErrSceToPosix(s32 error) {
     g_posix_errno = error - ORBIS_KERNEL_ERROR_UNKNOWN;
 }
 
-int ErrnoToSceKernelError(int error) {
+s32 ErrnoToSceKernelError(s32 error) {
     return error + ORBIS_KERNEL_ERROR_UNKNOWN;
 }
 
-void SetPosixErrno(int e) {
-    // Some error numbers are different between supported OSes or the PS4
+s32 PS4_SYSV_ABI sceKernelError(s32 posix_error) {
+    if (posix_error == 0) {
+        return 0;
+    }
+    return posix_error + ORBIS_KERNEL_ERROR_UNKNOWN;
+}
+
+void SetPosixErrno(s32 e) {
+    // Some error numbers are different between supported OSes
     switch (e) {
     case EPERM:
         g_posix_errno = POSIX_EPERM;
         break;
-    case EAGAIN:
-        g_posix_errno = POSIX_EAGAIN;
+    case ENOENT:
+        g_posix_errno = POSIX_ENOENT;
+        break;
+    case EDEADLK:
+        g_posix_errno = POSIX_EDEADLK;
         break;
     case ENOMEM:
         g_posix_errno = POSIX_ENOMEM;
+        break;
+    case EACCES:
+        g_posix_errno = POSIX_EACCES;
+        break;
+    case EFAULT:
+        g_posix_errno = POSIX_EFAULT;
         break;
     case EINVAL:
         g_posix_errno = POSIX_EINVAL;
@@ -110,62 +131,33 @@ void SetPosixErrno(int e) {
     case ERANGE:
         g_posix_errno = POSIX_ERANGE;
         break;
-    case EDEADLK:
-        g_posix_errno = POSIX_EDEADLK;
+    case EAGAIN:
+        g_posix_errno = POSIX_EAGAIN;
         break;
     case ETIMEDOUT:
         g_posix_errno = POSIX_ETIMEDOUT;
         break;
     default:
+        LOG_WARNING(Kernel, "Unhandled errno {}", e);
         g_posix_errno = e;
     }
 }
 
-static uint64_t g_mspace_atomic_id_mask = 0;
-static uint64_t g_mstate_table[64] = {0};
+static u64 g_mspace_atomic_id_mask = 0;
+static u64 g_mstate_table[64] = {0};
 
 struct HeapInfoInfo {
-    uint64_t size = sizeof(HeapInfoInfo);
-    uint32_t flag;
-    uint32_t getSegmentInfo;
-    uint64_t* mspace_atomic_id_mask;
-    uint64_t* mstate_table;
+    u64 size = sizeof(HeapInfoInfo);
+    u32 flag;
+    u32 getSegmentInfo;
+    u64* mspace_atomic_id_mask;
+    u64* mstate_table;
 };
 
 void PS4_SYSV_ABI sceLibcHeapGetTraceInfo(HeapInfoInfo* info) {
     info->mspace_atomic_id_mask = &g_mspace_atomic_id_mask;
     info->mstate_table = g_mstate_table;
     info->getSegmentInfo = 0;
-}
-
-s64 PS4_SYSV_ABI ps4__write(int d, const char* buf, std::size_t nbytes) {
-    auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(d);
-    if (file == nullptr) {
-        return ORBIS_KERNEL_ERROR_EBADF;
-    }
-    std::scoped_lock lk{file->m_mutex};
-    if (file->type == Core::FileSys::FileType::Device) {
-        return file->device->write(buf, nbytes);
-    }
-    return file->f.WriteRaw<u8>(buf, nbytes);
-}
-
-s64 PS4_SYSV_ABI ps4__read(int d, void* buf, u64 nbytes) {
-    if (d == 0) {
-        return static_cast<s64>(
-            strlen(std::fgets(static_cast<char*>(buf), static_cast<int>(nbytes), stdin)));
-    }
-    auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
-    auto* file = h->GetFile(d);
-    if (file == nullptr) {
-        return ORBIS_KERNEL_ERROR_EBADF;
-    }
-    std::scoped_lock lk{file->m_mutex};
-    if (file->type == Core::FileSys::FileType::Device) {
-        return file->device->read(buf, nbytes);
-    }
-    return file->f.ReadRaw<u8>(buf, nbytes);
 }
 
 struct OrbisKernelUuid {
@@ -176,26 +168,26 @@ struct OrbisKernelUuid {
     u8 clockSeqLow;
     u8 node[6];
 };
+static_assert(sizeof(OrbisKernelUuid) == 0x10);
 
-int PS4_SYSV_ABI sceKernelUuidCreate(OrbisKernelUuid* orbisUuid) {
+s32 PS4_SYSV_ABI sceKernelUuidCreate(OrbisKernelUuid* orbisUuid) {
+    if (!orbisUuid) {
+        return ORBIS_KERNEL_ERROR_EINVAL;
+    }
 #ifdef _WIN64
     UUID uuid;
-    UuidCreate(&uuid);
-    orbisUuid->timeLow = uuid.Data1;
-    orbisUuid->timeMid = uuid.Data2;
-    orbisUuid->timeHiAndVersion = uuid.Data3;
-    orbisUuid->clockSeqHiAndReserved = uuid.Data4[0];
-    orbisUuid->clockSeqLow = uuid.Data4[1];
-    for (int i = 0; i < 6; i++) {
-        orbisUuid->node[i] = uuid.Data4[2 + i];
+    if (UuidCreate(&uuid) != RPC_S_OK) {
+        return ORBIS_KERNEL_ERROR_EFAULT;
     }
 #else
-    LOG_ERROR(Kernel, "sceKernelUuidCreate: Add linux");
+    uuid_t uuid;
+    uuid_generate(uuid);
 #endif
-    return 0;
+    std::memcpy(orbisUuid, &uuid, sizeof(OrbisKernelUuid));
+    return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI kernel_ioctl(int fd, u64 cmd, VA_ARGS) {
+s32 PS4_SYSV_ABI kernel_ioctl(s32 fd, u64 cmd, VA_ARGS) {
     auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
     auto* file = h->GetFile(fd);
     if (file == nullptr) {
@@ -209,7 +201,7 @@ int PS4_SYSV_ABI kernel_ioctl(int fd, u64 cmd, VA_ARGS) {
         return -1;
     }
     VA_CTX(ctx);
-    int result = file->device->ioctl(cmd, &ctx);
+    s32 result = file->device->ioctl(cmd, &ctx);
     LOG_TRACE(Lib_Kernel, "ioctl: fd = {:X} cmd = {:X} result = {}", fd, cmd, result);
     if (result < 0) {
         ErrSceToPosix(result);
@@ -237,8 +229,23 @@ s32 PS4_SYSV_ABI sceKernelGetGPI() {
     return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI posix_getpagesize() {
-    return 16_KB;
+// stubbed on non-devkit consoles
+s32 PS4_SYSV_ABI sceKernelSetGPO() {
+    LOG_DEBUG(Kernel, "called");
+    return ORBIS_OK;
+}
+
+s32 PS4_SYSV_ABI sceKernelGetSystemSwVersion(SwVersionStruct* ret) {
+    if (ret == nullptr) {
+        return ORBIS_OK; // but why?
+    }
+    ASSERT(ret->struct_size == 40);
+    u32 fake_fw = Common::ElfInfo::Instance().RawFirmwareVer();
+    ret->hex_representation = fake_fw;
+    std::snprintf(ret->text_representation, 28, "%2x.%03x.%03x", fake_fw >> 0x18,
+                  fake_fw >> 0xc & 0xfff, fake_fw & 0xfff); // why %2x?
+    LOG_INFO(Lib_Kernel, "called, returned sw version: {}", ret->text_representation);
+    return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI getargc() {
@@ -260,6 +267,8 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     Libraries::Kernel::RegisterEventQueue(sym);
     Libraries::Kernel::RegisterProcess(sym);
     Libraries::Kernel::RegisterException(sym);
+    Libraries::Kernel::RegisterAio(sym);
+    Libraries::Kernel::RegisterDebug(sym);
 
     LIB_OBJ("f7uOxY9mM1U", "libkernel", 1, "libkernel", &g_stack_chk_guard);
     LIB_FUNCTION("D4yla3vx4tY", "libkernel", 1, "libkernel", sceKernelError);

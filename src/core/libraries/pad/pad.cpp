@@ -155,10 +155,7 @@ int PS4_SYSV_ABI scePadGetFeatureReport() {
 }
 
 int PS4_SYSV_ABI scePadGetHandle(s32 userId, s32 type, s32 index) {
-    if (!g_initialized) {
-        return ORBIS_PAD_ERROR_NOT_INITIALIZED;
-    }
-    if (userId == -1 || !g_opened) {
+    if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
     LOG_DEBUG(Lib_Pad, "(DUMMY) called");
@@ -207,7 +204,6 @@ int PS4_SYSV_ABI scePadGetVersionInfo() {
 
 int PS4_SYSV_ABI scePadInit() {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
-    g_initialized = true;
     return ORBIS_OK;
 }
 
@@ -252,9 +248,6 @@ int PS4_SYSV_ABI scePadMbusTerm() {
 }
 
 int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenParam* pParam) {
-    if (!g_initialized) {
-        return ORBIS_PAD_ERROR_NOT_INITIALIZED;
-    }
     if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
@@ -433,17 +426,7 @@ int PS4_SYSV_ABI scePadResetLightBarAllByPortType() {
 }
 
 int PS4_SYSV_ABI scePadResetOrientation(s32 handle) {
-    LOG_INFO(Lib_Pad, "scePadResetOrientation called handle = {}", handle);
-
-    if (handle != 1) {
-        return ORBIS_PAD_ERROR_INVALID_HANDLE;
-    }
-
-    auto* controller = Common::Singleton<GameController>::Instance();
-    Libraries::Pad::OrbisFQuaternion defaultOrientation = {0.0f, 0.0f, 0.0f, 1.0f};
-    controller->SetLastOrientation(defaultOrientation);
-    controller->SetLastUpdate(std::chrono::steady_clock::now());
-
+    LOG_ERROR(Lib_Pad, "(STUBBED) called");
     return ORBIS_OK;
 }
 
@@ -680,14 +663,16 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("Uq6LgTJEmQs", "libScePad", 1, "libScePad", scePadGetDataInternal);
     LIB_FUNCTION("hDgisSGkOgw", "libScePad", 1, "libScePad", scePadGetDeviceId);
     LIB_FUNCTION("4rS5zG7RFaM", "libScePad", 1, "libScePad", scePadGetDeviceInfo);
-    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad", scePadGetExtControllerInformation);
+    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad",
+                 scePadGetExtControllerInformation);
     LIB_FUNCTION("1DmZjZAuzEM", "libScePad", 1, "libScePad", scePadGetExtensionUnitInfo);
     LIB_FUNCTION("PZSoY8j0Pko", "libScePad", 1, "libScePad", scePadGetFeatureReport);
     LIB_FUNCTION("u1GRHp+oWoY", "libScePad", 1, "libScePad", scePadGetHandle);
     LIB_FUNCTION("kiA9bZhbnAg", "libScePad", 1, "libScePad", scePadGetIdleCount);
     LIB_FUNCTION("1Odcw19nADw", "libScePad", 1, "libScePad", scePadGetInfo);
     LIB_FUNCTION("4x5Im8pr0-4", "libScePad", 1, "libScePad", scePadGetInfoByPortType);
-    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad", scePadGetLicenseControllerInformation);
+    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad",
+                 scePadGetLicenseControllerInformation);
     LIB_FUNCTION("WPIB7zBWxVE", "libScePad", 1, "libScePad", scePadGetMotionSensorPosition);
     LIB_FUNCTION("k4+nDV9vbT0", "libScePad", 1, "libScePad", scePadGetMotionTimerUnit);
     LIB_FUNCTION("do-JDWX+zRs", "libScePad", 1, "libScePad", scePadGetSphereRadius);
@@ -715,10 +700,13 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("5Wf4q349s+Q", "libScePad", 1, "libScePad", scePadReadStateExt);
     LIB_FUNCTION("DscD1i9HX1w", "libScePad", 1, "libScePad", scePadResetLightBar);
     LIB_FUNCTION("+4c9xRLmiXQ", "libScePad", 1, "libScePad", scePadResetLightBarAll);
-    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad", scePadResetLightBarAllByPortType);
+    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad",
+                 scePadResetLightBarAllByPortType);
     LIB_FUNCTION("rIZnR6eSpvk", "libScePad", 1, "libScePad", scePadResetOrientation);
-    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad", scePadResetOrientationForTracker);
-    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad", scePadSetAngularVelocityDeadbandState);
+    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad",
+                 scePadResetOrientationForTracker);
+    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad",
+                 scePadSetAngularVelocityDeadbandState);
     LIB_FUNCTION("ew647HuKi2Y", "libScePad", 1, "libScePad", scePadSetAutoPowerOffCount);
     LIB_FUNCTION("MbTt1EHYCTg", "libScePad", 1, "libScePad", scePadSetButtonRemappingInfo);
     LIB_FUNCTION("MLA06oNfF+4", "libScePad", 1, "libScePad", scePadSetConnection);
@@ -735,7 +723,8 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("DmBx8K+jDWw", "libScePad", 1, "libScePad", scePadSetProcessPrivilege);
     LIB_FUNCTION("FbxEpTRDou8", "libScePad", 1, "libScePad",
                  scePadSetProcessPrivilegeOfButtonRemapping);
-    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad", scePadSetShareButtonMaskForRemotePlay);
+    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad",
+                 scePadSetShareButtonMaskForRemotePlay);
     LIB_FUNCTION("vDLMoJLde8I", "libScePad", 1, "libScePad", scePadSetTiltCorrectionState);
     LIB_FUNCTION("z+GEemoTxOo", "libScePad", 1, "libScePad", scePadSetUserColor);
     LIB_FUNCTION("yFVnOdGxvZY", "libScePad", 1, "libScePad", scePadSetVibration);
@@ -750,7 +739,8 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("PFec14-UhEQ", "libScePad", 1, "libScePad", scePadVirtualDeviceDeleteDevice);
     LIB_FUNCTION("pjPCronWdxI", "libScePad", 1, "libScePad",
                  scePadVirtualDeviceDisableButtonRemapping);
-    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad", scePadVirtualDeviceGetRemoteSetting);
+    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad",
+                 scePadVirtualDeviceGetRemoteSetting);
     LIB_FUNCTION("IWOyO5jKuZg", "libScePad", 1, "libScePad", scePadVirtualDeviceInsertData);
     LIB_FUNCTION("KLmYx9ij2h0", "libScePad", 1, "libScePad", Func_28B998C7D8A3DA1D);
     LIB_FUNCTION("KY0hSB+Uyfo", "libScePad", 1, "libScePad", Func_298D21481F94C9FA);

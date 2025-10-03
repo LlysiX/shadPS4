@@ -1,13 +1,24 @@
-// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX - FileCopyrightText : Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include "common/types.h"
 
+extern "C" {
+struct libusb_device;
+struct libusb_device_handle;
+struct libusb_device_descriptor;
+struct libusb_config_descriptor;
+struct libusb_transfer;
+struct libusb_control_setup;
+struct timeval;
+}
+
 namespace Core::Loader {
 class SymbolsResolver;
 }
+
 namespace Libraries::Usbd {
 
 using SceUsbdDevice = libusb_device;

@@ -364,15 +364,6 @@ bool PipelineCache::RefreshGraphicsKey() {
             .export_format = regs.color_export_format.GetFormat(cb),
             .swizzle = col_buf.Swizzle(),
         };
-
-        // Fill color blending information
-        if (regs.blend_control[cb].enable && !col_buf.info.blend_bypass) {
-            key.blend_controls[cb] = regs.blend_control[cb];
-        }
-
-        // Apply swizzle to target mask
-        key.write_masks[cb] =
-            vk::ColorComponentFlags{key.color_buffers[cb].swizzle.ApplyMask(target_mask)};
     }
 
     // Compile and bind shader stages

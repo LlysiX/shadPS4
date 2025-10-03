@@ -23,7 +23,19 @@
 #define SDL_MOUSE_WHEEL_LEFT SDL_EVENT_MOUSE_WHEEL + 5
 #define SDL_MOUSE_WHEEL_RIGHT SDL_EVENT_MOUSE_WHEEL + 7
 
-// idk who already used what where so I just chose a big number
+#define SDL_GAMEPAD_BUTTON_TOUCHPAD_LEFT SDL_GAMEPAD_BUTTON_COUNT + 1
+#define SDL_GAMEPAD_BUTTON_TOUCHPAD_CENTER SDL_GAMEPAD_BUTTON_COUNT + 2
+#define SDL_GAMEPAD_BUTTON_TOUCHPAD_RIGHT SDL_GAMEPAD_BUTTON_COUNT + 3
+
+#define SDL_EVENT_TOGGLE_FULLSCREEN SDL_EVENT_USER + 1
+#define SDL_EVENT_TOGGLE_PAUSE SDL_EVENT_USER + 2
+#define SDL_EVENT_CHANGE_CONTROLLER SDL_EVENT_USER + 3
+#define SDL_EVENT_TOGGLE_SIMPLE_FPS SDL_EVENT_USER + 4
+#define SDL_EVENT_RELOAD_INPUTS SDL_EVENT_USER + 5
+#define SDL_EVENT_MOUSE_TO_JOYSTICK SDL_EVENT_USER + 6
+#define SDL_EVENT_MOUSE_TO_GYRO SDL_EVENT_USER + 7
+#define SDL_EVENT_RDOC_CAPTURE SDL_EVENT_USER + 8
+#define SDL_EVENT_QUIT_DIALOG SDL_EVENT_USER + 9
 #define SDL_EVENT_MOUSE_WHEEL_OFF SDL_EVENT_USER + 10
 
 #define LEFTJOYSTICK_HALFMODE 0x00010000
@@ -31,6 +43,18 @@
 #define BACK_BUTTON 0x00040000
 
 #define KEY_TOGGLE 0x00200000
+#define MOUSE_GYRO_ROLL_MODE 0x00400000
+
+#define HOTKEY_FULLSCREEN 0xf0000001
+#define HOTKEY_PAUSE 0xf0000002
+#define HOTKEY_SIMPLE_FPS 0xf0000003
+#define HOTKEY_QUIT 0xf0000004
+#define HOTKEY_RELOAD_INPUTS 0xf0000005
+#define HOTKEY_TOGGLE_MOUSE_TO_JOYSTICK 0xf0000006
+#define HOTKEY_TOGGLE_MOUSE_TO_GYRO 0xf0000007
+#define HOTKEY_RENDERDOC 0xf0000008
+
+#define SDL_UNMAPPED UINT32_MAX - 1
 
 namespace Input {
 using Input::Axis;
@@ -105,6 +129,20 @@ const std::map<std::string, u32> string_to_cbutton_map = {
 
     // this is only for input
     {"back", SDL_GAMEPAD_BUTTON_BACK},
+    {"share", SDL_GAMEPAD_BUTTON_BACK},
+    {"lpaddle_high", SDL_GAMEPAD_BUTTON_LEFT_PADDLE1},
+    {"lpaddle_low", SDL_GAMEPAD_BUTTON_LEFT_PADDLE2},
+    {"rpaddle_high", SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1},
+    {"rpaddle_low", SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2},
+    {"mouse_gyro_roll_mode", MOUSE_GYRO_ROLL_MODE},
+    {"hotkey_pause", HOTKEY_PAUSE},
+    {"hotkey_fullscreen", HOTKEY_FULLSCREEN},
+    {"hotkey_show_fps", HOTKEY_SIMPLE_FPS},
+    {"hotkey_quit", HOTKEY_QUIT},
+    {"hotkey_reload_inputs", HOTKEY_RELOAD_INPUTS},
+    {"hotkey_toggle_mouse_to_joystick", HOTKEY_TOGGLE_MOUSE_TO_JOYSTICK},
+    {"hotkey_toggle_mouse_to_gyro", HOTKEY_TOGGLE_MOUSE_TO_GYRO},
+    {"hotkey_renderdoc_capture", HOTKEY_RENDERDOC},
 };
 
 const std::map<std::string, AxisMapping> string_to_axis_map = {
@@ -163,6 +201,87 @@ const std::map<std::string, u32> string_to_keyboard_key_map = {
     {"7", SDLK_7},
     {"8", SDLK_8},
     {"9", SDLK_9},
+
+    // F keys
+    {"f1", SDLK_F1},
+    {"f2", SDLK_F2},
+    {"f3", SDLK_F3},
+    {"f4", SDLK_F4},
+    {"f5", SDLK_F5},
+    {"f6", SDLK_F6},
+    {"f7", SDLK_F7},
+    {"f8", SDLK_F8},
+    {"f9", SDLK_F9},
+    {"f10", SDLK_F10},
+    {"f11", SDLK_F11},
+    {"f12", SDLK_F12},
+
+    // symbols
+    {"grave", SDLK_GRAVE},
+    {"tilde", SDLK_TILDE},
+    {"exclamation", SDLK_EXCLAIM},
+    {"at", SDLK_AT},
+    {"hash", SDLK_HASH},
+    {"dollar", SDLK_DOLLAR},
+    {"percent", SDLK_PERCENT},
+    {"caret", SDLK_CARET},
+    {"ampersand", SDLK_AMPERSAND},
+    {"asterisk", SDLK_ASTERISK},
+    {"lparen", SDLK_LEFTPAREN},
+    {"rparen", SDLK_RIGHTPAREN},
+    {"minus", SDLK_MINUS},
+    {"underscore", SDLK_UNDERSCORE},
+    {"equals", SDLK_EQUALS},
+    {"plus", SDLK_PLUS},
+    {"lbracket", SDLK_LEFTBRACKET},
+    {"rbracket", SDLK_RIGHTBRACKET},
+    {"lbrace", SDLK_LEFTBRACE},
+    {"rbrace", SDLK_RIGHTBRACE},
+    {"backslash", SDLK_BACKSLASH},
+    {"pipe", SDLK_PIPE},
+    {"semicolon", SDLK_SEMICOLON},
+    {"colon", SDLK_COLON},
+    {"apostrophe", SDLK_APOSTROPHE},
+    {"quote", SDLK_DBLAPOSTROPHE},
+    {"comma", SDLK_COMMA},
+    {"less", SDLK_LESS},
+    {"period", SDLK_PERIOD},
+    {"greater", SDLK_GREATER},
+    {"slash", SDLK_SLASH},
+    {"question", SDLK_QUESTION},
+
+    // special keys
+    {"escape", SDLK_ESCAPE},
+    {"printscreen", SDLK_PRINTSCREEN},
+    {"scrolllock", SDLK_SCROLLLOCK},
+    {"pausebreak", SDLK_PAUSE},
+    {"backspace", SDLK_BACKSPACE},
+    {"delete", SDLK_DELETE},
+    {"insert", SDLK_INSERT},
+    {"home", SDLK_HOME},
+    {"end", SDLK_END},
+    {"pgup", SDLK_PAGEUP},
+    {"pgdown", SDLK_PAGEDOWN},
+    {"tab", SDLK_TAB},
+    {"capslock", SDLK_CAPSLOCK},
+    {"enter", SDLK_RETURN},
+    {"lshift", SDLK_LSHIFT},
+    {"rshift", SDLK_RSHIFT},
+    {"lctrl", SDLK_LCTRL},
+    {"rctrl", SDLK_RCTRL},
+    {"lalt", SDLK_LALT},
+    {"ralt", SDLK_RALT},
+    {"lmeta", SDLK_LGUI},
+    {"rmeta", SDLK_RGUI},
+    {"lwin", SDLK_LGUI},
+    {"rwin", SDLK_RGUI},
+    {"space", SDLK_SPACE},
+    {"up", SDLK_UP},
+    {"down", SDLK_DOWN},
+    {"left", SDLK_LEFT},
+    {"right", SDLK_RIGHT},
+
+    // keypad
     {"kp0", SDLK_KP_0},
     {"kp1", SDLK_KP_1},
     {"kp2", SDLK_KP_2},

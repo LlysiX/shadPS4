@@ -199,7 +199,7 @@ void Swapchain::FindPresentMode() {
         return;
     }
 
-    const auto requested_mode = "Mailbox";
+    const auto requested_mode = Config::getPresentMode();
     if (requested_mode == "Mailbox") {
         present_mode = vk::PresentModeKHR::eMailbox;
     } else if (requested_mode == "Fifo") {
@@ -207,7 +207,8 @@ void Swapchain::FindPresentMode() {
     } else if (requested_mode == "Immediate") {
         present_mode = vk::PresentModeKHR::eImmediate;
     } else {
-        LOG_ERROR(Render_Vulkan, "Unknown present mode {}, defaulting to Mailbox.", "Mailbox");
+        LOG_ERROR(Render_Vulkan, "Unknown present mode {}, defaulting to Mailbox.",
+                  Config::getPresentMode());
         present_mode = vk::PresentModeKHR::eMailbox;
     }
 

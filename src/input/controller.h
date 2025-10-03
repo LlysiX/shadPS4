@@ -112,3 +112,12 @@ public:
 };
 
 } // namespace Input
+
+namespace GamepadSelect {
+
+int GetIndexfromGUID(SDL_JoystickID* gamepadIDs, int gamepadCount, std::string GUID);
+std::string GetGUIDString(SDL_JoystickID* gamepadIDs, int index);
+std::string GetSelectedGamepad();
+void SetSelectedGamepad(std::string GUID);
+
+} // namespace GamepadSelect

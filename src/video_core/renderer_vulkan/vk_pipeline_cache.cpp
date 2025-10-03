@@ -42,14 +42,15 @@ static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs,
 
     if (ctl.vs_out_misc_enable) {
         auto& misc_vec = outputs[num_outputs++];
-        misc_vec[0] = ctl.use_vtx_point_size ? Output::PointSprite : Output::None;
+        misc_vec[0] = ctl.use_vtx_point_size ? Output::PointSize : Output::None;
         misc_vec[1] = ctl.use_vtx_edge_flag
                           ? Output::EdgeFlag
                           : (ctl.use_vtx_gs_cut_flag ? Output::GsCutFlag : Output::None);
-        misc_vec[2] = ctl.use_vtx_kill_flag
-                          ? Output::KillFlag
-                          : (ctl.use_vtx_render_target_idx ? Output::GsMrtIndex : Output::None);
-        misc_vec[3] = ctl.use_vtx_viewport_idx ? Output::GsVpIndex : Output::None;
+        misc_vec[2] =
+            ctl.use_vtx_kill_flag
+                ? Output::KillFlag
+                : (ctl.use_vtx_render_target_idx ? Output::RenderTargetIndex : Output::None);
+        misc_vec[3] = ctl.use_vtx_viewport_idx ? Output::ViewportIndex : Output::None;
     }
 
     if (ctl.vs_out_ccdist0_enable) {
@@ -166,8 +167,14 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
         BuildCommon(regs.ps_program);
         info.fs_info.en_flags = regs.ps_input_ena;
         info.fs_info.addr_flags = regs.ps_input_addr;
-        const auto& ps_inputs = regs.ps_inputs;
         info.fs_info.num_inputs = regs.num_interp;
+        info.fs_info.z_export_format = regs.z_export_format;
+        u8 stencil_ref_export_enable = regs.depth_shader_control.stencil_op_val_export_enable |
+                                       regs.depth_shader_control.stencil_test_val_export_enable;
+        info.fs_info.mrtz_mask = regs.depth_shader_control.z_export_enable |
+                                 (stencil_ref_export_enable << 1) |
+                                 (regs.depth_shader_control.mask_export_enable << 2) |
+                                 (regs.depth_shader_control.coverage_to_mask_enable << 3);
         const auto& cb0_blend = regs.blend_control[0];
         if (cb0_blend.enable) {
             info.fs_info.dual_source_blending =
@@ -181,6 +188,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
         } else {
             info.fs_info.dual_source_blending = false;
         }
+        const auto& ps_inputs = regs.ps_inputs;
         for (u32 i = 0; i < regs.num_interp; i++) {
             info.fs_info.inputs[i] = {
                 .param_index = u8(ps_inputs[i].input_offset.Value()),
@@ -222,6 +230,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .support_int8 = instance.IsShaderInt8Supported(),
         .support_int16 = instance.IsShaderInt16Supported(),
         .support_int64 = instance.IsShaderInt64Supported(),
+        .support_float16 = instance.IsShaderFloat16Supported(),
         .support_float64 = instance.IsShaderFloat64Supported(),
         .support_fp32_denorm_preserve = bool(vk12_props.shaderDenormPreserveFloat32),
         .support_fp32_denorm_flush = bool(vk12_props.shaderDenormFlushToZeroFloat32),
@@ -273,6 +282,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     }
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
     if (is_new) {
+        const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
+        LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
+
         it.value() = std::make_unique<GraphicsPipeline>(instance, scheduler, desc_heap, profile,
                                                         graphics_key, *pipeline_cache, infos,
                                                         runtime_infos, fetch_shader, modules);
@@ -294,6 +306,9 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     }
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
+        const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
+        LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
+
         it.value() =
             std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                               *pipeline_cache, compute_key, *infos[0], modules[0]);
@@ -310,6 +325,8 @@ bool PipelineCache::RefreshGraphicsKey() {
     const auto& regs = liverpool->regs;
     auto& key = graphics_key;
 
+    const bool db_enabled = regs.depth_buffer.DepthValid() || regs.depth_buffer.StencilValid();
+
     key.z_format = regs.depth_buffer.DepthValid() ? regs.depth_buffer.z_info.format.Value()
                                                   : Liverpool::DepthBuffer::ZFormat::Invalid;
     key.stencil_format = regs.depth_buffer.StencilValid()
@@ -324,17 +341,17 @@ bool PipelineCache::RefreshGraphicsKey() {
     key.patch_control_points =
         regs.stage_enable.hs_en ? regs.ls_hs_config.hs_input_control_points.Value() : 0;
     key.logic_op = regs.color_control.rop3;
-    key.num_samples = regs.NumSamples();
+    key.depth_samples = db_enabled ? regs.depth_buffer.NumSamples() : 1;
+    key.num_samples = key.depth_samples;
     key.cb_shader_mask = regs.color_shader_mask;
 
     const bool skip_cb_binding =
         regs.color_control.mode == AmdGpu::Liverpool::ColorControl::OperationMode::Disable;
 
-    // First pass to fill render target information
+    // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < Liverpool::NumColorBuffers && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        const u32 target_mask = regs.color_target_mask.GetMask(cb);
-        if (!col_buf || !target_mask) {
+        if (!col_buf || !regs.color_target_mask.GetMask(cb)) {
             // No attachment bound or writing to it is disabled.
             continue;
         }
@@ -363,15 +380,43 @@ bool PipelineCache::RefreshGraphicsKey() {
         return false;
     }
 
-    // Second pass to mask out render targets not written by fragment shader
+    // Second pass to mask out render targets not written by shader and fill remaining info
+    u8 color_samples = 0;
+    bool all_color_samples_same = true;
     for (s32 cb = 0; cb < key.num_color_attachments && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        if (!col_buf || !regs.color_target_mask.GetMask(cb)) {
+        const u32 target_mask = regs.color_target_mask.GetMask(cb);
+        if (!col_buf || !target_mask) {
             continue;
         }
         if ((key.mrt_mask & (1u << cb)) == 0) {
-            // Attachment is bound and mask allows writes but shader does not output to it.
             key.color_buffers[cb] = {};
+            continue;
+        }
+
+        // Fill color blending information
+        if (regs.blend_control[cb].enable && !col_buf.info.blend_bypass) {
+            key.blend_controls[cb] = regs.blend_control[cb];
+        }
+
+        // Apply swizzle to target mask
+        key.write_masks[cb] =
+            vk::ColorComponentFlags{key.color_buffers[cb].swizzle.ApplyMask(target_mask)};
+
+        // Fill color samples
+        const u8 prev_color_samples = std::exchange(color_samples, col_buf.NumSamples());
+        all_color_samples_same &= color_samples == prev_color_samples || prev_color_samples == 0;
+        key.color_samples[cb] = color_samples;
+        key.num_samples = std::max(key.num_samples, color_samples);
+    }
+
+    // Force all color samples to match depth samples to avoid unsupported MSAA configuration
+    if (color_samples != 0) {
+        const bool depth_mismatch = db_enabled && color_samples != key.depth_samples;
+        if (!all_color_samples_same && !instance.IsMixedAnySamplesSupported() ||
+            all_color_samples_same && depth_mismatch && !instance.IsMixedDepthSamplesSupported()) {
+            key.color_samples.fill(key.depth_samples);
+            key.num_samples = key.depth_samples;
         }
     }
 

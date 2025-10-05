@@ -1054,41 +1054,25 @@ s64 PS4_SYSV_ABI sceKernelPwritev(s32 fd, const OrbisKernelIovec* iov, s32 iovcn
 }
 
 s32 PS4_SYSV_ABI posix_unlink(const char* path) {
-    if (path == nullptr) {
-        *__Error() = POSIX_EINVAL;
-        return -1;
-    }
-
-    auto* h = Common::Singleton<Core::FileSys::HandleTable>::Instance();
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
-
     bool ro = false;
-    const auto host_path = mnt->GetHostPath(path, &ro);
-    if (host_path.empty()) {
+    const auto src_path = mnt->GetHostPath(path, &ro);
+    if (!std::filesystem::exists(src_path)) {
         *__Error() = POSIX_ENOENT;
         return -1;
     }
-
     if (ro) {
         *__Error() = POSIX_EROFS;
         return -1;
     }
-
-    if (std::filesystem::is_directory(host_path)) {
-        *__Error() = POSIX_EPERM;
+    const bool src_is_dir = std::filesystem::is_directory(src_path);
+    if (src_is_dir) {
+        *__Error() = POSIX_EISDIR;
         return -1;
     }
+    
+    std::filesystem::remove(src_path);
 
-    auto* file = h->GetFile(host_path);
-    if (file == nullptr) {
-        // File to unlink hasn't been opened, manually open and unlink it.
-        Common::FS::IOFile file(host_path, Common::FS::FileAccessMode::ReadWrite);
-        file.Unlink();
-    } else {
-        file->f.Unlink();
-    }
-
-    LOG_INFO(Kernel_Fs, "Unlinked {}", path);
     return ORBIS_OK;
 }
 

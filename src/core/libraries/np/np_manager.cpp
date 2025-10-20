@@ -619,12 +619,6 @@ s32 PS4_SYSV_ABI sceNpGetAccountIdA(Libraries::UserService::OrbisUserServiceUser
 s32 PS4_SYSV_ABI sceNpGetNpId(Libraries::UserService::OrbisUserServiceUserId user_id,
                               OrbisNpId* np_id) {
     LOG_DEBUG(Lib_NpManager, "user_id {}", user_id);
-    if (np_id == nullptr) {
-        return ORBIS_NP_ERROR_INVALID_ARGUMENT;
-    }
-    if (!g_signed_in) {
-        return ORBIS_NP_ERROR_SIGNED_OUT;
-    }
     memset(np_id, 0, sizeof(OrbisNpId));
     strncpy(np_id->handle.data, Config::getUserName().c_str(), sizeof(np_id->handle.data));
     return ORBIS_OK;
@@ -633,12 +627,6 @@ s32 PS4_SYSV_ABI sceNpGetNpId(Libraries::UserService::OrbisUserServiceUserId use
 s32 PS4_SYSV_ABI sceNpGetOnlineId(Libraries::UserService::OrbisUserServiceUserId user_id,
                                   OrbisNpOnlineId* online_id) {
     LOG_DEBUG(Lib_NpManager, "user_id {}", user_id);
-    if (online_id == nullptr) {
-        return ORBIS_NP_ERROR_INVALID_ARGUMENT;
-    }
-    if (!g_signed_in) {
-        return ORBIS_NP_ERROR_SIGNED_OUT;
-    }
     memset(online_id, 0, sizeof(OrbisNpOnlineId));
     strncpy(online_id->data, Config::getUserName().c_str(), sizeof(online_id->data));
     return ORBIS_OK;

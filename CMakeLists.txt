@@ -226,6 +226,7 @@ endif ()
 
 set(SDL_STATIC ON)
 set(SDL_SHARED OFF)
+set(SDL_X11_XSCRNSAVER OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Boost 1.84.0 CONFIG)

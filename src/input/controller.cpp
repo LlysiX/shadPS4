@@ -243,6 +243,23 @@ void GameController::SetTouchpadState(int touchIndex, bool touchDown, float x, f
     }
 }
 
+int GameController::GetPadClassFromSDL() {
+    if (m_sdl_gamepad) {
+        auto joystick = SDL_GetGamepadJoystick(m_sdl_gamepad);
+        auto joystick_type = SDL_GetJoystickType(joystick);
+        auto joystick_name = SDL_GetJoystickName(joystick);
+        switch (joystick_type) {
+            case SDL_JOYSTICK_TYPE_GUITAR:
+                return 1;
+            case SDL_JOYSTICK_TYPE_DRUM_KIT:
+                return 2;
+            default:
+                return 0;
+        }
+    }
+    return 0;
+}
+
 bool is_first_check = true;
 
 void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
@@ -352,7 +369,7 @@ u32 GameController::Poll() {
 
 u8 GameControllers::GetGamepadIndexFromJoystickId(SDL_JoystickID id) {
     s32 index = SDL_GetGamepadPlayerIndex(SDL_GetGamepadFromID(id));
-    LOG_INFO(Input, "Gamepad index: {}", index);
+    //LOG_INFO(Input, "Gamepad index: {}", index);
     return index;
 }
 

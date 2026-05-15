@@ -65,6 +65,7 @@ public:
     void SetLightBarRGB(u8 r, u8 g, u8 b);
     bool SetVibration(u8 smallMotor, u8 largeMotor);
     void SetTouchpadState(int touchIndex, bool touchDown, float x, float y);
+    int GetPadClassFromSDL();
     u32 Poll();
 
     float gyro_poll_rate;

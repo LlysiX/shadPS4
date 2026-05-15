@@ -4,7 +4,7 @@
 	shallow = true
 [submodule "externals/sdl3"]
 	path = externals/sdl3
-	url = https://github.com/shadps4-emu/ext-SDL.git
+	url = https://github.com/libsdl-org/SDL.git
 	shallow = true
 [submodule "externals/fmt"]
 	path = externals/fmt

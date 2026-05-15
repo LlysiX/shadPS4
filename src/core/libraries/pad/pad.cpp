@@ -27,6 +27,9 @@ int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
     std::memset(pExtInfo, 0, sizeof(OrbisPadDeviceClassExtendedInformation));
     if (Config::getUseSpecialPad(handle)) {
         pExtInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
+    } else {
+        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+        pExtInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
     }
     return ORBIS_OK;
 }
@@ -113,6 +116,9 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     if (Config::getUseSpecialPad(handle)) {
         pInfo->connectionType = ORBIS_PAD_PORT_TYPE_SPECIAL;
         pInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
+    } else {
+        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+        pInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
     }
     return 0;
 }
@@ -251,7 +257,14 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
     if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
-    if (Config::getUseSpecialPad(userId)) {
+    bool special = Config::getUseSpecialPad(userId);
+    if (!special) {
+        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
+            special = true;
+        }
+    }
+    if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
     } else {
@@ -268,7 +281,14 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
 int PS4_SYSV_ABI scePadOpenExt(s32 userId, s32 type, s32 index,
                                const OrbisPadOpenExtParam* pParam) {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
-    if (Config::getUseSpecialPad(userId)) {
+    bool special = Config::getUseSpecialPad(userId);
+    if (!special) {
+        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
+            special = true;
+        }
+    }
+    if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
     } else {

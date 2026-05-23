@@ -244,6 +244,7 @@ constexpr u8 ScaleVel7to8(u8 v) {
 struct SlotState {
     SDL_hid_device* dev = nullptr;
     u16 vid = 0, pid = 0;
+    std::string device_path;
     const KitDef* kit = nullptr;
     std::mutex mu;
     u8 last_report[kMaxRawReport]{};
@@ -264,16 +265,17 @@ void CloseSlot(SlotState& s) {
         s.dev = nullptr;
     }
     s.vid = s.pid = 0;
+    s.device_path.clear();
     s.kit = nullptr;
     std::lock_guard<std::mutex> lk(s.mu);
     s.has_data = false;
     s.last_report_len = 0;
 }
 
-bool VidPidInUseByOtherSlot(u16 vid, u16 pid, int this_slot_index) {
+bool PathInUseByOtherSlot(const std::string& path, int this_slot_index) {
     for (int i = 0; i < kNumSlots; ++i) {
         if (i == this_slot_index) continue;
-        if (g_slots[i].dev && g_slots[i].vid == vid && g_slots[i].pid == pid) {
+        if (g_slots[i].dev && g_slots[i].device_path == path) {
             return true;
         }
     }
@@ -302,21 +304,32 @@ void PollLoop() {
                     std::lock_guard<std::mutex> lk(g_kits_mu);
                     snapshot = g_kits;
                 }
+                // For each known kit VID:PID, enumerate every physical
+                // instance on the USB bus and grab the first path that
+                // isn't already claimed by another slot. This lets two
+                // identical kits be opened simultaneously (e.g. two
+                // GH5 guitars for co-op).
                 for (const auto& kd : snapshot) {
-                    if (VidPidInUseByOtherSlot(kd.vid, kd.pid, i)) continue;
-                    SDL_hid_device* d = SDL_hid_open(kd.vid, kd.pid, nullptr);
-                    if (d) {
+                    SDL_hid_device_info* head = SDL_hid_enumerate(kd.vid, kd.pid);
+                    for (auto* dn = head; dn && !s.dev; dn = dn->next) {
+                        const std::string path = dn->path ? dn->path : "";
+                        if (path.empty()) continue;
+                        if (PathInUseByOtherSlot(path, i)) continue;
+                        SDL_hid_device* d = SDL_hid_open_path(path.c_str());
+                        if (!d) continue;
                         SDL_hid_set_nonblocking(d, 1);
                         s.dev = d;
                         s.vid = kd.vid;
                         s.pid = kd.pid;
+                        s.device_path = path;
                         s.kit = FindKit(kd.vid, kd.pid);
                         s.open_failed_logged = false;
                         LOG_INFO(Input,
-                                 "HID instrument slot {}: opened {:04x}:{:04x} ({})",
-                                 slot, kd.vid, kd.pid, kd.name);
-                        break;
+                                 "HID instrument slot {}: opened {:04x}:{:04x} ({}) at {}",
+                                 slot, kd.vid, kd.pid, kd.name, path);
                     }
+                    SDL_hid_free_enumeration(head);
+                    if (s.dev) break;
                 }
                 if (!s.dev && !s.open_failed_logged) {
                     LOG_WARNING(Input,
@@ -363,6 +376,7 @@ void RescanKits() {
             s.dev = nullptr;
         }
         s.vid = s.pid = 0;
+        s.device_path.clear();
         s.kit = nullptr;
         std::lock_guard<std::mutex> lk(s.mu);
         s.has_data = false;

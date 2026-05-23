@@ -255,18 +255,12 @@ void SpecialDevicesDialog::onRefresh() {
 
 void SpecialDevicesDialog::onProbeKit(int slot) {
     Q_UNUSED(slot);
-#ifdef __linux__
     KitProbeDialog dlg(this);
     dlg.exec();
-    // After the user (potentially) saves a new kit JSON into <user>/kits/,
-    // the next shadPS4 launch will pick it up. Until then, re-running the
-    // status check at least redisplays the loaded-kit count.
+    // Hit "Refresh detected kits" to actually open a newly probed TOML
+    // without a relaunch; this line just refreshes the count display.
     ui->kitsLoadedLabel->setText(
-        tr("Loaded kit definitions: %1 (a relaunch is needed to load newly probed kits)")
-            .arg(Input::HidInstrument::GetLoadedKitCount()));
-#else
-    QMessageBox::information(this, tr("Probe new kit"), tr("Linux-only feature."));
-#endif
+        tr("Loaded kit definitions: %1").arg(Input::HidInstrument::GetLoadedKitCount()));
 }
 
 // ----- runtime kit status -----------------------------------------------------

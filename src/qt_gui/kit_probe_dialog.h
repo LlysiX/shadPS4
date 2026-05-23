@@ -1,14 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// In-app probe wizard for legacy PS3 instruments (drum kits, guitars).
-// Walks the user through each input on their kit, samples each for ~2.5s,
-// shows the raw HID report live in a byte grid with cross-talk warnings,
-// and writes both a calibration JSON (for sharing) and a runtime TOML
-// (for the C++ loader at src/input/hid_instrument.cpp). Linux-only:
-// reads /dev/hidrawN directly. Requires the udev rule to be installed
-// (Control Settings -> "Install Linux udev rules") so the device is
-// readable without sudo.
+// In-app probe wizard for legacy PS3/PS4 instruments (drum kits, guitars).
+// Walks the user through each input on the kit, samples each for ~5 s, shows
+// the raw HID report live in a byte grid with cross-talk warnings, and writes
+// a runtime TOML kit definition for the loader in src/input/hid_instrument.
+// Uses SDL_hid for I/O so it runs on Linux, Windows, and macOS; on Linux a
+// pkexec-driven udev rule grant kicks in when an unprivileged open fails.
 
 #pragma once
 

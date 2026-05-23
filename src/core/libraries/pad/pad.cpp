@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
+
 #include "common/config.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad_errors.h"
 #include "input/controller.h"
+#include "input/hid_instrument.h"
 #include "pad.h"
 
 namespace Libraries::Pad {
@@ -36,7 +39,25 @@ int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
 
 int PS4_SYSV_ABI scePadDeviceClassParseData(s32 handle, const OrbisPadData* pData,
                                             OrbisPadDeviceClassData* pDeviceClassData) {
-    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    if (!pData || !pDeviceClassData) {
+        return ORBIS_PAD_ERROR_INVALID_ARG;
+    }
+    // Device class follows the same precedence as scePadGetControllerInformation:
+    // Config::specialPadClass* when special-pad is set, otherwise SDL detection.
+    OrbisPadDeviceClass dev_class = OrbisPadDeviceClass::Standard;
+    if (Config::getUseSpecialPad(handle)) {
+        dev_class = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
+    } else {
+        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+        dev_class = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
+    }
+    const bool ok = Input::HidInstrument::ParseTypedData(
+        handle, pData->deviceUniqueData, pData->deviceUniqueDataLen, dev_class, pDeviceClassData);
+    if (!ok) {
+        std::memset(pDeviceClassData, 0, sizeof(*pDeviceClassData));
+        pDeviceClassData->deviceClass = dev_class;
+        pDeviceClassData->bDataValid = false;
+    }
     return ORBIS_OK;
 }
 
@@ -308,11 +329,89 @@ int PS4_SYSV_ABI scePadOutputReport() {
     return ORBIS_OK;
 }
 
+// Fill a single OrbisPadData purely from a legacy instrument's raw HID
+// report. Used by scePadRead/scePadReadState when the per-slot
+// specialPadLegacyPassUSBRawHID flag is on.
+//
+// The kit drives the slot's deviceUniqueData (velocity) and its buttons.
+// The SDL/keyboard mapping for the slot is ALSO folded in as a fallback so
+// menus stay navigable — but via the level-based ReadState (one current
+// snapshot per call), never the queue-based ReadStates, so a held key
+// cannot be double-counted.
+static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
+    auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+    int connectedCount = 0;
+    bool isConnected = false;
+    Input::State state;
+    controllers[handle - 1]->ReadState(&state, &isConnected, &connectedCount);
+    const u32 sdl_buttons = static_cast<u32>(state.buttonsState);
+
+    // Non-instrument fields: sticks centred, no motion/touch for a kit.
+    pData->leftStick.x = state.axes[static_cast<int>(Input::Axis::LeftX)];
+    pData->leftStick.y = state.axes[static_cast<int>(Input::Axis::LeftY)];
+    pData->rightStick.x = state.axes[static_cast<int>(Input::Axis::RightX)];
+    pData->rightStick.y = state.axes[static_cast<int>(Input::Axis::RightY)];
+    pData->analogButtons.l2 = 0;
+    pData->analogButtons.r2 = 0;
+    float acc_x = 0.0f, acc_y = 0.0f, acc_z = 0.0f;
+    if (Input::HidInstrument::GetLatestAcceleration(handle, acc_x, acc_y, acc_z)) {
+        pData->acceleration = {acc_x, acc_y, acc_z};
+    } else {
+        pData->acceleration = {0.0f, 0.0f, 0.0f};
+    }
+    pData->angularVelocity = {0.0f, 0.0f, 0.0f};
+    pData->orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+    pData->touchData = {};
+    pData->timestamp = state.time;
+    pData->connected = true;
+    pData->connectedCount = 1;
+    pData->deviceUniqueDataLen = 0;
+    // Default: just the keyboard/SDL fallback (kit may not be open yet).
+    pData->buttons = static_cast<OrbisPadButtonDataOffset>(sdl_buttons);
+
+    u8 raw[Input::HidInstrument::kMaxRawReport];
+    std::size_t raw_len = 0;
+    const bool have_kit = Input::HidInstrument::GetLatestReport(handle, raw, &raw_len);
+    if (have_kit) {
+        const OrbisPadDeviceClass cls =
+            Config::getUseSpecialPad(handle)
+                ? (OrbisPadDeviceClass)Config::getSpecialPadClass(handle)
+                : OrbisPadDeviceClass::Standard;
+        // Mask out face / shoulder / D-pad bits from SDL — the kit provides
+        // those via PackButtons in the PS3→PS4 mapping, and the OR would
+        // conflict (e.g. SDL says Yellow=Square, we say Yellow=Triangle).
+        // Options/Touchpad stay through for keyboard menu fallbacks.
+        constexpr u32 kInstrumentBtnMask = static_cast<u32>(
+            OrbisPadButtonDataOffset::Square   | OrbisPadButtonDataOffset::Cross    |
+            OrbisPadButtonDataOffset::Circle   | OrbisPadButtonDataOffset::Triangle |
+            OrbisPadButtonDataOffset::L1       | OrbisPadButtonDataOffset::R1       |
+            OrbisPadButtonDataOffset::L2       | OrbisPadButtonDataOffset::R2       |
+            OrbisPadButtonDataOffset::Up       | OrbisPadButtonDataOffset::Down     |
+            OrbisPadButtonDataOffset::Left     | OrbisPadButtonDataOffset::Right);
+        const u32 sdl_nav_only = sdl_buttons & ~kInstrumentBtnMask;
+        pData->buttons = static_cast<OrbisPadButtonDataOffset>(
+            sdl_nav_only | Input::HidInstrument::PackButtons(handle, raw, raw_len, cls));
+        pData->deviceUniqueDataLen = static_cast<u8>(
+            Input::HidInstrument::PackDeviceUniqueData(handle, raw, raw_len, cls,
+                                                       pData->deviceUniqueData));
+    }
+
+}
+
 int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
     LOG_TRACE(Lib_Pad, "handle: {}", handle);
     if (handle == ORBIS_PAD_ERROR_DEVICE_NO_HANDLE || handle != std::clamp(handle, 1, 4)) {
         return ORBIS_PAD_ERROR_INVALID_HANDLE;
     }
+
+    // Legacy-instrument path: this slot is driven solely by the kit's raw
+    // HID report. Returns exactly one state; SDL/keyboard read path below
+    // is bypassed. Standard controllers are unaffected — they fall through.
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        FillLegacyInstrumentData(handle, &pData[0]);
+        return 1;
+    }
+
     int connected_count = 0;
     bool connected = false;
     Input::State states[64];
@@ -382,6 +481,13 @@ int PS4_SYSV_ABI scePadReadState(s32 handle, OrbisPadData* pData) {
     if (handle == ORBIS_PAD_ERROR_DEVICE_NO_HANDLE || handle != std::clamp(handle, 1, 4)) {
         return ORBIS_PAD_ERROR_INVALID_HANDLE;
     }
+
+    // Legacy-instrument path: same single source of truth as scePadRead.
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        FillLegacyInstrumentData(handle, pData);
+        return ORBIS_OK;
+    }
+
     auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
     int connectedCount = 0;
     bool isConnected = false;

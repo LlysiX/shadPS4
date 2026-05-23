@@ -159,6 +159,13 @@ static ConfigEntry<int> specialPadClass1(1);
 static ConfigEntry<int> specialPadClass2(1);
 static ConfigEntry<int> specialPadClass3(1);
 static ConfigEntry<int> specialPadClass4(1);
+// Per-player toggle: when true, the kit's raw USB HID input report is delivered
+// to the game through OrbisPadData::deviceUniqueData (legacy-instrument path).
+// Independent of specialPadClass*, which still selects the declared device class.
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID1(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID2(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID3(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID4(false);
 static ConfigEntry<bool> isMotionControlsEnabled(true);
 static ConfigEntry<bool> useUnifiedInputConfig(true);
 static ConfigEntry<string> defaultControllerID("");
@@ -425,6 +432,20 @@ int getSpecialPadClass(int pad) {
             return specialPadClass4.get();
     }
     return specialPadClass1.get();
+}
+
+bool getSpecialPadLegacyPassUSBRawHID(int pad) {
+    switch(pad){
+        case 1:
+            return specialPadLegacyPassUSBRawHID1.get();
+        case 2:
+            return specialPadLegacyPassUSBRawHID2.get();
+        case 3:
+            return specialPadLegacyPassUSBRawHID3.get();
+        case 4:
+            return specialPadLegacyPassUSBRawHID4.get();
+    }
+    return specialPadLegacyPassUSBRawHID1.get();
 }
 
 bool getIsMotionControlsEnabled() {
@@ -710,12 +731,34 @@ void setChooseHomeTab(const string& type, bool is_game_specific) {
     chooseHomeTab.set(type, is_game_specific);
 }
 
-void setUseSpecialPad(bool use) {
-    useSpecialPad1.base_value = use;
+void setUseSpecialPad(int pad, bool use) {
+    switch (pad) {
+    case 1: useSpecialPad1.base_value = use; break;
+    case 2: useSpecialPad2.base_value = use; break;
+    case 3: useSpecialPad3.base_value = use; break;
+    case 4: useSpecialPad4.base_value = use; break;
+    default: break;
+    }
 }
 
-void setSpecialPadClass(int type) {
-    specialPadClass1.base_value = type;
+void setSpecialPadClass(int pad, int type) {
+    switch (pad) {
+    case 1: specialPadClass1.base_value = type; break;
+    case 2: specialPadClass2.base_value = type; break;
+    case 3: specialPadClass3.base_value = type; break;
+    case 4: specialPadClass4.base_value = type; break;
+    default: break;
+    }
+}
+
+void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass) {
+    switch (pad) {
+    case 1: specialPadLegacyPassUSBRawHID1.base_value = pass; break;
+    case 2: specialPadLegacyPassUSBRawHID2.base_value = pass; break;
+    case 3: specialPadLegacyPassUSBRawHID3.base_value = pass; break;
+    case 4: specialPadLegacyPassUSBRawHID4.base_value = pass; break;
+    default: break;
+    }
 }
 
 void setIsMotionControlsEnabled(bool use, bool is_game_specific) {
@@ -923,6 +966,10 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
         specialPadClass2.setFromToml(input, "specialPadClass2", is_game_specific);
         specialPadClass3.setFromToml(input, "specialPadClass3", is_game_specific);
         specialPadClass4.setFromToml(input, "specialPadClass4", is_game_specific);
+        specialPadLegacyPassUSBRawHID1.setFromToml(input, "specialPadLegacyPassUSBRawHID1", is_game_specific);
+        specialPadLegacyPassUSBRawHID2.setFromToml(input, "specialPadLegacyPassUSBRawHID2", is_game_specific);
+        specialPadLegacyPassUSBRawHID3.setFromToml(input, "specialPadLegacyPassUSBRawHID3", is_game_specific);
+        specialPadLegacyPassUSBRawHID4.setFromToml(input, "specialPadLegacyPassUSBRawHID4", is_game_specific);
         isMotionControlsEnabled.setFromToml(input, "isMotionControlsEnabled", is_game_specific);
         useUnifiedInputConfig.setFromToml(input, "useUnifiedInputConfig", is_game_specific);
         backgroundControllerInput.setFromToml(input, "backgroundControllerInput", is_game_specific);
@@ -1203,6 +1250,18 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
         data["Input"]["specialPadClass2"] = specialPadClass2.base_value;
         data["Input"]["specialPadClass3"] = specialPadClass3.base_value;
         data["Input"]["specialPadClass4"] = specialPadClass4.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID1"] = specialPadLegacyPassUSBRawHID1.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID2"] = specialPadLegacyPassUSBRawHID2.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID3"] = specialPadLegacyPassUSBRawHID3.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID4"] = specialPadLegacyPassUSBRawHID4.base_value;
+        // Legacy singular keys: kept in sync so older readers / community
+        // configs still see consistent values. useSpecialPad = true if any
+        // slot has a special pad; specialPadClass mirrors slot 1's class.
+        data["Input"]["useSpecialPad"] = (useSpecialPad1.base_value ||
+                                           useSpecialPad2.base_value ||
+                                           useSpecialPad3.base_value ||
+                                           useSpecialPad4.base_value);
+        data["Input"]["specialPadClass"] = specialPadClass1.base_value;
         data["Input"]["useUnifiedInputConfig"] = useUnifiedInputConfig.base_value;
         data["GPU"]["internalScreenWidth"] = internalScreenWidth.base_value;
         data["GPU"]["internalScreenHeight"] = internalScreenHeight.base_value;
@@ -1308,6 +1367,10 @@ void setDefaultValues(bool is_game_specific) {
         specialPadClass2.base_value = 1;
         specialPadClass3.base_value = 1;
         specialPadClass4.base_value = 1;
+        specialPadLegacyPassUSBRawHID1.base_value = false;
+        specialPadLegacyPassUSBRawHID2.base_value = false;
+        specialPadLegacyPassUSBRawHID3.base_value = false;
+        specialPadLegacyPassUSBRawHID4.base_value = false;
         useUnifiedInputConfig.base_value = true;
         controllerCustomColorRGB[0] = 0;
         controllerCustomColorRGB[1] = 0;

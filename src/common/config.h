@@ -110,10 +110,12 @@ void setSeparateLogFilesEnabled(bool enabled, bool is_game_specific = false);
 bool getSeparateLogFilesEnabled();
 u32 GetLanguage();
 void setLanguage(u32 language, bool is_game_specific = false);
-void setUseSpecialPad(bool use);
+void setUseSpecialPad(int pad, bool use);
 bool getUseSpecialPad(int pad);
-void setSpecialPadClass(int type);
+void setSpecialPadClass(int pad, int type);
 int getSpecialPadClass(int pad);
+void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass);
+bool getSpecialPadLegacyPassUSBRawHID(int pad);
 bool getPSNSignedIn();
 void setPSNSignedIn(bool sign, bool is_game_specific = false);
 bool patchShaders(); // no set

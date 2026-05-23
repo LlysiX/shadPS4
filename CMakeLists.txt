@@ -1094,10 +1094,16 @@ set(QT_GUI src/qt_gui/about_dialog.cpp
            src/qt_gui/cheats_patches.h
            src/qt_gui/compatibility_info.cpp
            src/qt_gui/compatibility_info.h
-	   src/qt_gui/control_settings.cpp	   
+	   src/qt_gui/control_settings.cpp
            src/qt_gui/control_settings.h
            src/qt_gui/control_settings.ui
-           src/qt_gui/kbm_gui.cpp	   
+           src/qt_gui/kit_probe_dialog.cpp
+           src/qt_gui/kit_probe_dialog.h
+           src/qt_gui/kit_probe_dialog.ui
+           src/qt_gui/special_devices_dialog.cpp
+           src/qt_gui/special_devices_dialog.h
+           src/qt_gui/special_devices_dialog.ui
+           src/qt_gui/kbm_gui.cpp
            src/qt_gui/kbm_gui.h
            src/qt_gui/kbm_gui.ui
            src/qt_gui/main_window_ui.h

@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SpecialDevicesDialog</class>
+ <widget class="QDialog" name="SpecialDevicesDialog">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>900</width><height>460</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>Configure Special Devices</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+
+   <item>
+    <widget class="QLabel" name="helpLabel">
+     <property name="text">
+      <string>Enable "Special Pad" for a slot when the controller is a guitar, drum kit, wheel, or other non-standard input the game needs to recognise. Pick the class so the game knows what kind of device it is. The "Legacy raw-HID passthrough" toggle is for PS3 instruments used with Rock Band 4 (via the legacy adapter) — when enabled, the slot reads the kit's raw USB HID report directly.</string>
+     </property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QLabel" name="udevGlobalWarn">
+     <property name="text"><string/></property>
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string>QLabel{background-color:#5a3a1a;color:#ffe2a8;padding:6px;border:1px solid #b07a30;border-radius:3px;}</string></property>
+     <property name="visible"><bool>false</bool></property>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QLabel" name="kitsLoadedLabel">
+     <property name="text"><string/></property>
+     <property name="styleSheet"><string>QLabel{color:#888;font-style:italic;}</string></property>
+    </widget>
+   </item>
+
+   <item>
+    <layout class="QGridLayout" name="grid">
+     <item row="0" column="0"><widget class="QLabel" name="h0"><property name="text"><string>Slot</string></property></widget></item>
+     <item row="0" column="1"><widget class="QLabel" name="h1"><property name="text"><string>Special Pad</string></property></widget></item>
+     <item row="0" column="2"><widget class="QLabel" name="h2"><property name="text"><string>Class</string></property></widget></item>
+     <item row="0" column="3"><widget class="QLabel" name="h3"><property name="text"><string>Legacy raw-HID</string></property></widget></item>
+     <item row="0" column="4"><widget class="QLabel" name="h4"><property name="text"><string>Action</string></property></widget></item>
+     <item row="0" column="5"><widget class="QLabel" name="h5"><property name="text"><string>Detected kit</string></property></widget></item>
+
+     <item row="1" column="0"><widget class="QLabel" name="p1Lbl"><property name="text"><string>Player 1</string></property></widget></item>
+     <item row="1" column="1"><widget class="QCheckBox" name="useSpecial1"/></item>
+     <item row="1" column="2"><widget class="QComboBox" name="class1"/></item>
+     <item row="1" column="3"><widget class="QCheckBox" name="legacy1"/></item>
+     <item row="1" column="4">
+      <layout class="QHBoxLayout" name="action1Layout">
+       <item><widget class="QPushButton" name="probe1"><property name="text"><string>Probe...</string></property><property name="visible"><bool>false</bool></property></widget></item>
+       <item><widget class="QLabel" name="warn1"><property name="text"><string/></property><property name="styleSheet"><string>QLabel{color:#ffba6c;}</string></property><property name="visible"><bool>false</bool></property></widget></item>
+      </layout>
+     </item>
+     <item row="1" column="5"><widget class="QLabel" name="status1"><property name="text"><string>—</string></property></widget></item>
+
+     <item row="2" column="0"><widget class="QLabel" name="p2Lbl"><property name="text"><string>Player 2</string></property></widget></item>
+     <item row="2" column="1"><widget class="QCheckBox" name="useSpecial2"/></item>
+     <item row="2" column="2"><widget class="QComboBox" name="class2"/></item>
+     <item row="2" column="3"><widget class="QCheckBox" name="legacy2"/></item>
+     <item row="2" column="4">
+      <layout class="QHBoxLayout" name="action2Layout">
+       <item><widget class="QPushButton" name="probe2"><property name="text"><string>Probe...</string></property><property name="visible"><bool>false</bool></property></widget></item>
+       <item><widget class="QLabel" name="warn2"><property name="text"><string/></property><property name="styleSheet"><string>QLabel{color:#ffba6c;}</string></property><property name="visible"><bool>false</bool></property></widget></item>
+      </layout>
+     </item>
+     <item row="2" column="5"><widget class="QLabel" name="status2"><property name="text"><string>—</string></property></widget></item>
+
+     <item row="3" column="0"><widget class="QLabel" name="p3Lbl"><property name="text"><string>Player 3</string></property></widget></item>
+     <item row="3" column="1"><widget class="QCheckBox" name="useSpecial3"/></item>
+     <item row="3" column="2"><widget class="QComboBox" name="class3"/></item>
+     <item row="3" column="3"><widget class="QCheckBox" name="legacy3"/></item>
+     <item row="3" column="4">
+      <layout class="QHBoxLayout" name="action3Layout">
+       <item><widget class="QPushButton" name="probe3"><property name="text"><string>Probe...</string></property><property name="visible"><bool>false</bool></property></widget></item>
+       <item><widget class="QLabel" name="warn3"><property name="text"><string/></property><property name="styleSheet"><string>QLabel{color:#ffba6c;}</string></property><property name="visible"><bool>false</bool></property></widget></item>
+      </layout>
+     </item>
+     <item row="3" column="5"><widget class="QLabel" name="status3"><property name="text"><string>—</string></property></widget></item>
+
+     <item row="4" column="0"><widget class="QLabel" name="p4Lbl"><property name="text"><string>Player 4</string></property></widget></item>
+     <item row="4" column="1"><widget class="QCheckBox" name="useSpecial4"/></item>
+     <item row="4" column="2"><widget class="QComboBox" name="class4"/></item>
+     <item row="4" column="3"><widget class="QCheckBox" name="legacy4"/></item>
+     <item row="4" column="4">
+      <layout class="QHBoxLayout" name="action4Layout">
+       <item><widget class="QPushButton" name="probe4"><property name="text"><string>Probe...</string></property><property name="visible"><bool>false</bool></property></widget></item>
+       <item><widget class="QLabel" name="warn4"><property name="text"><string/></property><property name="styleSheet"><string>QLabel{color:#ffba6c;}</string></property><property name="visible"><bool>false</bool></property></widget></item>
+      </layout>
+     </item>
+     <item row="4" column="5"><widget class="QLabel" name="status4"><property name="text"><string>—</string></property></widget></item>
+    </layout>
+   </item>
+
+   <item>
+    <layout class="QHBoxLayout" name="bottomBtnLayout">
+     <item><widget class="QPushButton" name="installUdevBtn">
+      <property name="text"><string>Install Linux udev rules (one-time, requires password)</string></property>
+     </widget></item>
+     <item><widget class="QPushButton" name="refreshBtn">
+      <property name="text"><string>Refresh detected kits</string></property>
+      <property name="toolTip"><string>Re-scan kits and re-open devices for slots whose Legacy raw-HID flag changed.</string></property>
+     </widget></item>
+    </layout>
+   </item>
+
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::StandardButton::Apply|QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Save</set>
+     </property>
+    </widget>
+   </item>
+
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

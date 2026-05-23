@@ -28,9 +28,11 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
-#include <fcntl.h>
 #include <sstream>
+#ifdef __linux__
+#include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include "common/path_util.h"
 
@@ -285,7 +287,9 @@ void KitProbeDialog::closeDevice() {
         m_notifier = nullptr;
     }
     if (m_hidFd >= 0) {
+#ifdef __linux__
         ::close(m_hidFd);
+#endif
         m_hidFd = -1;
     }
     m_devicePath.clear();

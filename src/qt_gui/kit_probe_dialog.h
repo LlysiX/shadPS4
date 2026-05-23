@@ -20,7 +20,6 @@
 #include <vector>
 #include <QDialog>
 
-class QSocketNotifier;
 class QTableWidget;
 
 namespace Ui {
@@ -94,9 +93,9 @@ private:
 
     std::unique_ptr<Ui::KitProbeDialog> ui;
 
-    // Device
-    int m_hidFd = -1;
-    QSocketNotifier* m_notifier = nullptr;
+    // Device. m_hidDev is an opaque SDL_hid_device* (kept void* so the header
+    // doesn't have to pull in SDL3 headers).
+    void* m_hidDev = nullptr;
     QString m_devicePath;
     QString m_deviceName;
     uint16_t m_vid = 0;

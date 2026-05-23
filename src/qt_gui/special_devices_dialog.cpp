@@ -55,6 +55,12 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
 
     connect(ui->installUdevBtn, &QPushButton::clicked, this,
             &SpecialDevicesDialog::onInstallUdev);
+#ifndef __linux__
+    // Other platforms grant HID access by default (macOS) or use a different
+    // mechanism (Windows). The Linux-flavoured udev installer is meaningless
+    // there, so hide it.
+    ui->installUdevBtn->setVisible(false);
+#endif
     connect(ui->refreshBtn, &QPushButton::clicked, this,
             &SpecialDevicesDialog::onRefresh);
     connect(ui->buttonBox, &QDialogButtonBox::clicked, this,
@@ -145,8 +151,13 @@ void SpecialDevicesDialog::onAccept() {
 
 // ----- udev rules detection + install ----------------------------------------
 bool SpecialDevicesDialog::udevRulesInstalled() const {
+#ifdef __linux__
     std::error_code ec;
     return std::filesystem::exists(kUdevRulesPath, ec);
+#else
+    // No equivalent permission step needed on other platforms.
+    return true;
+#endif
 }
 
 void SpecialDevicesDialog::refreshUdevState() {

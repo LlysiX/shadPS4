@@ -17,26 +17,25 @@
 #include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QSocketNotifier>
+#include <QSet>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
 
+#include <SDL3/SDL_hidapi.h>
+
 #include <algorithm>
 #include <chrono>
-#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <sstream>
-#ifdef __linux__
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 
 #include "common/path_util.h"
 
 namespace {
+
+SDL_hid_device* AsHidDev(void* p) { return static_cast<SDL_hid_device*>(p); }
 
 // First step for guitars only — actively shake/tilt the controller so we can
 // identify which bytes are motion-sensor noise and exclude them from later
@@ -162,42 +161,52 @@ void KitProbeDialog::onDeviceListRefresh() {
 }
 
 void KitProbeDialog::enumerateHidrawDevices() {
-#ifdef __linux__
-    QDir hidrawDir("/sys/class/hidraw");
-    const QStringList entries = hidrawDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString& name : entries) {
-        const QString devNode = QStringLiteral("/dev/%1").arg(name);
-        // udevadm info gives ID_VENDOR_ID / ID_MODEL_ID / ID_VENDOR / ID_MODEL.
-        QProcess p;
-        p.start("udevadm", {"info", "--query=property", "--name", devNode});
-        if (!p.waitForFinished(2000)) {
-            p.kill();
-            continue;
-        }
-        const QString out = QString::fromUtf8(p.readAllStandardOutput());
-        QString vid, pid, vendor, model;
-        for (const QString& line : out.split('\n')) {
-            if (line.startsWith("ID_VENDOR_ID="))      vid = line.mid(13).trimmed();
-            else if (line.startsWith("ID_MODEL_ID="))  pid = line.mid(12).trimmed();
-            else if (line.startsWith("ID_VENDOR="))    vendor = line.mid(10).trimmed();
-            else if (line.startsWith("ID_MODEL="))     model  = line.mid(9).trimmed();
-        }
-        if (vid.isEmpty() || pid.isEmpty()) continue;
-        const QString label = QStringLiteral("%1:%2  %3 %4  (%5)")
+    if (SDL_hid_init() != 0) {
+        auto* item = new QListWidgetItem(
+            tr("SDL_hid_init failed — HID enumeration unavailable"),
+            ui->deviceList);
+        item->setFlags(Qt::ItemIsEnabled);
+        return;
+    }
+    SDL_hid_device_info* head = SDL_hid_enumerate(0, 0);
+    // SDL emits one entry per HID interface; collapse duplicate VID:PID rows
+    // (the same kit often appears 2-3 times for separate report interfaces).
+    QSet<QString> seenKey;
+    for (auto* d = head; d; d = d->next) {
+        const QString key = QStringLiteral("%1:%2:%3")
+            .arg(d->vendor_id, 4, 16, QChar('0'))
+            .arg(d->product_id, 4, 16, QChar('0'))
+            .arg(QString::fromUtf8(d->path));
+        if (seenKey.contains(key)) continue;
+        seenKey.insert(key);
+        const QString vid = QString::number(d->vendor_id, 16).rightJustified(4, '0');
+        const QString pid = QString::number(d->product_id, 16).rightJustified(4, '0');
+        const QString manufacturer =
+            d->manufacturer_string
+                ? QString::fromWCharArray(d->manufacturer_string).trimmed()
+                : QString();
+        const QString product =
+            d->product_string
+                ? QString::fromWCharArray(d->product_string).trimmed()
+                : QString();
+        const QString label = QStringLiteral("%1:%2  %3 %4")
             .arg(vid).arg(pid)
-            .arg(vendor.isEmpty() ? "?" : vendor)
-            .arg(model.isEmpty()  ? ""  : model)
-            .arg(devNode);
+            .arg(manufacturer.isEmpty() ? QStringLiteral("?") : manufacturer)
+            .arg(product);
         auto* item = new QListWidgetItem(label, ui->deviceList);
-        item->setData(Qt::UserRole + 0, devNode);
+        item->setData(Qt::UserRole + 0, QString::fromUtf8(d->path));
         item->setData(Qt::UserRole + 1, vid);
         item->setData(Qt::UserRole + 2, pid);
-        item->setData(Qt::UserRole + 3, QStringLiteral("%1 %2").arg(vendor, model));
+        item->setData(Qt::UserRole + 3,
+                      QStringLiteral("%1 %2").arg(manufacturer, product).trimmed());
     }
-#else
-    auto* item = new QListWidgetItem(tr("(probe is Linux-only)"), ui->deviceList);
-    item->setFlags(Qt::ItemIsEnabled);
-#endif
+    SDL_hid_free_enumeration(head);
+    if (ui->deviceList->count() == 0) {
+        auto* item = new QListWidgetItem(
+            tr("(no HID devices found — plug your instrument in and click Refresh)"),
+            ui->deviceList);
+        item->setFlags(Qt::ItemIsEnabled);
+    }
 }
 
 void KitProbeDialog::onDeviceSelected() {
@@ -207,90 +216,82 @@ void KitProbeDialog::onDeviceSelected() {
 bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
                                 const QString& name) {
     closeDevice();
+    SDL_hid_device* dev = SDL_hid_open_path(path.toUtf8().constData());
+    if (!dev) {
+        // Fall back to VID:PID open in case the path-based open isn't
+        // supported on this backend.
+        dev = SDL_hid_open(vid, pid, nullptr);
+    }
+    if (!dev) {
 #ifdef __linux__
-    m_hidFd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
-    if (m_hidFd < 0) {
-        const int err = errno;
-        if (err == EACCES || err == EPERM) {
-            // Offer to install / extend the udev rules right here.
-            QMessageBox box(this);
-            box.setIcon(QMessageBox::Warning);
-            box.setWindowTitle(tr("Permission denied"));
-            box.setText(tr("Cannot open %1 — permission denied.\n\n"
-                           "Add a udev rule for VID:PID %2:%3 so this device "
-                           "is readable without sudo? (You'll be asked for "
-                           "your password, then need to unplug and replug.)")
-                           .arg(path).arg(vid, 4, 16, QChar('0'))
-                           .arg(pid, 4, 16, QChar('0')));
-            auto* grant = box.addButton(tr("Grant access (one-time)"),
-                                        QMessageBox::AcceptRole);
-            box.addButton(QMessageBox::Cancel);
-            box.exec();
-            if (box.clickedButton() == grant) {
-                // Append a rule for this VID:PID to the installed rules file
-                // and reload udev. Uses pkexec — same prompt as the existing
-                // udev-install button.
-                const QString line = QStringLiteral(
-                    "SUBSYSTEM==\"hidraw\", "
-                    "ATTRS{idVendor}==\"%1\", ATTRS{idProduct}==\"%2\", "
-                    "TAG+=\"uaccess\", MODE=\"0666\"")
+        // Most failures on Linux are permission denied — offer to add a udev
+        // rule for this VID:PID via pkexec. Other platforms typically grant
+        // HID access by default, so there's nothing actionable to offer.
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("Cannot open device"));
+        box.setText(tr("SDL_hid_open failed for %1:%2.\n\n"
+                       "On Linux this usually means permission denied — "
+                       "add a udev rule so this device is readable without "
+                       "sudo? (You'll be asked for your password, then need "
+                       "to unplug and replug.)")
+                       .arg(vid, 4, 16, QChar('0'))
+                       .arg(pid, 4, 16, QChar('0')));
+        auto* grant = box.addButton(tr("Grant access (one-time)"),
+                                    QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() == grant) {
+            const QString line = QStringLiteral(
+                "SUBSYSTEM==\"hidraw\", "
+                "ATTRS{idVendor}==\"%1\", ATTRS{idProduct}==\"%2\", "
+                "TAG+=\"uaccess\", MODE=\"0666\"")
+                .arg(vid, 4, 16, QChar('0'))
+                .arg(pid, 4, 16, QChar('0'));
+            QProcess proc;
+            proc.setProgram("pkexec");
+            proc.setArguments({
+                "sh", "-c",
+                QStringLiteral(
+                    "touch /etc/udev/rules.d/99-shadps4-instruments.rules && "
+                    "if ! grep -q 'idVendor==\"%1\".*idProduct==\"%2\"' "
+                    "/etc/udev/rules.d/99-shadps4-instruments.rules; then "
+                    "echo '%3' >> /etc/udev/rules.d/99-shadps4-instruments.rules; "
+                    "fi && udevadm control --reload-rules && udevadm trigger")
                     .arg(vid, 4, 16, QChar('0'))
-                    .arg(pid, 4, 16, QChar('0'));
-                QProcess proc;
-                proc.setProgram("pkexec");
-                proc.setArguments({
-                    "sh", "-c",
-                    QStringLiteral(
-                        "touch /etc/udev/rules.d/99-shadps4-instruments.rules && "
-                        "if ! grep -q 'idVendor==\"%1\".*idProduct==\"%2\"' "
-                        "/etc/udev/rules.d/99-shadps4-instruments.rules; then "
-                        "echo '%3' >> /etc/udev/rules.d/99-shadps4-instruments.rules; "
-                        "fi && udevadm control --reload-rules && udevadm trigger")
-                        .arg(vid, 4, 16, QChar('0'))
-                        .arg(pid, 4, 16, QChar('0'))
-                        .arg(line)
-                });
-                if (proc.startDetached()) {
-                    QMessageBox::information(this, tr("Rule added"),
-                        tr("Rule added. Unplug and replug the device, then "
-                           "click Refresh and try again."));
-                } else {
-                    QMessageBox::warning(this, tr("Install failed"),
-                        tr("Could not launch pkexec. Is polkit installed?"));
-                }
+                    .arg(pid, 4, 16, QChar('0'))
+                    .arg(line)
+            });
+            if (proc.startDetached()) {
+                QMessageBox::information(this, tr("Rule added"),
+                    tr("Rule added. Unplug and replug the device, then "
+                       "click Refresh and try again."));
+            } else {
+                QMessageBox::warning(this, tr("Install failed"),
+                    tr("Could not launch pkexec. Is polkit installed?"));
             }
-        } else {
-            QMessageBox::warning(this, tr("Open failed"),
-                tr("Could not open %1: %2.").arg(path)
-                    .arg(QString::fromLocal8Bit(::strerror(err))));
         }
+#else
+        QMessageBox::warning(this, tr("Open failed"),
+            tr("SDL_hid_open failed for %1:%2. The device may be claimed by "
+               "another application.")
+                .arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0')));
+#endif
         return false;
     }
+    SDL_hid_set_nonblocking(dev, 1);
+    m_hidDev = dev;
     m_devicePath = path;
     m_deviceName = name;
     m_vid = vid;
     m_pid = pid;
-    m_notifier = new QSocketNotifier(m_hidFd, QSocketNotifier::Read, this);
-    connect(m_notifier, &QSocketNotifier::activated, this,
-            &KitProbeDialog::onHidReadable);
     return true;
-#else
-    Q_UNUSED(path); Q_UNUSED(vid); Q_UNUSED(pid); Q_UNUSED(name);
-    return false;
-#endif
 }
 
 void KitProbeDialog::closeDevice() {
-    if (m_notifier) {
-        m_notifier->setEnabled(false);
-        m_notifier->deleteLater();
-        m_notifier = nullptr;
-    }
-    if (m_hidFd >= 0) {
-#ifdef __linux__
-        ::close(m_hidFd);
-#endif
-        m_hidFd = -1;
+    if (m_hidDev) {
+        SDL_hid_close(AsHidDev(m_hidDev));
+        m_hidDev = nullptr;
     }
     m_devicePath.clear();
     m_deviceName.clear();
@@ -497,13 +498,12 @@ void KitProbeDialog::onNextStep() {
 // ============================================================================
 
 void KitProbeDialog::onHidReadable() {
-#ifdef __linux__
-    if (m_hidFd < 0) return;
+    if (!m_hidDev) return;
     uint8_t buf[64];
     while (true) {
-        ssize_t n = ::read(m_hidFd, buf, sizeof(buf));
+        int n = SDL_hid_read_timeout(AsHidDev(m_hidDev), buf, sizeof(buf), 0);
         if (n <= 0) break;
-        if (n > (ssize_t)m_lastReport.size()) n = m_lastReport.size();
+        if (n > (int)m_lastReport.size()) n = (int)m_lastReport.size();
 
         // Update live grid (highlight changed bytes).
         if (m_reportLen < (int)n) {
@@ -527,7 +527,6 @@ void KitProbeDialog::onHidReadable() {
             appendReportToCurrentStep(buf, (std::size_t)n);
         }
     }
-#endif
 }
 
 void KitProbeDialog::appendReportToCurrentStep(const uint8_t* data, std::size_t len) {
@@ -579,6 +578,11 @@ void KitProbeDialog::updateByteGridCell(int idx, uint8_t value, bool changed) {
 }
 
 void KitProbeDialog::onTickTimer() {
+    // Drain whatever the kit has sent since the last tick. ~30 Hz polling is
+    // plenty for the live byte grid; the per-step samples are still captured
+    // at whatever rate the device emits because SDL_hid buffers internally.
+    onHidReadable();
+
     using clock = std::chrono::steady_clock;
     const int elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(

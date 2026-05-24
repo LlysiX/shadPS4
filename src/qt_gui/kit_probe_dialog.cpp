@@ -29,6 +29,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <sstream>
 
 #include "common/path_util.h"
@@ -697,6 +698,42 @@ QString KitProbeDialog::deriveKitToml() const {
         }
         return 0;
     };
+    // Scan every byte for the one that gained exactly one set bit during the
+    // step (raw[i] went from baseline to baseline | (1 << k)). Used to find
+    // fret / face-button bits without hardcoding raw[0] — PS4 RB and PS5
+    // Riffmaster put frets at byte 43/46, not 0 (which is the report ID).
+    // Returns (byte_index, bit_mask) or (-1, 0).
+    auto detectFlagByteAndBit = [&](const QString& key) -> std::pair<int, uint8_t> {
+        for (const auto& r : m_results) {
+            if (r.def.key != key || !r.captured) continue;
+            int best_byte = -1;
+            uint8_t best_mask = 0;
+            int best_score = 0;
+            for (int i = 0; i < m_reportLen; ++i) {
+                if (m_motionBytes.count(i)) continue;
+                const auto& b = r.bytes[i];
+                if (b.samples == 0) continue;
+                const int baseline = m_baselineMax[i];
+                if (b.max <= baseline) continue;
+                // bits that turned on during the step (not present at baseline)
+                const int diff = b.max & ~baseline;
+                if (diff == 0) continue;
+                // Prefer single-bit deltas: real button flags toggle exactly
+                // one bit. Multi-bit deltas usually mean an analog axis or HAT.
+                if ((diff & (diff - 1)) != 0) continue;
+                // Score by how often this byte saw the same delta — buttons
+                // assert cleanly, noise jitters.
+                const int score = b.transitions;
+                if (score > best_score) {
+                    best_score = score;
+                    best_byte = i;
+                    best_mask = static_cast<uint8_t>(diff);
+                }
+            }
+            return {best_byte, best_mask};
+        }
+        return {-1, 0};
+    };
     auto detectHatByte = [&]() -> int {
         static const QStringList keys = {"dpad_up", "dpad_down",
                                          "dpad_left", "dpad_right",
@@ -715,13 +752,17 @@ QString KitProbeDialog::deriveKitToml() const {
         return 2;  // sensible default
     };
     const int hatByte = detectHatByte();
-    const uint8_t b_sel = flagBit("button_select", 1);
-    const uint8_t b_sta = flagBit("button_start",  1);
+    // Detect which byte+bit the Select/Start buttons toggle. PS3 GH/RB
+    // guitars use byte 1; PS4 RB / PS5 Riffmaster use byte 9.
+    auto [selByte, b_sel] = detectFlagByteAndBit("button_select");
+    auto [staByte, b_sta] = detectFlagByteAndBit("button_start");
+    if (selByte < 0) { selByte = 1; }
+    if (staByte < 0) { staByte = 1; }
 
     struct DudEntry { int idx; int rawByte; const char* comment; };
     std::vector<DudEntry> dudPlan;
-    struct ButtonBit { uint8_t mask; const char* name; const char* origin; };
-    std::vector<ButtonBit> by0_bits;
+    struct ButtonBit { int byte; uint8_t mask; const char* name; const char* origin; };
+    std::vector<ButtonBit> button_bits;
     struct ScaleEntry { int dudIdx; const char* stepKey; const char* comment; };
     std::vector<ScaleEntry> scalePlan;
     const char* deviceClass = "drum";
@@ -732,13 +773,19 @@ QString KitProbeDialog::deriveKitToml() const {
             {2, velByte("whammy_bar"),    "whammy bar"},
             {3, velByte("touch_slider"),  "touch slider"},
         };
-        by0_bits = {
-            {flagBit("green_fret",  0), "cross",    "green fret"},
-            {flagBit("red_fret",    0), "circle",   "red fret"},
-            {flagBit("yellow_fret", 0), "triangle", "yellow fret"},
-            {flagBit("blue_fret",   0), "square",   "blue fret"},
-            {flagBit("orange_fret", 0), "l1",       "orange fret"},
+        struct FretMap { const char* step; const char* name; const char* origin; };
+        const FretMap fretMaps[] = {
+            {"green_fret",  "cross",    "green fret"},
+            {"red_fret",    "circle",   "red fret"},
+            {"yellow_fret", "triangle", "yellow fret"},
+            {"blue_fret",   "square",   "blue fret"},
+            {"orange_fret", "l1",       "orange fret"},
         };
+        for (const auto& fm : fretMaps) {
+            auto [byte, mask] = detectFlagByteAndBit(fm.step);
+            if (byte < 0) continue;
+            button_bits.push_back({byte, mask, fm.name, fm.origin});
+        }
         scalePlan = {};
     } else {
         deviceClass = "drum";
@@ -757,13 +804,13 @@ QString KitProbeDialog::deriveKitToml() const {
         const uint8_t face = b_sq | b_cr | b_ci | b_tr;
         const uint8_t b_kick   = flagBit("kick_pedal",   0) & ~face;
         const uint8_t b_orange = flagBit("orange_cymbal", 0) & ~face;
-        by0_bits = {
-            {b_sq,     "square",   "blue pad"},
-            {b_cr,     "cross",    "green pad"},
-            {b_ci,     "circle",   "red pad"},
-            {b_tr,     "triangle", "yellow pad / yellow cymbal"},
-            {b_kick,   "l1",       "kick pedal"},
-            {b_orange, "r1",       "orange cymbal (5th lane in GH-mode)"},
+        button_bits = {
+            {0, b_sq,     "square",   "blue pad"},
+            {0, b_cr,     "cross",    "green pad"},
+            {0, b_ci,     "circle",   "red pad"},
+            {0, b_tr,     "triangle", "yellow pad / yellow cymbal"},
+            {0, b_kick,   "l1",       "kick pedal"},
+            {0, b_orange, "r1",       "orange cymbal (5th lane in GH-mode)"},
         };
         scalePlan = {
             {2, "yellow_cymbal", "yellow"},
@@ -800,9 +847,21 @@ QString KitProbeDialog::deriveKitToml() const {
         os << dud[i];
     }
     os << "]\n";
-    os << "clear_dud0_when_raw1_bits = 0x" << std::hex << int(b_sel | b_sta) << "\n";
-    os << std::dec;
+    // Only emit clear_dud0_when_raw1_bits when Start/Select share the byte
+    // that carries the fret bitmap (PS3 GH: both at byte 1, fret at byte 0).
+    // On PS4/PS5 layouts the fret bitmap and menu buttons live in different
+    // bytes so the suppression isn't needed.
+    if (selByte == 1 && staByte == 1) {
+        os << "clear_dud0_when_raw1_bits = 0x" << std::hex
+           << int(b_sel | b_sta) << std::dec << "\n";
+    }
 
+    // Detect which raw byte holds the fret bitmap (PS3: byte 0; PS4 RB: 46;
+    // PS5 Riffmaster: 43) and whether the bit order needs remapping to the
+    // PS4-native (G=0, R=1, Y=2, B=3, O=4) layout RB4 reads.
+    int fretByte = -1;
+    int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    bool needs_remap = false;
     if (m_deviceType == DeviceType::Guitar) {
         struct FretMap { const char* step; int ps4_bit; };
         const FretMap frets[] = {
@@ -812,13 +871,12 @@ QString KitProbeDialog::deriveKitToml() const {
             {"blue_fret",   3},
             {"orange_fret", 4},
         };
-        int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-        bool needs_remap = false;
         for (const auto& fm : frets) {
-            uint8_t raw_mask = flagBit(fm.step, 0);
-            if (raw_mask == 0) continue;
+            auto [byte, mask] = detectFlagByteAndBit(fm.step);
+            if (byte < 0 || mask == 0) continue;
+            if (fretByte < 0) fretByte = byte;
             for (int b = 0; b < 8; ++b) {
-                if (raw_mask & (1 << b)) {
+                if (mask & (1 << b)) {
                     if (b != fm.ps4_bit) needs_remap = true;
                     remap[b] = fm.ps4_bit;
                     break;
@@ -855,20 +913,36 @@ QString KitProbeDialog::deriveKitToml() const {
     }
     if (m_deviceType == DeviceType::Guitar) {
         os << "guitar_ps4_layout = true\n";
+        if (fretByte >= 0) os << "fret_byte = " << fretByte << "\n";
         const int whammy = velByte("whammy_bar");
         const int touch  = velByte("touch_slider");
-        if (whammy >= 0) os << "whammy_byte = " << whammy << "\n";
+        if (whammy >= 0) {
+            os << "whammy_byte = " << whammy << "\n";
+            // PS3 GH guitars idle at 0x80 (centered axis); PS4 RB / PS5
+            // Riffmaster idle at 0x00. Use the captured baseline to decide.
+            const int wb = m_baselineMax[whammy];
+            if (wb < 0x40) os << "whammy_baseline = 0\n";
+        }
         if (touch  >= 0) os << "touch_byte  = " << touch  << "\n";
         if (touch  >= 0) os << "tone_byte   = " << touch  << "\n";
     }
     if (m_deviceType == DeviceType::Guitar && !m_motionBytes.empty()) {
         const int tilt = *m_motionBytes.begin();
         os << "tilt_byte      = " << tilt << "\n";
-        if (tilt + 1 < m_reportLen) {
+        // PS3 GH guitars report a 10-bit tilt split across two adjacent
+        // bytes; PS5 Riffmaster reports an 8-bit tilt in a single byte.
+        // Heuristic: if the next byte also moved during baseline, treat
+        // them as a 16-bit pair (PS3); otherwise single-byte (PS5).
+        const bool has_high = m_motionBytes.count(tilt + 1) > 0;
+        if (has_high) {
             os << "tilt_byte_high = " << (tilt + 1) << "\n";
+            os << "tilt_baseline  = 512\n";
+            os << "tilt_scale     = 128\n";
+        } else {
+            os << "tilt_baseline  = 0\n";
+            os << "tilt_scale     = 255\n";
+            os << "tilt_invert    = true\n";
         }
-        os << "tilt_baseline  = 512\n";
-        os << "tilt_scale     = 128\n";
     }
     if (!m_motionBytes.empty()) {
         os << "motion_bytes = [";
@@ -876,23 +950,38 @@ QString KitProbeDialog::deriveKitToml() const {
         for (int b : m_motionBytes) { if (!first) os << ", "; os << b; first = false; }
         os << "]\n";
     }
-    os << "\n[buttons_byte_0]\n";
+    // Fold Start/Select into the per-byte map so each TOML section gets
+    // emitted exactly once, even when the kit puts menu buttons in the
+    // same byte as the face buttons (or a totally different byte on PS4/PS5).
+    const char* selName = (m_deviceType == DeviceType::Guitar) ? "left" : "touchpad";
+    const char* selOrigin = (m_deviceType == DeviceType::Guitar)
+        ? "Select (Star Power)" : "Select";
+    if (b_sel) button_bits.push_back({selByte, b_sel, selName, selOrigin});
+    if (b_sta) button_bits.push_back({staByte, b_sta, "options", "Start"});
+
+    std::map<int, std::vector<ButtonBit>> by_byte;
+    for (const auto& b : button_bits) {
+        if (b.mask != 0) by_byte[b.byte].push_back(b);
+    }
     auto emit_bit = [&](uint8_t bit, const char* name, const char* origin) {
-        if (bit == 0) return;
         os << "\"0x" << std::hex;
         if (bit < 0x10) os << "0";
         os << int(bit) << std::dec << "\" = \"" << name << "\"";
         if (origin && *origin) os << "  # " << origin;
         os << '\n';
     };
-    for (const auto& b : by0_bits) emit_bit(b.mask, b.name, b.origin);
-    os << "\n[buttons_byte_1]\n";
-    if (m_deviceType == DeviceType::Guitar) {
-        emit_bit(b_sel, "left",     "Select (Star Power)");
-    } else {
-        emit_bit(b_sel, "touchpad", "Select");
+    for (const auto& [byte_idx, bits] : by_byte) {
+        os << "\n[buttons_byte_" << byte_idx << "]\n";
+        // Same bit can be claimed by multiple inputs (e.g. drum kick + orange
+        // both on L1); de-dupe so we don't emit duplicate TOML keys.
+        std::map<uint8_t, std::pair<const char*, const char*>> uniq;
+        for (const auto& b : bits) {
+            uniq.try_emplace(b.mask, std::make_pair(b.name, b.origin));
+        }
+        for (const auto& [mask, name_origin] : uniq) {
+            emit_bit(mask, name_origin.first, name_origin.second);
+        }
     }
-    emit_bit(b_sta, "options",  "Start");
 
     bool emitted_scaling_header = false;
     for (const auto& s : scalePlan) {

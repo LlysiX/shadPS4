@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -36,8 +37,10 @@ struct KitDef {
     // dud_layout[i] = raw byte index for deviceUniqueData[i], or -1 for zero.
     std::array<int, kMaxDeviceUniqueData> dud_layout{-1, -1, -1, -1, -1, -1,
                                                      -1, -1, -1, -1, -1, -1};
-    std::array<u32, 8> button_byte_0{};
-    std::array<u32, 8> button_byte_1{};
+    // raw[byte] bits -> Orbis button bitmask, for any raw byte index.
+    // PS3 GH/RB guitars put face buttons in byte 0; PS4 RB guitars and the
+    // PS5 Riffmaster put them in bytes 8/9 (Riffmaster) or 5/6 (PS4 RB).
+    std::map<int, std::array<u32, 8>> button_bytes;
     int hat_byte = -1;
     int tilt_byte = -1;
     int tilt_byte_high = -1;
@@ -45,8 +48,20 @@ struct KitDef {
     int tilt_scale = 90;
     int whammy_byte = -1;
     int touch_byte = -1;
-    // Source byte for guitar pickup (Effects Switch), quantized to 0..4.
     int tone_byte = -1;
+    // Whammy raw value at "no input". PS3 GH guitars rest at 0x80 (centered
+    // axis, push-only to 0xFF). PS4 RB and PS5 Riffmaster rest at 0x00 and
+    // push to 0xFF (unsigned ramp).
+    int whammy_baseline = 0x80;
+    // Set true when the tilt byte's polarity is reversed from PS3 GH (i.e.
+    // raw INCREASES when the guitar is tilted up). PS5 Riffmaster uses
+    // this convention; PS3 GH does not.
+    bool tilt_invert = false;
+    // Source byte for the fret bitmap in guitar_ps4_layout mode. PS3 guitars
+    // = 0 (face button byte), PS4 RB = 46, PS5 Riffmaster = 43.
+    int fret_byte = 0;
+    // Source byte for the solo (upper) fret bitmap, or -1 if absent.
+    int solo_fret_byte = -1;
     // Emit dud[] in PS4 RB guitar layout (pickup/whammy/tilt/frets/solo).
     bool guitar_ps4_layout = false;
     // Emit dud[] in PS4 RB Pro drum layout (pads 0..3, cymbals 4..6).
@@ -136,6 +151,10 @@ bool LoadKitFromToml(const fs::path& file) {
         k.whammy_byte = toml::find_or<int>(root, "whammy_byte", -1);
         k.touch_byte = toml::find_or<int>(root, "touch_byte", -1);
         k.tone_byte = toml::find_or<int>(root, "tone_byte", -1);
+        k.fret_byte = toml::find_or<int>(root, "fret_byte", 0);
+        k.solo_fret_byte = toml::find_or<int>(root, "solo_fret_byte", -1);
+        k.whammy_baseline = toml::find_or<int>(root, "whammy_baseline", 0x80);
+        k.tilt_invert = toml::find_or<bool>(root, "tilt_invert", false);
         k.guitar_ps4_layout = toml::find_or<bool>(root, "guitar_ps4_layout", false);
         k.drum_ps4_layout = toml::find_or<bool>(root, "drum_ps4_layout", false);
         k.drum_red_byte           = toml::find_or<int>(root, "drum_red_byte", -1);
@@ -165,9 +184,11 @@ bool LoadKitFromToml(const fs::path& file) {
             }
         }
 
-        auto load_button_table = [&](const char* section, std::array<u32, 8>& out) {
-            if (!root.contains(section)) return;
+        // Accept [buttons_byte_N] for any non-negative byte index. Each
+        // section maps raw[N]'s bit pattern to PS4 button names.
+        auto load_button_table = [&](const std::string& section, int byte_idx) {
             const auto& tbl = toml::find(root, section).as_table();
+            auto& out = k.button_bytes[byte_idx];
             for (const auto& [key, val] : tbl) {
                 const u32 mask = ParseHexOrDec(key);
                 const u32 btn = ButtonByName(val.as_string());
@@ -176,8 +197,17 @@ bool LoadKitFromToml(const fs::path& file) {
                 }
             }
         };
-        load_button_table("buttons_byte_0", k.button_byte_0);
-        load_button_table("buttons_byte_1", k.button_byte_1);
+        if (root.is_table()) {
+            for (const auto& [key, val] : root.as_table()) {
+                if (key.rfind("buttons_byte_", 0) != 0) continue;
+                int byte_idx = 0;
+                try {
+                    byte_idx = std::stoi(key.substr(13));
+                } catch (...) { continue; }
+                if (byte_idx < 0) continue;
+                load_button_table(key, byte_idx);
+            }
+        }
 
         if (root.contains("velocity_scaling")) {
             const auto& tbl = toml::find(root, "velocity_scaling").as_table();
@@ -475,8 +505,11 @@ bool GetLatestAcceleration(int slot, float& out_x, float& out_y, float& out_z) {
     }
     const int delta = raw - kit->tilt_baseline;
     const int scale = (kit->tilt_scale > 0) ? kit->tilt_scale : 128;
-    // Below baseline = pointed up; negate so positive out_x means tilted up.
+    // Default convention: lower raw = pointed up (PS3 GH spec — accelX drops
+    // below 0x200 when the guitar lifts). PS5 Riffmaster inverts this — raw
+    // goes 0x00..0xFF as the guitar tilts up — so tilt_invert flips the sign.
     float x = -static_cast<float>(delta) / static_cast<float>(scale);
+    if (kit->tilt_invert) x = -x;
     if (x < -1.0f) x = -1.0f;
     if (x > 1.0f) x = 1.0f;
     out_x = x;
@@ -544,7 +577,11 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         }
         if (kit->whammy_byte >= 0) {
             const u8 w = at(kit->whammy_byte);
-            out[1] = (w >= 0x80) ? static_cast<u8>((w - 0x80) * 2) : 0;
+            const int base = kit->whammy_baseline;
+            const int range = std::max(1, 0xFF - base);
+            out[1] = (w > base)
+                ? static_cast<u8>(std::min(0xFE, (w - base) * 0xFE / range))
+                : 0;
         }
         float acc_x = 0.0f, acc_y = 0.0f, acc_z = 0.0f;
         if (GetLatestAcceleration(slot, acc_x, acc_y, acc_z) && acc_x > 0.0f) {
@@ -552,7 +589,7 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             if (t > 255.0f) t = 255.0f;
             out[2] = static_cast<u8>(t);
         }
-        u8 frets = at(0);
+        u8 frets = at(kit->fret_byte);
         if (kit->clear_dud0_when_raw1_bits && (at(1) & kit->clear_dud0_when_raw1_bits)) {
             frets = 0;
         }
@@ -566,6 +603,10 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             frets = remapped;
         }
         out[3] = frets;
+        if (kit->solo_fret_byte >= 0 &&
+            static_cast<std::size_t>(kit->solo_fret_byte) < raw_len) {
+            out[4] = at(kit->solo_fret_byte);
+        }
         return kMaxDeviceUniqueData;
     }
 
@@ -612,16 +653,11 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
     if (!kit) return 0;
 
     u32 out = 0;
-    if (raw_len > 0) {
-        const u8 b0 = raw[0];
+    for (const auto& [byte_idx, table] : kit->button_bytes) {
+        if (byte_idx < 0 || static_cast<std::size_t>(byte_idx) >= raw_len) continue;
+        const u8 b = raw[byte_idx];
         for (int bit = 0; bit < 8; ++bit) {
-            if (b0 & (1u << bit)) out |= kit->button_byte_0[bit];
-        }
-    }
-    if (raw_len > 1) {
-        const u8 b1 = raw[1];
-        for (int bit = 0; bit < 8; ++bit) {
-            if (b1 & (1u << bit)) out |= kit->button_byte_1[bit];
+            if (b & (1u << bit)) out |= table[bit];
         }
     }
     if (kit->hat_byte >= 0 && static_cast<std::size_t>(kit->hat_byte) < raw_len) {

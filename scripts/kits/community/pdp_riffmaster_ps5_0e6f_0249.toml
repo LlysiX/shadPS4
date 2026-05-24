@@ -1,0 +1,45 @@
+# PDP RiffMaster guitar (PS5 mode). Per PlasticBand spec at
+# Docs/Instruments/5-Fret Guitar/Rock Band/PS5.md.
+
+schema       = "shadps4-legacy-instrument/v1"
+vendor_id    = "0x0e6f"
+product_id   = "0x0249"
+name         = "PDP RiffMaster Guitar for PS5"
+device_class = "guitar"
+report_length = 64
+
+guitar_ps4_layout = true
+
+# Frets live in byte 43 (upper) and byte 44 (solo). Bits are already in
+# PS4-native order — green=bit0, red=bit1, yellow=bit2, blue=bit3, orange=bit4.
+fret_byte       = 43
+solo_fret_byte  = 44
+
+# Whammy 0x00 idle, 0xFF push (NOT centered on 0x80 like PS3 GH guitars).
+whammy_byte     = 41
+whammy_baseline = 0
+
+# Tilt is a single 8-bit byte; raw 0x00 = flat, 0xFF = straight up.
+# tilt_invert flips the sign convention from PS3 GH (which is the opposite).
+tilt_byte       = 42
+tilt_baseline   = 0
+tilt_scale      = 255
+tilt_invert     = true
+
+# D-pad / strum bar HAT in the low nibble of byte 8; neutral 0x0F.
+hat_byte        = 8
+
+# Face button flags share byte 8 with the HAT (high nibble).
+[buttons_byte_8]
+"0x20" = "cross"     # green fret
+"0x40" = "circle"    # red fret
+"0x80" = "triangle"  # yellow fret
+"0x10" = "square"    # blue fret
+
+[buttons_byte_9]
+"0x01" = "l1"        # orange fret
+"0x10" = "left"      # Select (Share) -> Star Power in RB4
+"0x20" = "options"   # Start (Options)
+
+[buttons_byte_10]
+"0x01" = "touchpad"  # PS button -> Touchpad (menu fallback)

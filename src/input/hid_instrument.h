@@ -95,10 +95,10 @@ struct XInputDeviceInfo {
 std::vector<XInputDeviceInfo> EnumerateXInputDevices();
 
 // Open / close / poll an XInput gamepad for the probe wizard. Returned
-// handle is opaque (SDL_Gamepad*). Polling writes a 9-byte synthetic HID
+// handle is opaque (SDL_Gamepad*). Polling writes a 17-byte synthetic HID
 // report into `out`; kits with source = "xinput" address these byte
 // offsets exactly (see FillXInputReport in the .cpp for the layout).
-constexpr std::size_t kXInputReportLen = 9;
+constexpr std::size_t kXInputReportLen = 17;
 void* OpenXInputGamepad(int instance_id);
 void CloseXInputGamepad(void* gamepad);
 void PollXInputGamepad(void* gamepad, u8* out);

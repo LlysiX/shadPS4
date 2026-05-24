@@ -338,17 +338,24 @@ bool PathInUseByOtherSlot(const std::string& path, int this_slot_index) {
     return false;
 }
 
-// 9-byte synthetic HID-style report we build from an SDL gamepad. Every
+// 17-byte synthetic HID-style report we build from an SDL gamepad. Every
 // XInput-source TOML reads from these byte offsets:
 //   0  face button flags: A=bit0, B=bit1, X=bit2, Y=bit3, LB=bit4, RB=bit5
 //   1  Start=bit0, Back=bit1, Guide=bit2, Left/RightStickClick=bit3/4
 //   2  D-pad bitmap (up=bit0, down=bit1, left=bit2, right=bit3); neutral=0
-//   3  Left  stick X (u8, 0x80 = center)
-//   4  Left  stick Y
-//   5  Right stick X (= whammy on GH X360)
-//   6  Right stick Y (= tilt   on GH X360)
-//   7  Left  trigger
+//   3  Left  stick X as u8 (0x80 center) — convenient for analog axes
+//   4  Left  stick Y as u8
+//   5  Right stick X as u8 (= whammy on GH X360 guitar)
+//   6  Right stick Y as u8 (= tilt   on GH X360 guitar)
+//   7  Left  trigger (u8 0..0xFF)
 //   8  Right trigger
+//   9-10  Left  stick X as int16 little-endian (low byte first)
+//   11-12 Left  stick Y as int16 LE     ← green vel (low), red vel (high)
+//   13-14 Right stick X as int16 LE     ← yellow vel (low), blue vel (high)
+//   15-16 Right stick Y as int16 LE     ← orange vel (low), kick vel (high)
+// Per-byte access lets X360 GH drum kits address the velocity bytes
+// independently (they pack a different colour's MIDI velocity into each
+// half of every stick axis — see PlasticBand 5-Lane Drums/Xbox 360.md).
 // (kXInputReportLen lives in the header so the wizard can use it too.)
 
 void FillXInputReport(SDL_Gamepad* gp, u8* out) {
@@ -358,18 +365,22 @@ void FillXInputReport(SDL_Gamepad* gp, u8* out) {
         return SDL_GetGamepadButton(gp, b) ? 1 : 0;
     };
     auto axis_u8 = [&](SDL_GamepadAxis a) -> u8 {
-        // SDL gamepad axes are int16 (-32768..32767). Map to u8 with 0x80 = center.
         const int v = SDL_GetGamepadAxis(gp, a);
-        int u = (v + 32768) >> 8;  // 0..255
+        int u = (v + 32768) >> 8;
         if (u < 0) u = 0;
         if (u > 255) u = 255;
         return static_cast<u8>(u);
     };
     auto trig_u8 = [&](SDL_GamepadAxis a) -> u8 {
-        // Triggers are 0..32767 in SDL; map to 0..255.
         int v = SDL_GetGamepadAxis(gp, a);
         if (v < 0) v = 0;
         return static_cast<u8>(v >> 7);
+    };
+    auto axis_i16 = [&](SDL_GamepadAxis a, u8* dst) {
+        // SDL_GetGamepadAxis is already int16-range; write little-endian.
+        const int16_t v = static_cast<int16_t>(SDL_GetGamepadAxis(gp, a));
+        dst[0] = static_cast<u8>(v & 0xFF);
+        dst[1] = static_cast<u8>((v >> 8) & 0xFF);
     };
     out[0] = (btn(SDL_GAMEPAD_BUTTON_SOUTH)          << 0) |  // A
              (btn(SDL_GAMEPAD_BUTTON_EAST)           << 1) |  // B
@@ -392,6 +403,10 @@ void FillXInputReport(SDL_Gamepad* gp, u8* out) {
     out[6] = axis_u8(SDL_GAMEPAD_AXIS_RIGHTY);
     out[7] = trig_u8(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
     out[8] = trig_u8(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+    axis_i16(SDL_GAMEPAD_AXIS_LEFTX,  out + 9);
+    axis_i16(SDL_GAMEPAD_AXIS_LEFTY,  out + 11);
+    axis_i16(SDL_GAMEPAD_AXIS_RIGHTX, out + 13);
+    axis_i16(SDL_GAMEPAD_AXIS_RIGHTY, out + 15);
 }
 
 bool GamepadMatchesKit(const KitDef& kd, SDL_JoystickID gpid) {

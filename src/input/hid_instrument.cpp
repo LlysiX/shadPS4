@@ -688,4 +688,20 @@ std::size_t GetLoadedKitCount() {
     return g_kits.size();
 }
 
+bool ShouldHideFromUsbd(u16 vid, u16 pid) {
+    bool any_enabled = false;
+    for (int i = 0; i < kNumSlots; ++i) {
+        if (Config::getSpecialPadLegacyPassUSBRawHID(i + 1)) {
+            any_enabled = true;
+            break;
+        }
+    }
+    if (!any_enabled) return false;
+    std::lock_guard<std::mutex> lk(g_kits_mu);
+    for (const auto& k : g_kits) {
+        if (k.vid == vid && k.pid == pid) return true;
+    }
+    return false;
+}
+
 }  // namespace Input::HidInstrument

@@ -76,4 +76,10 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
 std::string GetActiveKitName(int slot);  // empty if no kit open
 std::size_t GetLoadedKitCount();         // for "N kits loaded" status
 
+// True if any player slot has legacy raw-HID enabled AND we have a kit
+// definition matching the given VID:PID. Used by libSceUsbd to hide kits
+// from the game so the guitar/drum doesn't appear twice (once through the
+// HID passthrough, once through direct USB enumeration).
+bool ShouldHideFromUsbd(u16 vid, u16 pid);
+
 }  // namespace Input::HidInstrument

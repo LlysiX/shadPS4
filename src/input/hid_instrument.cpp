@@ -212,11 +212,17 @@ bool LoadKitFromToml(const fs::path& file) {
 }
 
 void LoadAllKits() {
+    // Recursive so users can organise kits under subfolders
+    // (e.g. <UserDir>/kits/comkits/ for community-contributed defs).
     auto scan_dir = [](const fs::path& dir) {
-        if (!fs::exists(dir) || !fs::is_directory(dir)) return;
-        for (const auto& entry : fs::directory_iterator(dir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".toml") {
-                LoadKitFromToml(entry.path());
+        std::error_code ec;
+        if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return;
+        for (auto it = fs::recursive_directory_iterator(
+                 dir, fs::directory_options::skip_permission_denied, ec);
+             it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) break;
+            if (it->is_regular_file(ec) && it->path().extension() == ".toml") {
+                LoadKitFromToml(it->path());
             }
         }
     };

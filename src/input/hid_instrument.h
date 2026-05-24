@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 #include "common/types.h"
 #include "core/libraries/pad/pad.h"
 
@@ -81,5 +82,25 @@ std::size_t GetLoadedKitCount();         // for "N kits loaded" status
 // from the game so the guitar/drum doesn't appear twice (once through the
 // HID passthrough, once through direct USB enumeration).
 bool ShouldHideFromUsbd(u16 vid, u16 pid);
+
+// One enumerated XInput gamepad — exposed to the probe wizard so it can
+// list HID and XInput devices in the same picker. `instance_id` is the
+// SDL_JoystickID needed to call OpenXInputGamepad below.
+struct XInputDeviceInfo {
+    int instance_id = 0;
+    u16 vendor_id = 0;
+    u16 product_id = 0;
+    std::string name;
+};
+std::vector<XInputDeviceInfo> EnumerateXInputDevices();
+
+// Open / close / poll an XInput gamepad for the probe wizard. Returned
+// handle is opaque (SDL_Gamepad*). Polling writes a 9-byte synthetic HID
+// report into `out`; kits with source = "xinput" address these byte
+// offsets exactly (see FillXInputReport in the .cpp for the layout).
+constexpr std::size_t kXInputReportLen = 9;
+void* OpenXInputGamepad(int instance_id);
+void CloseXInputGamepad(void* gamepad);
+void PollXInputGamepad(void* gamepad, u8* out);
 
 }  // namespace Input::HidInstrument

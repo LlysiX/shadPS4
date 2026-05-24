@@ -3,7 +3,9 @@
 
 #include "input/hid_instrument.h"
 
+#include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hidapi.h>
+#include <SDL3/SDL_init.h>
 #include <toml.hpp>
 
 #include <algorithm>
@@ -33,6 +35,15 @@ struct KitDef {
     u16 pid = 0;
     std::string name;
     std::string device_class;
+    // "hid" (default) — kit is read via SDL_hid from its USB HID report.
+    // "xinput" — kit is an Xbox 360 device read via SDL_GameController; we
+    // synthesise a 9-byte buffer (face flags / dpad / sticks / triggers)
+    // and feed it through the same packer pipeline.
+    std::string source = "hid";
+    // Optional case-insensitive substring matched against the gamepad's
+    // name when source = "xinput" and vid/pid are 0. Lets a single TOML
+    // claim e.g. all "Guitar Hero" controllers without a fixed VID:PID.
+    std::string match_name;
     std::size_t report_length = 0;
     // dud_layout[i] = raw byte index for deviceUniqueData[i], or -1 for zero.
     std::array<int, kMaxDeviceUniqueData> dud_layout{-1, -1, -1, -1, -1, -1,
@@ -142,6 +153,8 @@ bool LoadKitFromToml(const fs::path& file) {
         }
         k.name = toml::find_or<std::string>(root, "name", "(unnamed)");
         k.device_class = toml::find_or<std::string>(root, "device_class", "");
+        k.source = toml::find_or<std::string>(root, "source", "hid");
+        k.match_name = toml::find_or<std::string>(root, "match_name", "");
         k.report_length = static_cast<std::size_t>(toml::find_or<int>(root, "report_length", 0));
         k.hat_byte = toml::find_or<int>(root, "hat_byte", -1);
         k.tilt_byte = toml::find_or<int>(root, "tilt_byte", -1);
@@ -278,7 +291,9 @@ constexpr u8 ScaleVel7to8(u8 v) {
 }
 
 struct SlotState {
+    // One of dev (HID) or gamepad (XInput) is set; never both.
     SDL_hid_device* dev = nullptr;
+    SDL_Gamepad* gamepad = nullptr;
     u16 vid = 0, pid = 0;
     std::string device_path;
     const KitDef* kit = nullptr;
@@ -300,6 +315,10 @@ void CloseSlot(SlotState& s) {
         SDL_hid_close(s.dev);
         s.dev = nullptr;
     }
+    if (s.gamepad) {
+        SDL_CloseGamepad(s.gamepad);
+        s.gamepad = nullptr;
+    }
     s.vid = s.pid = 0;
     s.device_path.clear();
     s.kit = nullptr;
@@ -311,9 +330,86 @@ void CloseSlot(SlotState& s) {
 bool PathInUseByOtherSlot(const std::string& path, int this_slot_index) {
     for (int i = 0; i < kNumSlots; ++i) {
         if (i == this_slot_index) continue;
-        if (g_slots[i].dev && g_slots[i].device_path == path) {
+        if ((g_slots[i].dev || g_slots[i].gamepad) &&
+            g_slots[i].device_path == path) {
             return true;
         }
+    }
+    return false;
+}
+
+// 9-byte synthetic HID-style report we build from an SDL gamepad. Every
+// XInput-source TOML reads from these byte offsets:
+//   0  face button flags: A=bit0, B=bit1, X=bit2, Y=bit3, LB=bit4, RB=bit5
+//   1  Start=bit0, Back=bit1, Guide=bit2, Left/RightStickClick=bit3/4
+//   2  D-pad bitmap (up=bit0, down=bit1, left=bit2, right=bit3); neutral=0
+//   3  Left  stick X (u8, 0x80 = center)
+//   4  Left  stick Y
+//   5  Right stick X (= whammy on GH X360)
+//   6  Right stick Y (= tilt   on GH X360)
+//   7  Left  trigger
+//   8  Right trigger
+// (kXInputReportLen lives in the header so the wizard can use it too.)
+
+void FillXInputReport(SDL_Gamepad* gp, u8* out) {
+    std::memset(out, 0, kXInputReportLen);
+    if (!gp) return;
+    auto btn = [&](SDL_GamepadButton b) {
+        return SDL_GetGamepadButton(gp, b) ? 1 : 0;
+    };
+    auto axis_u8 = [&](SDL_GamepadAxis a) -> u8 {
+        // SDL gamepad axes are int16 (-32768..32767). Map to u8 with 0x80 = center.
+        const int v = SDL_GetGamepadAxis(gp, a);
+        int u = (v + 32768) >> 8;  // 0..255
+        if (u < 0) u = 0;
+        if (u > 255) u = 255;
+        return static_cast<u8>(u);
+    };
+    auto trig_u8 = [&](SDL_GamepadAxis a) -> u8 {
+        // Triggers are 0..32767 in SDL; map to 0..255.
+        int v = SDL_GetGamepadAxis(gp, a);
+        if (v < 0) v = 0;
+        return static_cast<u8>(v >> 7);
+    };
+    out[0] = (btn(SDL_GAMEPAD_BUTTON_SOUTH)          << 0) |  // A
+             (btn(SDL_GAMEPAD_BUTTON_EAST)           << 1) |  // B
+             (btn(SDL_GAMEPAD_BUTTON_WEST)           << 2) |  // X
+             (btn(SDL_GAMEPAD_BUTTON_NORTH)          << 3) |  // Y
+             (btn(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)  << 4) |  // LB
+             (btn(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) << 5);   // RB
+    out[1] = (btn(SDL_GAMEPAD_BUTTON_START)          << 0) |
+             (btn(SDL_GAMEPAD_BUTTON_BACK)           << 1) |
+             (btn(SDL_GAMEPAD_BUTTON_GUIDE)          << 2) |
+             (btn(SDL_GAMEPAD_BUTTON_LEFT_STICK)     << 3) |
+             (btn(SDL_GAMEPAD_BUTTON_RIGHT_STICK)    << 4);
+    out[2] = (btn(SDL_GAMEPAD_BUTTON_DPAD_UP)        << 0) |
+             (btn(SDL_GAMEPAD_BUTTON_DPAD_DOWN)      << 1) |
+             (btn(SDL_GAMEPAD_BUTTON_DPAD_LEFT)      << 2) |
+             (btn(SDL_GAMEPAD_BUTTON_DPAD_RIGHT)     << 3);
+    out[3] = axis_u8(SDL_GAMEPAD_AXIS_LEFTX);
+    out[4] = axis_u8(SDL_GAMEPAD_AXIS_LEFTY);
+    out[5] = axis_u8(SDL_GAMEPAD_AXIS_RIGHTX);
+    out[6] = axis_u8(SDL_GAMEPAD_AXIS_RIGHTY);
+    out[7] = trig_u8(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+    out[8] = trig_u8(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+}
+
+bool GamepadMatchesKit(const KitDef& kd, SDL_JoystickID gpid) {
+    const u16 vid = SDL_GetGamepadVendorForID(gpid);
+    const u16 pid = SDL_GetGamepadProductForID(gpid);
+    if (kd.vid && kd.pid) {
+        return kd.vid == vid && kd.pid == pid;
+    }
+    if (!kd.match_name.empty()) {
+        const char* n = SDL_GetGamepadNameForID(gpid);
+        if (!n) return false;
+        std::string name(n);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        std::string needle = kd.match_name;
+        std::transform(needle.begin(), needle.end(), needle.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return name.find(needle) != std::string::npos;
     }
     return false;
 }
@@ -326,7 +422,7 @@ void PollLoop() {
             SlotState& s = g_slots[i];
 
             if (!enabled) {
-                if (s.dev) {
+                if (s.dev || s.gamepad) {
                     LOG_INFO(Input, "HID instrument slot {}: flag disabled, closing device",
                              slot);
                     CloseSlot(s);
@@ -334,40 +430,60 @@ void PollLoop() {
                 continue;
             }
 
-            if (!s.dev) {
+            if (!s.dev && !s.gamepad) {
                 std::vector<KitDef> snapshot;
                 {
                     std::lock_guard<std::mutex> lk(g_kits_mu);
                     snapshot = g_kits;
                 }
-                // For each known kit VID:PID, enumerate every physical
-                // instance on the USB bus and grab the first path that
-                // isn't already claimed by another slot. This lets two
-                // identical kits be opened simultaneously (e.g. two
-                // GH5 guitars for co-op).
                 for (const auto& kd : snapshot) {
-                    SDL_hid_device_info* head = SDL_hid_enumerate(kd.vid, kd.pid);
-                    for (auto* dn = head; dn && !s.dev; dn = dn->next) {
-                        const std::string path = dn->path ? dn->path : "";
-                        if (path.empty()) continue;
-                        if (PathInUseByOtherSlot(path, i)) continue;
-                        SDL_hid_device* d = SDL_hid_open_path(path.c_str());
-                        if (!d) continue;
-                        SDL_hid_set_nonblocking(d, 1);
-                        s.dev = d;
-                        s.vid = kd.vid;
-                        s.pid = kd.pid;
-                        s.device_path = path;
-                        s.kit = FindKit(kd.vid, kd.pid);
-                        s.open_failed_logged = false;
-                        LOG_INFO(Input,
-                                 "HID instrument slot {}: opened {:04x}:{:04x} ({}) at {}",
-                                 slot, kd.vid, kd.pid, kd.name, path);
+                    if (kd.source == "xinput") {
+                        int gpcount = 0;
+                        SDL_JoystickID* gps = SDL_GetGamepads(&gpcount);
+                        for (int gi = 0; gi < gpcount && !s.gamepad; ++gi) {
+                            if (!GamepadMatchesKit(kd, gps[gi])) continue;
+                            const std::string path = "xinput:" + std::to_string(gps[gi]);
+                            if (PathInUseByOtherSlot(path, i)) continue;
+                            SDL_Gamepad* g = SDL_OpenGamepad(gps[gi]);
+                            if (!g) continue;
+                            s.gamepad = g;
+                            s.vid = SDL_GetGamepadVendor(g);
+                            s.pid = SDL_GetGamepadProduct(g);
+                            s.device_path = path;
+                            s.kit = FindKit(kd.vid, kd.pid);
+                            if (!s.kit) s.kit = &kd;  // match-by-name kits
+                            s.open_failed_logged = false;
+                            LOG_INFO(Input,
+                                     "HID instrument slot {}: opened XInput "
+                                     "gamepad #{} ({})",
+                                     slot, gps[gi], kd.name);
+                        }
+                        SDL_free(gps);
+                    } else {
+                        SDL_hid_device_info* head = SDL_hid_enumerate(kd.vid, kd.pid);
+                        for (auto* dn = head; dn && !s.dev; dn = dn->next) {
+                            const std::string path = dn->path ? dn->path : "";
+                            if (path.empty()) continue;
+                            if (PathInUseByOtherSlot(path, i)) continue;
+                            SDL_hid_device* d = SDL_hid_open_path(path.c_str());
+                            if (!d) continue;
+                            SDL_hid_set_nonblocking(d, 1);
+                            s.dev = d;
+                            s.vid = kd.vid;
+                            s.pid = kd.pid;
+                            s.device_path = path;
+                            s.kit = FindKit(kd.vid, kd.pid);
+                            s.open_failed_logged = false;
+                            LOG_INFO(Input,
+                                     "HID instrument slot {}: opened {:04x}:{:04x} "
+                                     "({}) at {}",
+                                     slot, kd.vid, kd.pid, kd.name, path);
+                        }
+                        SDL_hid_free_enumeration(head);
                     }
-                    SDL_hid_free_enumeration(head);
-                    if (s.dev) break;
+                    if (s.dev || s.gamepad) break;
                 }
-                if (!s.dev && !s.open_failed_logged) {
+                if (!s.dev && !s.gamepad && !s.open_failed_logged) {
                     LOG_WARNING(Input,
                                 "HID instrument slot {}: no known kit found "
                                 "(specialPadLegacyPassUSBRawHID{} is true)",
@@ -377,18 +493,30 @@ void PollLoop() {
                 continue;
             }
 
-            u8 buf[kMaxRawReport];
-            int n = SDL_hid_read_timeout(s.dev, buf, kMaxRawReport, 0);
-            if (n > 0) {
+            if (s.gamepad) {
+                // SDL caches gamepad state between events; pump the queue
+                // ourselves since we're on a background polling thread.
+                SDL_UpdateGamepads();
+                u8 buf[kXInputReportLen];
+                FillXInputReport(s.gamepad, buf);
                 std::lock_guard<std::mutex> lk(s.mu);
-                std::memcpy(s.last_report, buf, n);
-                s.last_report_len = static_cast<std::size_t>(n);
+                std::memcpy(s.last_report, buf, kXInputReportLen);
+                s.last_report_len = kXInputReportLen;
                 s.has_data = true;
-            } else if (n < 0) {
-                LOG_WARNING(Input,
-                            "HID instrument slot {}: read error, closing & will retry",
-                            slot);
-                CloseSlot(s);
+            } else if (s.dev) {
+                u8 buf[kMaxRawReport];
+                int n = SDL_hid_read_timeout(s.dev, buf, kMaxRawReport, 0);
+                if (n > 0) {
+                    std::lock_guard<std::mutex> lk(s.mu);
+                    std::memcpy(s.last_report, buf, n);
+                    s.last_report_len = static_cast<std::size_t>(n);
+                    s.has_data = true;
+                } else if (n < 0) {
+                    LOG_WARNING(Input,
+                                "HID instrument slot {}: read error, closing & will retry",
+                                slot);
+                    CloseSlot(s);
+                }
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -430,6 +558,9 @@ bool EnsureInit() {
             ok = false;
             return;
         }
+        // Best-effort gamepad init for XInput-source kits. Failure is
+        // non-fatal — HID-source kits still work.
+        SDL_InitSubSystem(SDL_INIT_GAMEPAD);
         g_thread_running.store(true, std::memory_order_release);
         g_thread = std::thread(PollLoop);
         g_initialized.store(true, std::memory_order_release);
@@ -728,6 +859,41 @@ std::string GetActiveKitName(int slot) {
 std::size_t GetLoadedKitCount() {
     std::lock_guard<std::mutex> lk(g_kits_mu);
     return g_kits.size();
+}
+
+std::vector<XInputDeviceInfo> EnumerateXInputDevices() {
+    std::vector<XInputDeviceInfo> out;
+    if (SDL_InitSubSystem(SDL_INIT_GAMEPAD) == false) {
+        // Already initialized counts as success — try anyway.
+    }
+    int n = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&n);
+    if (!ids) return out;
+    for (int i = 0; i < n; ++i) {
+        XInputDeviceInfo info;
+        info.instance_id = ids[i];
+        info.vendor_id = SDL_GetGamepadVendorForID(ids[i]);
+        info.product_id = SDL_GetGamepadProductForID(ids[i]);
+        const char* nm = SDL_GetGamepadNameForID(ids[i]);
+        info.name = nm ? nm : "";
+        out.push_back(std::move(info));
+    }
+    SDL_free(ids);
+    return out;
+}
+
+void* OpenXInputGamepad(int instance_id) {
+    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+    return SDL_OpenGamepad(instance_id);
+}
+
+void CloseXInputGamepad(void* gamepad) {
+    if (gamepad) SDL_CloseGamepad(static_cast<SDL_Gamepad*>(gamepad));
+}
+
+void PollXInputGamepad(void* gamepad, u8* out) {
+    SDL_UpdateGamepads();
+    FillXInputReport(static_cast<SDL_Gamepad*>(gamepad), out);
 }
 
 bool ShouldHideFromUsbd(u16 vid, u16 pid) {

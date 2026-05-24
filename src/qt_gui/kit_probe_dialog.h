@@ -91,13 +91,16 @@ private:
 
     std::unique_ptr<Ui::KitProbeDialog> ui;
 
-    // Device. m_hidDev is an opaque SDL_hid_device* (kept void* so the header
-    // doesn't have to pull in SDL3 headers).
+    // Device. Exactly one of m_hidDev (SDL_hid_device*) or m_xinputDev
+    // (SDL_Gamepad*) is set while a kit is open. Both kept as void* so the
+    // header doesn't have to pull in SDL3 headers.
     void* m_hidDev = nullptr;
+    void* m_xinputDev = nullptr;
     QString m_devicePath;
     QString m_deviceName;
     uint16_t m_vid = 0;
     uint16_t m_pid = 0;
+    bool m_isXInput = false;
 
     // Sampling state
     State m_state = State::SelectDevice;

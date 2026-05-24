@@ -347,10 +347,15 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
     const u32 sdl_buttons = static_cast<u32>(state.buttonsState);
 
     // Non-instrument fields: sticks centred, no motion/touch for a kit.
-    pData->leftStick.x = state.axes[static_cast<int>(Input::Axis::LeftX)];
-    pData->leftStick.y = state.axes[static_cast<int>(Input::Axis::LeftY)];
-    pData->rightStick.x = state.axes[static_cast<int>(Input::Axis::RightX)];
-    pData->rightStick.y = state.axes[static_cast<int>(Input::Axis::RightY)];
+    // Sticks forced to centered: SDL's gamepad mapping can put whammy on
+    // rightStick.x for guitars (PS3 GH/RB on Windows, all X360 guitars
+    // via XInput), and RB4 reads rightStick.x as a tilt sensor on some
+    // code paths — that turns whammy into Star Power. Kit input reaches
+    // RB4 through deviceUniqueData; sticks should stay neutral.
+    pData->leftStick.x = 0x80;
+    pData->leftStick.y = 0x80;
+    pData->rightStick.x = 0x80;
+    pData->rightStick.y = 0x80;
     pData->analogButtons.l2 = 0;
     pData->analogButtons.r2 = 0;
     float acc_x = 0.0f, acc_y = 0.0f, acc_z = 0.0f;

@@ -33,6 +33,7 @@
 #include <sstream>
 
 #include "common/path_util.h"
+#include "input/hid_instrument.h"
 
 namespace {
 
@@ -83,6 +84,9 @@ const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
 const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
     static const std::vector<KitProbeDialog::StepDef> steps = {
         MotionStep(),
+        {"tilt_up",        QObject::tr("Lift the guitar's neck UP (Star Power pose) — hold for the whole window. "
+                                       "We use this to figure out which direction means 'tilted up' on your kit."),
+                                                                                       "tilt_dir", false},
         {"green_fret",     QObject::tr("GREEN fret — hold and release a few times"),  "digital",  false},
         {"red_fret",       QObject::tr("RED fret"),                                    "digital",  false},
         {"yellow_fret",    QObject::tr("YELLOW fret"),                                 "digital",  false},
@@ -202,9 +206,24 @@ void KitProbeDialog::enumerateHidrawDevices() {
                       QStringLiteral("%1 %2").arg(manufacturer, product).trimmed());
     }
     SDL_hid_free_enumeration(head);
+    // XInput gamepads (Xbox 360 / Xbox One controllers, including X360 GH
+    // and RB guitars on Windows). These don't speak HID directly so they
+    // wouldn't show up in the SDL_hid_enumerate list.
+    for (const auto& xi : Input::HidInstrument::EnumerateXInputDevices()) {
+        const QString vid = QString::number(xi.vendor_id, 16).rightJustified(4, '0');
+        const QString pid = QString::number(xi.product_id, 16).rightJustified(4, '0');
+        const QString label = QStringLiteral("[XInput] %1:%2  %3")
+            .arg(vid).arg(pid).arg(QString::fromStdString(xi.name));
+        auto* item = new QListWidgetItem(label, ui->deviceList);
+        item->setData(Qt::UserRole + 0, QStringLiteral("xinput:%1").arg(xi.instance_id));
+        item->setData(Qt::UserRole + 1, vid);
+        item->setData(Qt::UserRole + 2, pid);
+        item->setData(Qt::UserRole + 3, QString::fromStdString(xi.name));
+        item->setData(Qt::UserRole + 4, true);  // marks as XInput source
+    }
     if (ui->deviceList->count() == 0) {
         auto* item = new QListWidgetItem(
-            tr("(no HID devices found — plug your instrument in and click Refresh)"),
+            tr("(no devices found — plug your instrument in and click Refresh)"),
             ui->deviceList);
         item->setFlags(Qt::ItemIsEnabled);
     }
@@ -217,6 +236,28 @@ void KitProbeDialog::onDeviceSelected() {
 bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
                                 const QString& name) {
     closeDevice();
+    // XInput-source devices: path is "xinput:<instance_id>". Skip the SDL_hid
+    // dance and open via the gamepad API.
+    if (m_isXInput) {
+        bool ok = false;
+        const int id = path.section(':', 1, 1).toInt(&ok);
+        if (!ok) {
+            QMessageBox::warning(this, tr("Open failed"),
+                                 tr("Could not parse XInput instance id from %1").arg(path));
+            return false;
+        }
+        m_xinputDev = Input::HidInstrument::OpenXInputGamepad(id);
+        if (!m_xinputDev) {
+            QMessageBox::warning(this, tr("Open failed"),
+                tr("SDL_OpenGamepad failed for instance %1.").arg(id));
+            return false;
+        }
+        m_devicePath = path;
+        m_deviceName = name;
+        m_vid = vid;
+        m_pid = pid;
+        return true;
+    }
     SDL_hid_device* dev = SDL_hid_open_path(path.toUtf8().constData());
     if (!dev) {
         // Fall back to VID:PID open in case the path-based open isn't
@@ -294,9 +335,14 @@ void KitProbeDialog::closeDevice() {
         SDL_hid_close(AsHidDev(m_hidDev));
         m_hidDev = nullptr;
     }
+    if (m_xinputDev) {
+        Input::HidInstrument::CloseXInputGamepad(m_xinputDev);
+        m_xinputDev = nullptr;
+    }
     m_devicePath.clear();
     m_deviceName.clear();
     m_vid = m_pid = 0;
+    m_isXInput = false;
 }
 
 // ============================================================================
@@ -327,6 +373,7 @@ void KitProbeDialog::onStartProbe() {
     const QString vidStr = item->data(Qt::UserRole + 1).toString();
     const QString pidStr = item->data(Qt::UserRole + 2).toString();
     const QString name = item->data(Qt::UserRole + 3).toString();
+    m_isXInput = item->data(Qt::UserRole + 4).toBool();
     bool ok1 = false, ok2 = false;
     const uint16_t vid = static_cast<uint16_t>(vidStr.toUInt(&ok1, 16));
     const uint16_t pid = static_cast<uint16_t>(pidStr.toUInt(&ok2, 16));
@@ -499,6 +546,32 @@ void KitProbeDialog::onNextStep() {
 // ============================================================================
 
 void KitProbeDialog::onHidReadable() {
+    // XInput path: poll the gamepad once per tick and treat the synthetic
+    // 9-byte report exactly like an HID read.
+    if (m_xinputDev) {
+        uint8_t buf[Input::HidInstrument::kXInputReportLen];
+        Input::HidInstrument::PollXInputGamepad(m_xinputDev, buf);
+        const int n = (int)Input::HidInstrument::kXInputReportLen;
+        if (m_reportLen < n) {
+            m_reportLen = n;
+            resetByteGrid(m_reportLen);
+        }
+        for (int i = 0; i < n; ++i) {
+            const bool changed = (i >= m_lastReportLen) || (m_lastReport[i] != buf[i]);
+            updateByteGridCell(i, buf[i], changed);
+        }
+        std::memcpy(m_lastReport.data(), buf, n);
+        m_lastReportLen = n;
+        if (m_state == State::Idle) {
+            for (int i = 0; i < n; ++i) {
+                if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
+                if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
+            }
+        } else if (m_state == State::Step && m_sampling) {
+            appendReportToCurrentStep(buf, (std::size_t)n);
+        }
+        return;
+    }
     if (!m_hidDev) return;
     uint8_t buf[64];
     while (true) {
@@ -840,6 +913,9 @@ QString KitProbeDialog::deriveKitToml() const {
     os << std::dec;
     os << "name         = \"" << m_deviceName.toStdString() << "\"\n";
     os << "device_class = \"" << deviceClass << "\"\n";
+    if (m_isXInput) {
+        os << "source       = \"xinput\"\n";
+    }
     os << "report_length = " << m_reportLen << "\n";
     os << "device_unique_data = [";
     for (int i = 0; i < 12; ++i) {
@@ -929,20 +1005,32 @@ QString KitProbeDialog::deriveKitToml() const {
     if (m_deviceType == DeviceType::Guitar && !m_motionBytes.empty()) {
         const int tilt = *m_motionBytes.begin();
         os << "tilt_byte      = " << tilt << "\n";
-        // PS3 GH guitars report a 10-bit tilt split across two adjacent
-        // bytes; PS5 Riffmaster reports an 8-bit tilt in a single byte.
-        // Heuristic: if the next byte also moved during baseline, treat
-        // them as a 16-bit pair (PS3); otherwise single-byte (PS5).
         const bool has_high = m_motionBytes.count(tilt + 1) > 0;
+        const int baseline = (m_baselineMin[tilt] + m_baselineMax[tilt]) / 2;
+        // Compare the tilt byte while the user actively lifts the guitar
+        // (the dedicated "tilt_up" step) against its idle midpoint, so we
+        // know whether raw INCREASES or DECREASES when pointed up. Works
+        // regardless of accel polarity (PS3 GH: lower = up; PS5: higher = up).
+        int up_min = baseline, up_max = baseline;
+        for (const auto& r : m_results) {
+            if (r.def.key != QStringLiteral("tilt_up") || !r.captured) continue;
+            if (tilt < 0 || tilt >= m_reportLen) break;
+            up_min = r.bytes[tilt].min;
+            up_max = r.bytes[tilt].max;
+            break;
+        }
+        const int up_delta_high = up_max - baseline;
+        const int up_delta_low  = baseline - up_min;
+        const bool invert = up_delta_high > up_delta_low;
         if (has_high) {
             os << "tilt_byte_high = " << (tilt + 1) << "\n";
             os << "tilt_baseline  = 512\n";
             os << "tilt_scale     = 128\n";
         } else {
-            os << "tilt_baseline  = 0\n";
-            os << "tilt_scale     = 255\n";
-            os << "tilt_invert    = true\n";
+            os << "tilt_baseline  = " << baseline << "\n";
+            os << "tilt_scale     = 80\n";
         }
+        os << "tilt_invert    = " << (invert ? "true" : "false") << "\n";
     }
     if (!m_motionBytes.empty()) {
         os << "motion_bytes = [";

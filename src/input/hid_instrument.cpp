@@ -71,6 +71,10 @@ struct KitDef {
     // Source byte for the fret bitmap in guitar_ps4_layout mode. PS3 guitars
     // = 0 (face button byte), PS4 RB = 46, PS5 Riffmaster = 43.
     int fret_byte = 0;
+    // Mask applied to fret_byte before bit-remap. PS4 RB and PS5 Riffmaster
+    // share the byte with HAT data in the low nibble; without masking, the
+    // 0x0F neutral HAT value remaps into "all frets held" in dud[3].
+    u8 fret_mask = 0xFF;
     // Source byte for the solo (upper) fret bitmap, or -1 if absent.
     int solo_fret_byte = -1;
     // Emit dud[] in PS4 RB guitar layout (pickup/whammy/tilt/frets/solo).
@@ -165,6 +169,7 @@ bool LoadKitFromToml(const fs::path& file) {
         k.touch_byte = toml::find_or<int>(root, "touch_byte", -1);
         k.tone_byte = toml::find_or<int>(root, "tone_byte", -1);
         k.fret_byte = toml::find_or<int>(root, "fret_byte", 0);
+        k.fret_mask = static_cast<u8>(toml::find_or<int>(root, "fret_mask", 0xFF));
         k.solo_fret_byte = toml::find_or<int>(root, "solo_fret_byte", -1);
         k.whammy_baseline = toml::find_or<int>(root, "whammy_baseline", 0x80);
         k.tilt_invert = toml::find_or<bool>(root, "tilt_invert", false);
@@ -735,7 +740,7 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             if (t > 255.0f) t = 255.0f;
             out[2] = static_cast<u8>(t);
         }
-        u8 frets = at(kit->fret_byte);
+        u8 frets = at(kit->fret_byte) & kit->fret_mask;
         if (kit->clear_dud0_when_raw1_bits && (at(1) & kit->clear_dud0_when_raw1_bits)) {
             frets = 0;
         }
@@ -807,7 +812,11 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
         }
     }
     if (kit->hat_byte >= 0 && static_cast<std::size_t>(kit->hat_byte) < raw_len) {
-        switch (raw[kit->hat_byte]) {
+        // PS4 RB and PS5 Riffmaster share the HAT byte with fret-flag bits in
+        // the upper nibble. Mask before switching so a strum-while-holding-
+        // a-fret doesn't get lost (raw byte = 0x2F = green-held-strum-up,
+        // which the unmasked switch routed to `default`).
+        switch (raw[kit->hat_byte] & 0x0F) {
         case 0x00: out |= static_cast<u32>(B::Up); break;
         case 0x01: out |= static_cast<u32>(B::Up) | static_cast<u32>(B::Right); break;
         case 0x02: out |= static_cast<u32>(B::Right); break;

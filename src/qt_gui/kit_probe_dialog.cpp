@@ -948,10 +948,15 @@ QString KitProbeDialog::deriveKitToml() const {
             {"blue_fret",   3},
             {"orange_fret", 4},
         };
+        uint8_t fretMaskBits = 0;
         for (const auto& fm : frets) {
             auto [byte, mask] = detectFlagByteAndBit(fm.step);
             if (byte < 0 || mask == 0) continue;
             if (fretByte < 0) fretByte = byte;
+            // Only contribute to the mask if the fret was found on the same
+            // byte as the others — different bytes mean a mixed layout the
+            // single fret_mask can't capture.
+            if (byte == fretByte) fretMaskBits |= mask;
             for (int b = 0; b < 8; ++b) {
                 if (mask & (1 << b)) {
                     if (b != fm.ps4_bit) needs_remap = true;
@@ -967,6 +972,11 @@ QString KitProbeDialog::deriveKitToml() const {
                 os << remap[i];
             }
             os << "]\n";
+        }
+        // Emit fret_mask when only some bits of fretByte hold fret data
+        // (PS4 RB / PS5 Riffmaster share the byte with HAT in the low nibble).
+        if (fretMaskBits != 0 && fretMaskBits != 0xFF) {
+            os << "fret_mask = 0x" << std::hex << int(fretMaskBits) << std::dec << "\n";
         }
     }
     os << "hat_byte = " << hatByte << "\n";

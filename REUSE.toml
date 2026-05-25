@@ -135,3 +135,9 @@ SPDX-License-Identifier = "MIT"
 path = "dist/qt.conf"
 SPDX-FileCopyrightText = "shadPS4 Emulator Project"
 SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# Upstream placeholder file (empty), inherited from the rb4 branch.
+[[annotations]]
+path = "hi"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"

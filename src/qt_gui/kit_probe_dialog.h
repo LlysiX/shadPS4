@@ -78,7 +78,7 @@ private:
     void setState(State s);
     void enumerateHidrawDevices();
     bool openDevice(const QString& path, uint16_t vid, uint16_t pid,
-                    const QString& name);
+                    const QString& name, bool is_xinput);
     void closeDevice();
     void resetByteGrid(int reportLen);
     void updateByteGridCell(int idx, uint8_t value, bool changed);

@@ -234,8 +234,9 @@ void KitProbeDialog::onDeviceSelected() {
 }
 
 bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
-                                const QString& name) {
+                                const QString& name, bool is_xinput) {
     closeDevice();
+    m_isXInput = is_xinput;
     // XInput-source devices: path is "xinput:<instance_id>". Skip the SDL_hid
     // dance and open via the gamepad API.
     if (m_isXInput) {
@@ -373,7 +374,7 @@ void KitProbeDialog::onStartProbe() {
     const QString vidStr = item->data(Qt::UserRole + 1).toString();
     const QString pidStr = item->data(Qt::UserRole + 2).toString();
     const QString name = item->data(Qt::UserRole + 3).toString();
-    m_isXInput = item->data(Qt::UserRole + 4).toBool();
+    const bool is_xinput = item->data(Qt::UserRole + 4).toBool();
     bool ok1 = false, ok2 = false;
     const uint16_t vid = static_cast<uint16_t>(vidStr.toUInt(&ok1, 16));
     const uint16_t pid = static_cast<uint16_t>(pidStr.toUInt(&ok2, 16));
@@ -382,7 +383,7 @@ void KitProbeDialog::onStartProbe() {
                              tr("Could not parse %1:%2.").arg(vidStr, pidStr));
         return;
     }
-    if (!openDevice(path, vid, pid, name)) return;
+    if (!openDevice(path, vid, pid, name, is_xinput)) return;
 
     // Init step results table
     m_results.clear();

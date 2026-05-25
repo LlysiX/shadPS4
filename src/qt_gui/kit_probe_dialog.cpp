@@ -403,7 +403,10 @@ void KitProbeDialog::onStartProbe() {
     // Baseline: 1.5s of quiet sampling so we know idle noise band.
     ui->stepHeader->setText(tr("Baseline (1/%1)").arg(Steps(m_deviceType).size() + 1));
     ui->stepPrompt->setText(
-        tr("Don't touch the kit. Capturing idle noise for ~1.5 s..."));
+        tr("Don't touch the kit. Capturing idle noise for ~1.5 s...\n\n"
+           "If your kit only sends data when something changes (custom "
+           "firmware like Santroller, some wireless kits), tap and release "
+           "any button now so we can read its idle state."));
     ui->stepProgress->setMaximum(kBaselineDurationMs);
     ui->stepProgress->setValue(0);
     ui->crossTalkLabel->clear();
@@ -563,7 +566,14 @@ void KitProbeDialog::onHidReadable() {
         }
         std::memcpy(m_lastReport.data(), buf, n);
         m_lastReportLen = n;
-        if (m_state == State::Idle) {
+        // Keep updating the baseline band as long as the user hasn't actually
+        // pressed "Begin sampling" on a step — covers Santroller-style kits
+        // that only emit HID reports on state change, so the 1.5 s idle
+        // window may capture nothing. Letting baseline accumulate through
+        // the post-baseline "Press Begin when ready" period gives those kits
+        // a real chance to emit at least one quiescent frame.
+        if (m_state == State::Idle ||
+            (m_state == State::Step && !m_sampling)) {
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
@@ -593,7 +603,14 @@ void KitProbeDialog::onHidReadable() {
         m_lastReportLen = (int)n;
 
         // Accumulate into current step or baseline.
-        if (m_state == State::Idle) {
+        // Keep updating the baseline band as long as the user hasn't actually
+        // pressed "Begin sampling" on a step — covers Santroller-style kits
+        // that only emit HID reports on state change, so the 1.5 s idle
+        // window may capture nothing. Letting baseline accumulate through
+        // the post-baseline "Press Begin when ready" period gives those kits
+        // a real chance to emit at least one quiescent frame.
+        if (m_state == State::Idle ||
+            (m_state == State::Step && !m_sampling)) {
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];

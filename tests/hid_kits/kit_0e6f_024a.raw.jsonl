@@ -1,4 +1,4 @@
-{"type": "meta", "vendor_id": "0x0e6f", "product_id": "0x024a", "device_name": "kit_0e6f_024a.raw", "device_type": "guitar", "source": "hid", "report_length": 64}
+{"type":"meta","version":2,"vendor_id":"0x0e6f","product_id":"0x024a","device_name":"Performance Designed Products PDP RiffMaster Guitar for PS4","device_type":"guitar","source":"hid","report_length":64}
 {"step":"_motion_baseline","bytes":[1,128,128,128,128,15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,128,0,0,0,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}
 {"step":"_motion_baseline","bytes":[1,128,128,128,128,15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,128,0,0,0,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}
 {"step":"_motion_baseline","bytes":[1,128,128,128,128,15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,128,0,0,0,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}

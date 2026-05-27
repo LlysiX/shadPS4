@@ -34,9 +34,11 @@
         <layout class="QHBoxLayout" name="deviceTypeLayout">
          <item><widget class="QLabel" name="deviceTypeLabel"><property name="text"><string>Device type:</string></property></widget></item>
          <item><widget class="QComboBox" name="deviceTypeCombo">
+          <item><property name="text"><string>— pick instrument type —</string></property></item>
           <item><property name="text"><string>Drum kit (5-lane GH / no cymbal split)</string></property></item>
           <item><property name="text"><string>Drum kit (Pro — separate pad and cymbal slots)</string></property></item>
           <item><property name="text"><string>Guitar (5 frets)</string></property></item>
+          <item><property name="text"><string>Guitar (5 frets + upper solo frets — PS4 RB Mustang / PS5 Riffmaster)</string></property></item>
          </widget></item>
          <item><spacer name="dts"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
         </layout>

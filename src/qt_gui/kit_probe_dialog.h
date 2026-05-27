@@ -40,7 +40,8 @@ public:
     enum class DeviceType {
         Drum,       // 5-lane GH / RB 4-lane no-cymbal — per-color velocity
         ProDrum,    // RB Pro drums — pad and cymbal slots distinct
-        Guitar,
+        Guitar,     // standard 5-fret guitar (PS3 GH/RB, PS4 RB w/o solo)
+        GuitarSolo, // 5-fret guitar with upper-neck solo frets (PS4/PS5 RB)
     };
 
 private slots:

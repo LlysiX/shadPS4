@@ -1066,6 +1066,8 @@ set(INPUT src/input/controller.cpp
           src/input/input_mouse.h
           src/input/hid_instrument.cpp
           src/input/hid_instrument.h
+          src/input/hid_kit_def.h
+          src/input/hid_packer.cpp
           src/input/hid_kit_probe_data.h
           src/input/hid_kit_probe_derive.cpp
 )

@@ -13,6 +13,12 @@
 
 namespace Input::HidInstrument {
 
+namespace {
+bool IsGuitarType(ProbeDeviceType t) {
+    return t == ProbeDeviceType::Guitar || t == ProbeDeviceType::GuitarSolo;
+}
+}  // namespace
+
 std::string DeriveKitToml(const KitProbeData& data) {
     const int report_len = data.report_length;
     const auto& results = data.results;
@@ -128,7 +134,7 @@ std::string DeriveKitToml(const KitProbeData& data) {
     std::vector<ScaleEntry> scalePlan;
     const char* deviceClass = "drum";
 
-    if (data.device_type == ProbeDeviceType::Guitar) {
+    if (IsGuitarType(data.device_type)) {
         deviceClass = "guitar";
         dudPlan = {
             {2, velByte("whammy_bar"), "whammy bar"},
@@ -199,28 +205,52 @@ std::string DeriveKitToml(const KitProbeData& data) {
         scalePlan = {};
     } else {
         deviceClass = "drum";
+        // 5-lane GH kits expose orange as a PAD (lower lane); RB kits expose
+        // it as a cymbal. Either step can fill the orange velocity slot.
+        const int orange_byte = (velByte("orange_pad") >= 0)
+                                    ? velByte("orange_pad")
+                                    : velByte("orange_cymbal");
+        const char* orange_step = (velByte("orange_pad") >= 0)
+                                      ? "orange_pad"
+                                      : "orange_cymbal";
         dudPlan = {
             {2, velByte("yellow_cymbal"), "yellow velocity"},
             {3, velByte("red_pad"), "red velocity"},
             {4, velByte("green_pad"), "green velocity"},
             {5, velByte("blue_pad"), "blue velocity"},
             {6, velByte("kick_pedal"), "kick velocity"},
-            {7, velByte("orange_cymbal"), "orange velocity"},
+            {7, orange_byte, "orange velocity"},
         };
-        const uint8_t b_sq = flagBit("button_square", 0);
-        const uint8_t b_cr = flagBit("button_cross", 0);
-        const uint8_t b_ci = flagBit("button_circle", 0);
-        const uint8_t b_tr = flagBit("button_triangle", 0);
-        const uint8_t face = b_sq | b_cr | b_ci | b_tr;
-        const uint8_t b_kick = flagBit("kick_pedal", 0) & ~face;
-        const uint8_t b_orange = flagBit("orange_cymbal", 0) & ~face;
+        // Face buttons can live on different bytes per kit (PS3 RB drums put
+        // them on byte 1; Santroller's drum profile puts them at the end of
+        // the report). Use detectFlagByteAndBit so each button picks its own
+        // source byte instead of assuming byte 0.
+        auto [sqByte, b_sq] = detectFlagByteAndBit("button_square");
+        auto [crByte, b_cr] = detectFlagByteAndBit("button_cross");
+        auto [ciByte, b_ci] = detectFlagByteAndBit("button_circle");
+        auto [trByte, b_tr] = detectFlagByteAndBit("button_triangle");
+        auto [kickByte, b_kick_raw] = detectFlagByteAndBit("kick_pedal");
+        auto [orByte, b_or_raw] = detectFlagByteAndBit(orange_step);
+        // Strip face-button bits that also lit up the kick/orange step, so we
+        // don't double-map the same bit (PS3 RB drums fire face button +
+        // pad flag together when you hit a pad).
+        const uint8_t face_on_kick = (kickByte == sqByte ? b_sq : 0) |
+                                      (kickByte == crByte ? b_cr : 0) |
+                                      (kickByte == ciByte ? b_ci : 0) |
+                                      (kickByte == trByte ? b_tr : 0);
+        const uint8_t face_on_orange = (orByte == sqByte ? b_sq : 0) |
+                                        (orByte == crByte ? b_cr : 0) |
+                                        (orByte == ciByte ? b_ci : 0) |
+                                        (orByte == trByte ? b_tr : 0);
+        const uint8_t b_kick = b_kick_raw & ~face_on_kick;
+        const uint8_t b_orange = b_or_raw & ~face_on_orange;
         button_bits = {
-            {0, b_sq, "square", "blue pad"},
-            {0, b_cr, "cross", "green pad"},
-            {0, b_ci, "circle", "red pad"},
-            {0, b_tr, "triangle", "yellow pad / yellow cymbal"},
-            {0, b_kick, "l1", "kick pedal"},
-            {0, b_orange, "r1", "orange cymbal (5th lane in GH-mode)"},
+            {sqByte, b_sq, "square", "blue pad"},
+            {crByte, b_cr, "cross", "green pad"},
+            {ciByte, b_ci, "circle", "red pad"},
+            {trByte, b_tr, "triangle", "yellow pad / yellow cymbal"},
+            {kickByte, b_kick, "l1", "kick pedal"},
+            {orByte, b_orange, "r1", "orange pad/cymbal (5th lane in GH-mode)"},
         };
         scalePlan = {
             {2, "yellow_cymbal", "yellow"},
@@ -228,7 +258,7 @@ std::string DeriveKitToml(const KitProbeData& data) {
             {4, "green_pad", "green"},
             {5, "blue_pad", "blue"},
             {6, "kick_pedal", "kick"},
-            {7, "orange_cymbal", "orange"},
+            {7, orange_step, "orange"},
         };
     }
 
@@ -252,12 +282,19 @@ std::string DeriveKitToml(const KitProbeData& data) {
     os << "device_class = \"" << deviceClass << "\"\n";
     if (data.is_xinput) os << "source       = \"xinput\"\n";
     os << "report_length = " << report_len << "\n";
-    os << "device_unique_data = [";
-    for (int i = 0; i < 12; ++i) {
-        if (i) os << ", ";
-        os << dud[i];
+    // The runtime ignores `device_unique_data` when `guitar_ps4_layout` or
+    // `drum_ps4_layout` is set — the wire-format byte order is hardcoded
+    // there. Emitting it for those kits just confuses hand-editing.
+    const bool ps4_layout = (IsGuitarType(data.device_type)) ||
+                            (data.device_type == ProbeDeviceType::ProDrum);
+    if (!ps4_layout) {
+        os << "device_unique_data = [";
+        for (int i = 0; i < 12; ++i) {
+            if (i) os << ", ";
+            os << dud[i];
+        }
+        os << "]\n";
     }
-    os << "]\n";
     if (selByte == 1 && staByte == 1) {
         os << "clear_dud0_when_raw1_bits = 0x" << std::hex
            << int(b_sel | b_sta) << std::dec << "\n";
@@ -268,7 +305,7 @@ std::string DeriveKitToml(const KitProbeData& data) {
     int fretByte = -1;
     int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
     bool needs_remap = false;
-    if (data.device_type == ProbeDeviceType::Guitar) {
+    if (IsGuitarType(data.device_type)) {
         struct FretMap { const char* step; int ps4_bit; };
         const FretMap frets[] = {
             {"green_fret", 0}, {"red_fret", 1}, {"yellow_fret", 2},
@@ -340,7 +377,7 @@ std::string DeriveKitToml(const KitProbeData& data) {
         os << "drum_green_cymbal_byte  = "
            << (g_cym >= 0 ? g_cym : o_cym) << "\n";
     }
-    if (data.device_type == ProbeDeviceType::Guitar) {
+    if (IsGuitarType(data.device_type)) {
         os << "guitar_ps4_layout = true\n";
         if (fretByte >= 0) os << "fret_byte = " << fretByte << "\n";
         const int whammy = velByte("whammy_bar");
@@ -352,8 +389,35 @@ std::string DeriveKitToml(const KitProbeData& data) {
         }
         if (touch >= 0) os << "touch_byte  = " << touch << "\n";
         if (touch >= 0) os << "tone_byte   = " << touch << "\n";
+        // PS4/PS5 RB guitars have a second set of solo frets on the upper
+        // neck — they pack into dud[4] (fretSolo). Pick the byte with max
+        // coverage across all 5 solo-fret presses, same algorithm as for
+        // the main fret_byte but limited to the upper-neck capture steps.
+        const char* solo_steps[] = {
+            "solo_green_fret", "solo_red_fret", "solo_yellow_fret",
+            "solo_blue_fret", "solo_orange_fret",
+        };
+        std::map<int, int> solo_cov;
+        for (const char* step : solo_steps) {
+            for (const auto& [byte, _] : detectAllFlagCandidates(step)) {
+                ++solo_cov[byte];
+            }
+        }
+        int solo_byte = -1, solo_cov_best = 0, solo_base_best = 0x7FFFFFFF;
+        for (const auto& [byte, count] : solo_cov) {
+            const int base = baseline_max[byte];
+            if (count > solo_cov_best ||
+                (count == solo_cov_best && base < solo_base_best)) {
+                solo_byte = byte;
+                solo_cov_best = count;
+                solo_base_best = base;
+            }
+        }
+        if (solo_byte >= 0 && solo_byte != fretByte) {
+            os << "solo_fret_byte = " << solo_byte << "\n";
+        }
     }
-    if (data.device_type == ProbeDeviceType::Guitar && !motion_bytes.empty()) {
+    if (IsGuitarType(data.device_type) && !motion_bytes.empty()) {
         const int tilt = *motion_bytes.begin();
         os << "tilt_byte      = " << tilt << "\n";
         const bool has_high = motion_bytes.count(tilt + 1) > 0;
@@ -393,8 +457,8 @@ std::string DeriveKitToml(const KitProbeData& data) {
     // Fold Start/Select into the per-byte map so each TOML section gets
     // emitted exactly once.
     const char* selName =
-        (data.device_type == ProbeDeviceType::Guitar) ? "left" : "touchpad";
-    const char* selOrigin = (data.device_type == ProbeDeviceType::Guitar)
+        (IsGuitarType(data.device_type)) ? "left" : "touchpad";
+    const char* selOrigin = (IsGuitarType(data.device_type))
                                 ? "Select (Star Power)"
                                 : "Select";
     if (b_sel) button_bits.push_back({selByte, b_sel, selName, selOrigin});

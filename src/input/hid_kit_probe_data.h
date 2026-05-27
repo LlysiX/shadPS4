@@ -38,9 +38,17 @@ enum class ProbeDeviceType {
     Drum,
     ProDrum,
     Guitar,
+    GuitarSolo,  // 5-fret guitar with upper-neck solo frets (PS4/PS5 RB)
 };
 
 struct KitProbeData {
+    // Raw-jsonl schema version. v1 (default for legacy captures with no
+    // version key): basic guitar/drum step list, no combos. v2: added
+    // version field. v3: GuitarSteps gained combo steps (green_strum,
+    // green_blue, green_blue_strum); added GuitarSolo device type with
+    // solo_fret_* steps; DrumSteps gained orange_pad. Tests use the
+    // version to know which steps MUST be present.
+    int version = 1;
     uint16_t vid = 0;
     uint16_t pid = 0;
     std::string device_name;

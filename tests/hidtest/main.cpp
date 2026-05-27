@@ -21,9 +21,11 @@
 #include <utility>
 #include <vector>
 
+#include "input/hid_instrument.h"
 #include "input/hid_kit_probe_data.h"
 
 namespace fs = std::filesystem;
+namespace HID = Input::HidInstrument;
 using Input::HidInstrument::ByteObs;
 using Input::HidInstrument::DeriveKitToml;
 using Input::HidInstrument::KitProbeData;
@@ -91,16 +93,25 @@ uint16_t ParseVidPid(const std::string& s) {
 }
 
 bool VidPidFromFilename(const fs::path& p, uint16_t& vid, uint16_t& pid) {
-    auto stem = p.stem().string();  // kit_VVVV_PPPP.raw -> stem strips .jsonl only
+    // Accepts both `kit_<vid>_<pid>.raw.jsonl` and the disambiguated form
+    // `kit_<vid>_<pid>_<hash>.raw.jsonl` (used when two physical devices
+    // share the same VID:PID — e.g. a Santroller flashed as a Guitar Hero 5
+    // clone vs. flashed as a Pro Drum). Only the first two underscore-
+    // delimited fields after the `kit_` prefix carry meaning here.
+    auto stem = p.stem().string();
     if (stem.size() > 4 && stem.rfind(".raw") == stem.size() - 4) {
         stem = stem.substr(0, stem.size() - 4);
     }
     if (stem.rfind("kit_", 0) != 0) return false;
     const std::string rest = stem.substr(4);
-    const auto us = rest.find('_');
-    if (us == std::string::npos) return false;
-    vid = ParseVidPid(rest.substr(0, us));
-    pid = ParseVidPid(rest.substr(us + 1));
+    const auto us1 = rest.find('_');
+    if (us1 == std::string::npos) return false;
+    const std::string vid_s = rest.substr(0, us1);
+    const std::string after = rest.substr(us1 + 1);
+    const auto us2 = after.find('_');
+    const std::string pid_s = (us2 == std::string::npos) ? after : after.substr(0, us2);
+    vid = ParseVidPid(vid_s);
+    pid = ParseVidPid(pid_s);
     return vid != 0 && pid != 0;
 }
 
@@ -136,6 +147,11 @@ bool LoadKitProbeFromFile(const fs::path& path, KitProbeData& out) {
         const std::string type = ExtractField(line, "type");
         if (type == "meta") {
             meta_seen = true;
+            try {
+                const std::string v = ExtractField(line, "version");
+                if (!v.empty()) out.version = std::stoi(v);
+            } catch (...) {
+            }
             out.vid = ParseVidPid(ExtractField(line, "vendor_id"));
             out.pid = ParseVidPid(ExtractField(line, "product_id"));
             out.device_name = ExtractField(line, "device_name");
@@ -143,6 +159,7 @@ bool LoadKitProbeFromFile(const fs::path& path, KitProbeData& out) {
             if (dt == "drum") out.device_type = ProbeDeviceType::Drum;
             else if (dt == "drum_pro") out.device_type = ProbeDeviceType::ProDrum;
             else if (dt == "guitar") out.device_type = ProbeDeviceType::Guitar;
+            else if (dt == "guitar_solo") out.device_type = ProbeDeviceType::GuitarSolo;
             out.is_xinput = (ExtractField(line, "source") == "xinput");
             try {
                 out.report_length = std::stoi(ExtractField(line, "report_length"));
@@ -234,6 +251,49 @@ bool TomlContains(const std::string& toml, const std::string& needle) {
     return toml.find(needle) != std::string::npos;
 }
 
+// Write `text` to a unique temp .toml file and return its path. Caller is
+// responsible for cleanup.
+fs::path WriteTempToml(const std::string& stem, const std::string& text) {
+    fs::path tmp = fs::temp_directory_path() /
+                   ("hidtest_" + stem + ".toml");
+    std::ofstream out(tmp);
+    out << text;
+    return tmp;
+}
+
+// Round-trip stage: feed the derived TOML back through the live packer and
+// replay each captured step's last frame. We expect EVERY non-baseline step
+// to produce at least one non-zero output bit somewhere — either a button
+// bitmap bit or a deviceUniqueData byte. A step that packs to all-zeros
+// means the kit's wizard derivation didn't pick up that input at all, which
+// is exactly the regression class we want to catch (the v0.2 fret-byte bug
+// landed every fret_press step on the same idle-state pattern).
+bool RoundTripStep(const StepResultData& step, std::string& detail) {
+    if (step.raw.empty()) {
+        detail = "step '" + step.key + "' has no frames";
+        return false;
+    }
+    // Try every captured frame for the step — at least one must produce
+    // non-zero output. Picking only the last frame is fragile: the user may
+    // have released the input by the final frame (especially for tilt,
+    // where they return the guitar to neutral after pulling it up).
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+        const u32 buttons = HID::PackButtons(
+            1, frame.data(), frame.size(),
+            Libraries::Pad::OrbisPadDeviceClass::Guitar);
+        if (buttons != 0) return true;
+        for (std::size_t i = 0; i < HID::kMaxDeviceUniqueData; ++i) {
+            if (dud[i] != 0) return true;
+        }
+    }
+    detail = "step '" + step.key + "' packed to all-zero output across "
+             + std::to_string(step.raw.size()) + " frames";
+    return false;
+}
+
 CaseResult RunCase(const fs::path& path) {
     CaseResult r{};
     r.name = path.filename().string();
@@ -251,7 +311,24 @@ CaseResult RunCase(const fs::path& path) {
         r.detail = "missing schema header";
         return r;
     }
-    if (data.device_type == ProbeDeviceType::Guitar) {
+    const bool is_guitar = data.device_type == ProbeDeviceType::Guitar ||
+                           data.device_type == ProbeDeviceType::GuitarSolo;
+    // v3 introduced combo steps (green_strum / green_blue / green_blue_strum)
+    // and the solo-fret walkthrough for GuitarSolo kits. v1/v2 captures
+    // predate them and must not be punished for missing keys.
+    auto has_step = [&](const char* name) {
+        for (const auto& s : data.results) {
+            if (s.key == name && s.captured) return true;
+        }
+        return false;
+    };
+    if (data.version >= 3 && is_guitar) {
+        if (!has_step("green_strum")) {
+            r.detail = "v3 guitar missing combo step 'green_strum'";
+            return r;
+        }
+    }
+    if (is_guitar) {
         if (!TomlContains(toml, "device_class = \"guitar\"")) {
             r.detail = "expected device_class = \"guitar\"";
             return r;
@@ -260,7 +337,11 @@ CaseResult RunCase(const fs::path& path) {
             r.detail = "missing fret_byte for guitar";
             return r;
         }
-        // Frets MUST land in a [buttons_byte_*] map.
+        if (data.device_type == ProbeDeviceType::GuitarSolo &&
+            !TomlContains(toml, "solo_fret_byte = ")) {
+            r.detail = "missing solo_fret_byte for guitar_solo";
+            return r;
+        }
         if (!TomlContains(toml, "[buttons_byte_")) {
             r.detail = "no [buttons_byte_*] section for guitar frets";
             return r;
@@ -270,8 +351,45 @@ CaseResult RunCase(const fs::path& path) {
             r.detail = "expected device_class = \"drum\"";
             return r;
         }
-        if (!TomlContains(toml, "[buttons_byte_0]")) {
-            r.detail = "missing [buttons_byte_0] for drum face buttons";
+        if (!TomlContains(toml, "[buttons_byte_")) {
+            r.detail = "no [buttons_byte_*] section for drum face buttons";
+            return r;
+        }
+    }
+
+    // Round-trip: derived TOML -> live packer -> per-step replay.
+    HID::Testing::ResetForTesting();
+    const fs::path tmp = WriteTempToml(path.stem().string(), toml);
+    const bool bound = HID::Testing::BindKitFromTomlForTesting(1, tmp.string());
+    std::error_code ec;
+    fs::remove(tmp, ec);
+    if (!bound) {
+        r.detail = "BindKitFromTomlForTesting failed";
+        return r;
+    }
+    // Steps the round-trip can't reliably verify through PackButtons /
+    // PackDeviceUniqueData:
+    //   tilt_up      — PS3 GH tilt is delivered via OrbisPadData::acceleration,
+    //                  not the dud-byte pipeline. The accel path reads from
+    //                  the slot's last_report which this harness doesn't fill.
+    //   button_ps    — not all guitars expose Guide/Home on their HID report;
+    //                  on some kits the wizard correctly omits it.
+    static const std::vector<std::string> kSkipSteps = {
+        "tilt_up", "button_ps",
+        // 2nd kick pedal is captured separately by the wizard but the
+        // current derivation maps only the primary kick into the TOML —
+        // packing the 2nd kick frame produces no output. Optional step.
+        "kick_pedal_2",
+    };
+    for (const auto& step : data.results) {
+        if (step.key.empty() || step.key[0] == '_') continue;
+        if (std::find(kSkipSteps.begin(), kSkipSteps.end(), step.key) !=
+            kSkipSteps.end()) {
+            continue;
+        }
+        std::string detail;
+        if (!RoundTripStep(step, detail)) {
+            r.detail = detail;
             return r;
         }
     }

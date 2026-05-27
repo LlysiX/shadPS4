@@ -7,6 +7,7 @@
 #include <QBrush>
 #include <QColor>
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QHeaderView>
@@ -62,6 +63,7 @@ const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
         {"blue_pad",        QObject::tr("Blue pad — hit soft and hard"),                       "velocity", false},
         {"green_pad",       QObject::tr("Green pad — hit soft and hard"),                      "velocity", true},
         {"yellow_pad",      QObject::tr("Yellow pad (skip if absent)"),                        "velocity", true},
+        {"orange_pad",      QObject::tr("Orange pad (5-lane GH kits only — skip if absent)"),  "velocity", true},
         {"kick_pedal",      QObject::tr("Kick pedal — press soft and hard"),                   "velocity", false},
         {"kick_pedal_2",    QObject::tr("2nd kick pedal (skip if absent)"),                    "velocity", true},
         {"yellow_cymbal",   QObject::tr("Yellow cymbal"),                                       "velocity", true},
@@ -114,10 +116,38 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
     return steps;
 }
 
+// Solo-fret guitar = standard guitar walkthrough + 5 upper-neck solo frets.
+// PS4 RB Mustang / PS5 Riffmaster have these; PS3 GH/RB and most XInput
+// guitars do not. Picked from the dropdown so users who lack them don't
+// have to step through "skip" five extra times.
+const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
+    static const std::vector<KitProbeDialog::StepDef> steps = [] {
+        std::vector<KitProbeDialog::StepDef> v = GuitarSteps();
+        auto insertAt = v.begin();
+        for (auto it = v.begin(); it != v.end(); ++it) {
+            if (it->key == "strum_up") { insertAt = it; break; }
+        }
+        v.insert(insertAt, {
+            {"solo_green_fret",  QObject::tr("UPPER solo GREEN fret — hold and release"),    "digital", false},
+            {"solo_red_fret",    QObject::tr("UPPER solo RED fret"),                          "digital", false},
+            {"solo_yellow_fret", QObject::tr("UPPER solo YELLOW fret"),                       "digital", false},
+            {"solo_blue_fret",   QObject::tr("UPPER solo BLUE fret"),                         "digital", false},
+            {"solo_orange_fret", QObject::tr("UPPER solo ORANGE fret"),                       "digital", false},
+        });
+        return v;
+    }();
+    return steps;
+}
+
 const std::vector<KitProbeDialog::StepDef>& Steps(KitProbeDialog::DeviceType t) {
     // Drum and ProDrum share the same input step list — Pro mode just emits
     // a different TOML layout downstream (separate cymbal slots).
-    return (t == KitProbeDialog::DeviceType::Guitar) ? GuitarSteps() : DrumSteps();
+    using DT = KitProbeDialog::DeviceType;
+    switch (t) {
+    case DT::Guitar:     return GuitarSteps();
+    case DT::GuitarSolo: return GuitarSoloSteps();
+    default:             return DrumSteps();
+    }
 }
 
 QString hexByte(uint8_t v) { return QStringLiteral("%1").arg(v, 2, 16, QChar('0')); }
@@ -392,11 +422,22 @@ void KitProbeDialog::onStartProbe() {
 
     // Init step results table
     m_results.clear();
+    // Index 0 is the "— pick instrument type —" placeholder. Force the user
+    // to pick one before the walkthrough starts, so we don't silently
+    // capture a guitar fixture as if it were a drum kit.
     switch (ui->deviceTypeCombo->currentIndex()) {
-        case 0:  m_deviceType = DeviceType::Drum;    break;  // 5-lane / no cymbals
-        case 1:  m_deviceType = DeviceType::ProDrum; break;  // Pro drums
-        case 2:  m_deviceType = DeviceType::Guitar;  break;
-        default: m_deviceType = DeviceType::Drum;    break;
+        case 1:  m_deviceType = DeviceType::Drum;       break;  // 5-lane / no cymbals
+        case 2:  m_deviceType = DeviceType::ProDrum;    break;  // Pro drums
+        case 3:  m_deviceType = DeviceType::Guitar;     break;
+        case 4:  m_deviceType = DeviceType::GuitarSolo; break;  // PS4/PS5 RB solo frets
+        default:
+            QMessageBox::information(
+                this, tr("Pick an instrument type"),
+                tr("Pick an instrument type from the dropdown on the left "
+                   "before starting the probe."));
+            closeDevice();
+            setState(State::SelectDevice);
+            return;
     }
     for (const auto& s : Steps(m_deviceType)) m_results.push_back({s, {}, {}, false});
     m_currentStep = -1;
@@ -687,9 +728,28 @@ void KitProbeDialog::onTickTimer() {
     if (m_state == State::Idle) {
         ui->stepProgress->setValue(std::min(elapsed, kBaselineDurationMs));
         if (elapsed >= kBaselineDurationMs) {
-            ui->stepPrompt->setText(
-                tr("Baseline captured. Click Next to begin the walk-through."));
-            ui->nextBtn->setEnabled(true);
+            // A "silent" device (Santroller-style firmware, some wireless
+            // kits) only sends a report on state change. If we got nothing
+            // through the 1.5 s baseline, every byte still holds the
+            // initial baseline_min=0xFF / baseline_max=0 sentinels. Warn
+            // the user instead of silently continuing with all-zeros
+            // baseline data — the wizard's per-step transition detection
+            // misfires when baseline is wrong.
+            const bool received_anything = std::any_of(
+                m_baselineMin.begin(),
+                m_baselineMin.begin() + m_reportLen,
+                [](int v) { return v != 0xFF; });
+            if (!received_anything) {
+                ui->stepPrompt->setText(
+                    tr("⚠ No data received during baseline. Hold any "
+                       "button now to wake the kit, then release. The "
+                       "wizard will continue once it sees its first "
+                       "report."));
+            } else {
+                ui->stepPrompt->setText(
+                    tr("Baseline captured. Click Next to begin the walk-through."));
+                ui->nextBtn->setEnabled(true);
+            }
         }
     } else if (m_state == State::Step && m_sampling) {
         ui->stepProgress->setValue(std::min(elapsed, kStepDurationMs));
@@ -719,9 +779,10 @@ QString KitProbeDialog::deriveKitToml() const {
     data.is_xinput = m_isXInput;
     data.report_length = m_reportLen;
     switch (m_deviceType) {
-    case DeviceType::Drum:    data.device_type = ProbeDeviceType::Drum;    break;
-    case DeviceType::ProDrum: data.device_type = ProbeDeviceType::ProDrum; break;
-    case DeviceType::Guitar:  data.device_type = ProbeDeviceType::Guitar;  break;
+    case DeviceType::Drum:       data.device_type = ProbeDeviceType::Drum;       break;
+    case DeviceType::ProDrum:    data.device_type = ProbeDeviceType::ProDrum;    break;
+    case DeviceType::Guitar:     data.device_type = ProbeDeviceType::Guitar;     break;
+    case DeviceType::GuitarSolo: data.device_type = ProbeDeviceType::GuitarSolo; break;
     }
     for (int i = 0; i < 64; ++i) {
         data.baseline_max[i] = m_baselineMax[i];
@@ -765,9 +826,16 @@ void KitProbeDialog::onSaveResults() {
         return;
     }
 
-    const QString base = QStringLiteral("kit_%1_%2")
+    // Two physical devices can share a VID:PID (Santroller flashed as a GH5
+    // clone vs. as a Pro Drum, for instance). Include a short SHA-1 of the
+    // device name in the filename so the second capture doesn't overwrite
+    // the first when the user re-runs the wizard for a different kit.
+    const QByteArray name_hash = QCryptographicHash::hash(
+        m_deviceName.toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    const QString base = QStringLiteral("kit_%1_%2_%3")
         .arg(m_vid, 4, 16, QChar('0'))
-        .arg(m_pid, 4, 16, QChar('0'));
+        .arg(m_pid, 4, 16, QChar('0'))
+        .arg(QString::fromLatin1(name_hash));
     const QString tomlPath = QString::fromStdString((dir / (base.toStdString() + ".toml")).string());
     const QString rawPath  = QString::fromStdString((dir / (base.toStdString() + ".raw.jsonl")).string());
 
@@ -787,16 +855,17 @@ void KitProbeDialog::onSaveResults() {
     if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
         const char* deviceTypeStr = "guitar";
         switch (m_deviceType) {
-        case DeviceType::Drum:    deviceTypeStr = "drum"; break;
-        case DeviceType::ProDrum: deviceTypeStr = "drum_pro"; break;
-        case DeviceType::Guitar:  deviceTypeStr = "guitar"; break;
+        case DeviceType::Drum:       deviceTypeStr = "drum"; break;
+        case DeviceType::ProDrum:    deviceTypeStr = "drum_pro"; break;
+        case DeviceType::Guitar:     deviceTypeStr = "guitar"; break;
+        case DeviceType::GuitarSolo: deviceTypeStr = "guitar_solo"; break;
         }
         // "source" distinguishes raw HID dumps from SDL_GameController/XInput
         // taps. The test harness uses it to decide whether report[0] is a HID
         // report-ID or already the first data byte.
         const char* sourceStr = m_isXInput ? "xinput" : "hid";
         QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":2,"
+            "{\"type\":\"meta\",\"version\":3,"
             "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
             "\"device_name\":\"%3\",\"device_type\":\"%4\","
             "\"source\":\"%5\","

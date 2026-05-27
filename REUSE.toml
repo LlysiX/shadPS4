@@ -136,6 +136,13 @@ path = "dist/qt.conf"
 SPDX-FileCopyrightText = "shadPS4 Emulator Project"
 SPDX-License-Identifier = "GPL-2.0-or-later"
 
+# HID test-kit raw captures and synthetic fixtures (binary data, no inline headers).
+[[annotations]]
+path = "tests/hid_kits/**.raw.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadPS4 Emulator Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
 # Upstream placeholder file (empty), inherited from the rb4 branch.
 [[annotations]]
 path = "hi"

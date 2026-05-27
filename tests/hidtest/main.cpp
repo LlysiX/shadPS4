@@ -400,6 +400,20 @@ CaseResult RunCase(const fs::path& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // `hidtest --dump <file.raw.jsonl>` — parse the fixture, run DeriveKitToml,
+    // print the resulting TOML to stdout. Helpful when a stored .toml looks
+    // incomplete and we want to confirm whether the current code path produces
+    // the right output from the captured data (vs. an older wizard binary
+    // having written the .toml).
+    if (argc >= 3 && std::string(argv[1]) == "--dump") {
+        KitProbeData data;
+        if (!LoadKitProbeFromFile(fs::path(argv[2]), data)) {
+            std::cerr << "hidtest --dump: could not parse " << argv[2] << "\n";
+            return 2;
+        }
+        std::cout << DeriveKitToml(data);
+        return 0;
+    }
     fs::path fixtures = (argc > 1) ? fs::path(argv[1])
                                    : fs::current_path() / "tests" / "hid_kits";
     if (!fs::is_directory(fixtures)) {

@@ -66,10 +66,6 @@ const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
         {"orange_pad",      QObject::tr("Orange pad (5-lane GH kits only — skip if absent)"),  "velocity", true},
         {"kick_pedal",      QObject::tr("Kick pedal — press soft and hard"),                   "velocity", false},
         {"kick_pedal_2",    QObject::tr("2nd kick pedal (skip if absent)"),                    "velocity", true},
-        {"yellow_cymbal",   QObject::tr("Yellow cymbal"),                                       "velocity", true},
-        {"orange_cymbal",   QObject::tr("Orange cymbal"),                                       "velocity", true},
-        {"blue_cymbal",     QObject::tr("Blue cymbal (skip if absent)"),                       "velocity", true},
-        {"green_cymbal",    QObject::tr("Green cymbal (skip if absent)"),                      "velocity", true},
         {"button_start",    QObject::tr("Start button"),                                        "digital",  false},
         {"button_select",   QObject::tr("Select button"),                                       "digital",  false},
         {"button_ps",       QObject::tr("PS / Home button (skip if absent)"),                   "digital",  true},
@@ -139,13 +135,30 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
     return steps;
 }
 
+const std::vector<KitProbeDialog::StepDef>& ProDrumSteps() {
+    static const std::vector<KitProbeDialog::StepDef> steps = [] {
+        std::vector<KitProbeDialog::StepDef> v = DrumSteps();
+        auto insertAt = v.begin();
+        for (auto it = v.begin(); it != v.end(); ++it) {
+            if (it->key == "button_start") { insertAt = it; break; }
+        }
+        v.insert(insertAt, {
+            {"yellow_cymbal",   QObject::tr("Yellow cymbal"),                                       "velocity", true},
+            {"orange_cymbal",   QObject::tr("Orange cymbal (skip if absent)"),                      "velocity", true},
+            {"blue_cymbal",     QObject::tr("Blue cymbal (skip if absent)"),                       "velocity", true},
+            {"green_cymbal",    QObject::tr("Green cymbal (skip if absent)"),                      "velocity", true},
+        });
+        return v;
+    }();
+    return steps;
+}
+
 const std::vector<KitProbeDialog::StepDef>& Steps(KitProbeDialog::DeviceType t) {
-    // Drum and ProDrum share the same input step list — Pro mode just emits
-    // a different TOML layout downstream (separate cymbal slots).
     using DT = KitProbeDialog::DeviceType;
     switch (t) {
     case DT::Guitar:     return GuitarSteps();
     case DT::GuitarSolo: return GuitarSoloSteps();
+    case DT::ProDrum:    return ProDrumSteps();
     default:             return DrumSteps();
     }
 }
@@ -856,8 +869,24 @@ void KitProbeDialog::onSaveResults() {
         QMessageBox::warning(this, tr("Save failed"), f.errorString());
         return;
     }
-    f.write(deriveKitToml().toUtf8());
+    const QString tomlStr = deriveKitToml();
+    f.write(tomlStr.toUtf8());
     f.close();
+
+    bool seems_off = false;
+    if (m_deviceType == DeviceType::Guitar || m_deviceType == DeviceType::GuitarSolo) {
+        if (!tomlStr.contains(QStringLiteral("fret_byte")) &&
+            !tomlStr.contains(QStringLiteral("fret_mask"))) {
+            seems_off = true;
+        }
+        if (!tomlStr.contains(QStringLiteral("strum_down\""))) {
+            seems_off = true;
+        }
+    } else {
+        if (!tomlStr.contains(QStringLiteral("dud0_bit_remap"))) {
+            seems_off = true;
+        }
+    }
 
     // Raw HID capture file. First line is a "meta" record with provenance
     // (format version, VID:PID, device name, report length, ISO timestamp);
@@ -915,9 +944,16 @@ void KitProbeDialog::onSaveResults() {
         rf.close();
     }
 
-    QMessageBox::information(this, tr("Saved"),
-        tr("Saved into your shadPS4 user folder:\n\n"
-           "  %1   (runtime kit definition, auto-loaded at next launch)\n"
-           "  %2   (raw HID captures, for re-deriving the mapping later)")
-            .arg(tomlPath).arg(rawPath));
+    QString msg = tr("Saved into your shadPS4 user folder:\n\n"
+                     "  %1   (runtime kit definition, auto-loaded at next launch)\n"
+                     "  %2   (raw HID captures, for re-deriving the mapping later)")
+                      .arg(tomlPath).arg(rawPath);
+
+    if (seems_off) {
+        msg += tr("\n\nWARNING: It seems something is off with the generated mapping! "
+                  "If your device acts weird, please send the generated .toml and "
+                  ".raw.jsonl files to the developer.");
+    }
+
+    QMessageBox::information(this, seems_off ? tr("Saved (with warnings)") : tr("Saved"), msg);
 }

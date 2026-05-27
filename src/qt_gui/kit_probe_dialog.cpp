@@ -612,14 +612,11 @@ void KitProbeDialog::onHidReadable() {
         }
         std::memcpy(m_lastReport.data(), buf, n);
         m_lastReportLen = n;
-        // Keep updating the baseline band as long as the user hasn't actually
-        // pressed "Begin sampling" on a step — covers Santroller-style kits
-        // that only emit HID reports on state change, so the 1.5 s idle
-        // window may capture nothing. Letting baseline accumulate through
-        // the post-baseline "Press Begin when ready" period gives those kits
-        // a real chance to emit at least one quiescent frame.
-        if (m_state == State::Idle ||
-            (m_state == State::Step && !m_sampling)) {
+        // Keep updating the baseline band as long as the kit is in the Idle
+        // phase. This covers Santroller-style kits that only emit HID reports
+        // on state change, so the 1.5 s idle window may capture nothing
+        // until the user presses a button.
+        if (m_state == State::Idle) {
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
@@ -649,14 +646,11 @@ void KitProbeDialog::onHidReadable() {
         m_lastReportLen = (int)n;
 
         // Accumulate into current step or baseline.
-        // Keep updating the baseline band as long as the user hasn't actually
-        // pressed "Begin sampling" on a step — covers Santroller-style kits
-        // that only emit HID reports on state change, so the 1.5 s idle
-        // window may capture nothing. Letting baseline accumulate through
-        // the post-baseline "Press Begin when ready" period gives those kits
-        // a real chance to emit at least one quiescent frame.
-        if (m_state == State::Idle ||
-            (m_state == State::Step && !m_sampling)) {
+        // Keep updating the baseline band as long as the kit is in the Idle
+        // phase. This covers Santroller-style kits that only emit HID reports
+        // on state change, so the 1.5 s idle window may capture nothing
+        // until the user presses a button.
+        if (m_state == State::Idle) {
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];

@@ -33,7 +33,7 @@ jobs:
     - name: Install build tools
       run: sudo apt-get update && sudo apt-get install -y cmake build-essential
     - name: Configure
-      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF -DSDL_X11=OFF -DSDL_WAYLAND=OFF
     - name: Build hidtest
       run: cmake --build build --target hidtest --parallel $(nproc)
     - name: Run ctest

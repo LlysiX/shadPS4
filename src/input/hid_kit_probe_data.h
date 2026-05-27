@@ -62,8 +62,10 @@ struct KitProbeData {
 };
 
 // Derive a runtime TOML kit definition from probe state. Same code path
-// whether the input came from a live wizard session or a captured
-// .raw.jsonl replay.
 std::string DeriveKitToml(const KitProbeData& data);
+
+// Compute baseline_max, baseline_min, and motion_bytes from the recorded
+// step frames (specifically _idle_baseline and _motion_baseline).
+void DeriveBaselineAndMotion(KitProbeData& data);
 
 }  // namespace Input::HidInstrument

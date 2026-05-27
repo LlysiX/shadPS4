@@ -441,6 +441,7 @@ void KitProbeDialog::onStartProbe() {
     }
     for (const auto& s : Steps(m_deviceType)) m_results.push_back({s, {}, {}, false});
     m_currentStep = -1;
+    m_idleRaw.clear();
     std::fill(m_baselineMax.begin(), m_baselineMax.end(), 0);
     std::fill(m_baselineMin.begin(), m_baselineMin.end(), 0xFF);
     m_motionBytes.clear();
@@ -617,6 +618,7 @@ void KitProbeDialog::onHidReadable() {
         // on state change, so the 1.5 s idle window may capture nothing
         // until the user presses a button.
         if (m_state == State::Idle) {
+            m_idleRaw.emplace_back(buf, buf + n);
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
@@ -651,6 +653,7 @@ void KitProbeDialog::onHidReadable() {
         // on state change, so the 1.5 s idle window may capture nothing
         // until the user presses a button.
         if (m_state == State::Idle) {
+            m_idleRaw.emplace_back(buf, buf + n);
             for (int i = 0; i < n; ++i) {
                 if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
                 if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
@@ -778,12 +781,25 @@ QString KitProbeDialog::deriveKitToml() const {
     case DeviceType::Guitar:     data.device_type = ProbeDeviceType::Guitar;     break;
     case DeviceType::GuitarSolo: data.device_type = ProbeDeviceType::GuitarSolo; break;
     }
-    for (int i = 0; i < 64; ++i) {
-        data.baseline_max[i] = m_baselineMax[i];
-        data.baseline_min[i] = m_baselineMin[i];
+    data.results.reserve(m_results.size() + 1);
+
+    StepResultData idle_res;
+    idle_res.key = "_idle_baseline";
+    idle_res.kind = "baseline";
+    idle_res.captured = true;
+    idle_res.raw = m_idleRaw;
+    for (int i = 0; i < 64; ++i) idle_res.bytes[i].min = 0xFF;
+    for (const auto& raw_bytes : m_idleRaw) {
+        for (std::size_t i = 0; i < raw_bytes.size() && i < 64; ++i) {
+            idle_res.bytes[i].max = std::max<int>(idle_res.bytes[i].max, raw_bytes[i]);
+            idle_res.bytes[i].min = std::min<int>(idle_res.bytes[i].min, raw_bytes[i]);
+            if (raw_bytes[i] != 0 && (idle_res.bytes[i].min_nonzero < 0 || raw_bytes[i] < idle_res.bytes[i].min_nonzero))
+                idle_res.bytes[i].min_nonzero = raw_bytes[i];
+            idle_res.bytes[i].samples++;
+        }
     }
-    data.motion_bytes = m_motionBytes;
-    data.results.reserve(m_results.size());
+    data.results.push_back(std::move(idle_res));
+
     for (const auto& r : m_results) {
         StepResultData out;
         out.key = r.def.key.toStdString();
@@ -799,6 +815,8 @@ QString KitProbeDialog::deriveKitToml() const {
         out.raw = r.raw;
         data.results.push_back(std::move(out));
     }
+
+    Input::HidInstrument::DeriveBaselineAndMotion(data);
     return QString::fromStdString(Input::HidInstrument::DeriveKitToml(data));
 }
 
@@ -859,7 +877,7 @@ void KitProbeDialog::onSaveResults() {
         // report-ID or already the first data byte.
         const char* sourceStr = m_isXInput ? "xinput" : "hid";
         QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":3,"
+            "{\"type\":\"meta\",\"version\":4,"
             "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
             "\"device_name\":\"%3\",\"device_type\":\"%4\","
             "\"source\":\"%5\","
@@ -872,6 +890,15 @@ void KitProbeDialog::onSaveResults() {
             .arg(m_reportLen)
             .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
         rf.write(meta.toUtf8());
+        for (const auto& report : m_idleRaw) {
+            QString line = QStringLiteral("{\"step\":\"_idle_baseline\",\"bytes\":[");
+            for (std::size_t i = 0; i < report.size(); ++i) {
+                if (i) line += ',';
+                line += QString::number(report[i]);
+            }
+            line += "]}\n";
+            rf.write(line.toUtf8());
+        }
         for (const auto& step : m_results) {
             if (!step.captured) continue;
             for (const auto& report : step.raw) {

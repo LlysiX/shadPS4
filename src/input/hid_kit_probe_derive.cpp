@@ -522,4 +522,62 @@ std::string DeriveKitToml(const KitProbeData& data) {
     return os.str();
 }
 
+void DeriveBaselineAndMotion(KitProbeData& data) {
+    std::array<int, 64> base_max{};
+    std::array<int, 64> base_min{};
+    base_min.fill(0xFF);
+    data.motion_bytes.clear();
+
+    bool has_idle_baseline = false;
+    bool has_any_baseline = false;
+
+    // First pass: extract baseline
+    for (const auto& r : data.results) {
+        if (r.key == "_idle_baseline" && r.captured && !r.bytes.empty()) {
+            has_idle_baseline = true;
+            has_any_baseline = true;
+            for (int i = 0; i < data.report_length; ++i) {
+                base_max[i] = r.bytes[i].max;
+                base_min[i] = r.bytes[i].min;
+            }
+        }
+    }
+
+    // Fallback for v < 4: extract baseline from _motion_baseline if no _idle_baseline found
+    if (!has_idle_baseline) {
+        for (const auto& r : data.results) {
+            if (r.key == "_motion_baseline" && r.captured && !r.bytes.empty()) {
+                has_any_baseline = true;
+                for (int i = 0; i < data.report_length; ++i) {
+                    base_max[i] = std::max<int>(base_max[i], r.bytes[i].max);
+                    base_min[i] = std::min<int>(base_min[i], r.bytes[i].min);
+                }
+            }
+        }
+    }
+
+    if (has_any_baseline) {
+        for (int i = 0; i < 64; ++i) {
+            data.baseline_max[i] = base_max[i];
+            data.baseline_min[i] = (base_min[i] == 0xFF) ? 0 : base_min[i];
+        }
+    }
+
+    // Second pass: extract motion bytes from _motion_baseline
+    // Only reliable if we have an explicit _idle_baseline (v4+), because if v < 4
+    // the motion step WAS our baseline and motion bytes would just be empty.
+    if (data.version >= 4 || has_idle_baseline) {
+        for (const auto& r : data.results) {
+            if (r.key == "_motion_baseline" && r.captured && !r.bytes.empty()) {
+                for (int i = 0; i < data.report_length; ++i) {
+                    if (r.bytes[i].samples == 0) continue;
+                    if ((r.bytes[i].max - r.bytes[i].min) > 3) {
+                        data.motion_bytes.insert(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
 }  // namespace Input::HidInstrument

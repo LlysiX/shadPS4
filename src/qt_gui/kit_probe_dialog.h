@@ -112,6 +112,7 @@ private:
 
     // Per-step results
     std::vector<StepResult> m_results;
+    std::vector<std::vector<uint8_t>> m_idleRaw;
     std::array<uint8_t, 64> m_lastReport{};
     int m_lastReportLen = 0;
     std::array<int, 64> m_baselineMax{};   // per-byte max observed at idle

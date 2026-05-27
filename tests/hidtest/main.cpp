@@ -187,22 +187,9 @@ bool LoadKitProbeFromFile(const fs::path& path, KitProbeData& out) {
     if (out.report_length <= 0) return false;
     out.report_length = std::min(out.report_length, 64);
 
-    std::array<int, 64> base_max{};
-    std::array<int, 64> base_min{};
-    base_min.fill(0xFF);
-    bool have_baseline = false;
     std::map<std::string, StepResultData*> by_key;
 
     for (auto& [step, bytes] : frames) {
-        if (step == "_motion_baseline") {
-            have_baseline = true;
-            const int n = std::min<int>(64, static_cast<int>(bytes.size()));
-            for (int i = 0; i < n; ++i) {
-                base_max[i] = std::max(base_max[i], static_cast<int>(bytes[i]));
-                base_min[i] = std::min(base_min[i], static_cast<int>(bytes[i]));
-            }
-            continue;
-        }
         StepResultData* r = nullptr;
         auto it = by_key.find(step);
         if (it == by_key.end()) {
@@ -228,12 +215,7 @@ bool LoadKitProbeFromFile(const fs::path& path, KitProbeData& out) {
         }
     }
 
-    if (have_baseline) {
-        for (int i = 0; i < 64; ++i) {
-            out.baseline_max[i] = base_max[i];
-            out.baseline_min[i] = (base_min[i] == 0xFF) ? 0 : base_min[i];
-        }
-    }
+    Input::HidInstrument::DeriveBaselineAndMotion(out);
 
     if (!meta_seen) {
         out.device_type = InferDeviceType(out.results);

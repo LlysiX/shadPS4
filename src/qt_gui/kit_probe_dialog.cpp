@@ -956,4 +956,5 @@ void KitProbeDialog::onSaveResults() {
     }
 
     QMessageBox::information(this, seems_off ? tr("Saved (with warnings)") : tr("Saved"), msg);
+    accept();
 }

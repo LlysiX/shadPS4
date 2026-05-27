@@ -21,17 +21,24 @@ jobs:
     - uses: fsfe/reuse-action@v5
 
   hid-tests:
-    # Runs the HID kit validator against every kit fixture in tests/hid_kits/.
-    # Fast — pure Python, no build needed — so this lives outside the per-OS
-    # build matrix and gives quick feedback on wizard / packer regressions.
+    # Builds just the hidtest target (linker-light — only depends on
+    # hid_kit_probe_derive.cpp + STL) and runs ctest. Fixtures under
+    # tests/hid_kits/ replay through the same DeriveKitToml the wizard
+    # uses in the running emulator.
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v5
-    - uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
-    - name: Run HID kit validator
-      run: python3 tests/validate_hid_kits.py tests/hid_kits/
+        submodules: recursive
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+    - name: Configure
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF
+    - name: Build hidtest
+      run: cmake --build build --target hidtest --parallel $(nproc)
+    - name: Run ctest
+      run: cd build && ctest --output-on-failure --label-regex hid
+
 
   clang-format:
     runs-on: ubuntu-24.04

@@ -35,6 +35,7 @@
 
 #include "common/path_util.h"
 #include "input/hid_instrument.h"
+#include "input/hid_kit_probe_data.h"
 
 namespace {
 
@@ -704,479 +705,48 @@ void KitProbeDialog::onTickTimer() {
 // ============================================================================
 
 QString KitProbeDialog::deriveKitToml() const {
-    // Pick the byte with the widest range during a step. Skips counter / accel
-    // bytes (non-zero or non-centered baseline) and noise (peak below 0x20).
-    auto velByte = [&](const QString& key) -> int {
-        for (const auto& r : m_results) {
-            if (r.def.key != key || !r.captured) continue;
-            int best = -1, best_range = 0;
-            for (int i = 3; i < m_reportLen; ++i) {
-                if (m_motionBytes.count(i)) continue;
-                const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                if (b.max < 0x20) continue;
-                const int baseline_floor = m_baselineMin[i];
-                const int baseline_ceil  = m_baselineMax[i];
-                const bool quiet_at_idle =
-                    (baseline_ceil <= 4) ||
-                    (baseline_floor >= 0x7C && baseline_ceil <= 0x84);
-                if (!quiet_at_idle) continue;
-                const int range = b.max - b.min;
-                if (range > best_range && i != 26) {
-                    best_range = range;
-                    best = i;
-                }
-            }
-            return best;
-        }
-        return -1;
-    };
-    auto flagBit = [&](const QString& key, int rawByte) -> uint8_t {
-        for (const auto& r : m_results) {
-            if (r.def.key != key || !r.captured) continue;
-            const auto& b = r.bytes[rawByte];
-            if (b.samples == 0) return 0;
-            return static_cast<uint8_t>(b.max);
-        }
-        return 0;
-    };
-    // Scan every byte for the one that gained exactly one set bit during the
-    // step (raw[i] went from baseline to baseline | (1 << k)). Used to find
-    // fret / face-button bits without hardcoding raw[0] — PS4 RB and PS5
-    // Riffmaster put frets at byte 43/46, not 0 (which is the report ID).
-    // Returns (byte_index, bit_mask) or (-1, 0).
-    // Collect every byte index that gained exactly one set bit during the
-    // step (raw[i] went baseline → baseline | (1 << k)). PS4 RB and PS5
-    // Riffmaster guitars expose each fret on two bytes (the HAT-shared face
-    // flag byte AND the dedicated fret bitmap byte) so the caller usually
-    // needs to look at all candidates before picking a winner.
-    auto detectAllFlagCandidates =
-        [&](const QString& key) -> std::vector<std::pair<int, uint8_t>> {
-        std::vector<std::pair<int, uint8_t>> out;
-        for (const auto& r : m_results) {
-            if (r.def.key != key || !r.captured) continue;
-            for (int i = 0; i < m_reportLen; ++i) {
-                if (m_motionBytes.count(i)) continue;
-                const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                const int baseline = m_baselineMax[i];
-                if (b.max <= baseline) continue;
-                const int diff = b.max & ~baseline;
-                if (diff == 0) continue;
-                if ((diff & (diff - 1)) != 0) continue;
-                out.push_back({i, static_cast<uint8_t>(diff)});
-            }
-            break;
-        }
-        return out;
-    };
-    // Single-button steps (Start, Select, etc.) pick the cleanest candidate:
-    // the one whose source byte has the lowest baseline value. Reduces the
-    // chance of latching onto a byte that already has unrelated flags set
-    // (e.g. the HAT byte where the low nibble carries dpad data).
-    auto detectFlagByteAndBit = [&](const QString& key) -> std::pair<int, uint8_t> {
-        auto cands = detectAllFlagCandidates(key);
-        if (cands.empty()) return {-1, 0};
-        auto best = cands.front();
-        int best_baseline = m_baselineMax[best.first];
-        for (std::size_t k = 1; k < cands.size(); ++k) {
-            const int base = m_baselineMax[cands[k].first];
-            if (base < best_baseline) {
-                best = cands[k];
-                best_baseline = base;
-            }
-        }
-        return best;
-    };
-    auto detectHatByte = [&]() -> int {
-        static const QStringList keys = {"dpad_up", "dpad_down",
-                                         "dpad_left", "dpad_right",
-                                         "strum_up", "strum_down"};
-        for (const auto& r : m_results) {
-            if (!r.captured || !keys.contains(r.def.key)) continue;
-            for (int i = 0; i < m_reportLen; ++i) {
-                if (m_motionBytes.count(i)) continue;
-                const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                if (b.min <= 7 && b.max <= 0x0F && (b.max - b.min) > 0) {
-                    return i;
-                }
-            }
-        }
-        return 2;  // sensible default
-    };
-    const int hatByte = detectHatByte();
-    // Detect which byte+bit the Select/Start buttons toggle. PS3 GH/RB
-    // guitars use byte 1; PS4 RB / PS5 Riffmaster use byte 9.
-    auto [selByte, b_sel] = detectFlagByteAndBit("button_select");
-    auto [staByte, b_sta] = detectFlagByteAndBit("button_start");
-    if (selByte < 0) { selByte = 1; }
-    if (staByte < 0) { staByte = 1; }
+    // Convert wizard state into the Qt-free KitProbeData snapshot and call
+    // the shared deriver. The same function runs in tests against
+    // .raw.jsonl captures, so any TOML-shape bug shows up before shipping.
+    using Input::HidInstrument::KitProbeData;
+    using Input::HidInstrument::StepResultData;
+    using Input::HidInstrument::ProbeDeviceType;
 
-    struct DudEntry { int idx; int rawByte; const char* comment; };
-    std::vector<DudEntry> dudPlan;
-    struct ButtonBit { int byte; uint8_t mask; const char* name; const char* origin; };
-    std::vector<ButtonBit> button_bits;
-    struct ScaleEntry { int dudIdx; const char* stepKey; const char* comment; };
-    std::vector<ScaleEntry> scalePlan;
-    const char* deviceClass = "drum";
-
-    if (m_deviceType == DeviceType::Guitar) {
-        deviceClass = "guitar";
-        dudPlan = {
-            {2, velByte("whammy_bar"),    "whammy bar"},
-            {3, velByte("touch_slider"),  "touch slider"},
-        };
-        // Pick the raw byte that covers the MOST frets cleanly. PS4 RB and
-        // PS5 Riffmaster expose each fret on two bytes (face-flag byte AND
-        // dedicated bitmap byte); only the bitmap byte covers all five with
-        // clean baselines. Per-step independent detection picked whichever
-        // byte happened to satisfy the single-bit check first, which led to
-        // mixed-byte fret definitions that didn't round-trip into dud[3].
-        struct FretMap { const char* step; const char* name; const char* origin; };
-        const FretMap fretMaps[] = {
-            {"green_fret",  "cross",    "green fret"},
-            {"red_fret",    "circle",   "red fret"},
-            {"yellow_fret", "triangle", "yellow fret"},
-            {"blue_fret",   "square",   "blue fret"},
-            {"orange_fret", "l1",       "orange fret"},
-        };
-        std::array<std::vector<std::pair<int, uint8_t>>, 5> fretCandidates;
-        std::map<int, int> coverage;
-        for (int i = 0; i < 5; ++i) {
-            fretCandidates[i] = detectAllFlagCandidates(fretMaps[i].step);
-            for (const auto& [byte, mask] : fretCandidates[i]) {
-                ++coverage[byte];
-            }
-        }
-        // Tiebreak by the green_blue combo step. The CORRECT fret bitmap byte
-        // shows bits (green | blue) set cleanly — i.e. its max during the
-        // combo equals (its own baseline | green_mask | blue_mask). Bytes
-        // that share space with HAT/face flags would show extra unrelated
-        // bits and not match. This filters out the "face flag" candidate
-        // (byte 5 on PS4 RB) in favour of the dedicated bitmap byte (46).
-        auto comboBitsForByte = [&](int byte) -> std::pair<uint8_t, uint8_t> {
-            // returns (green_bit, blue_bit) on this byte from the per-step
-            // candidates, or (0, 0) if either is missing.
-            uint8_t g = 0, b = 0;
-            for (const auto& [bb, mm] : fretCandidates[0]) if (bb == byte) { g = mm; break; }
-            for (const auto& [bb, mm] : fretCandidates[3]) if (bb == byte) { b = mm; break; }
-            return {g, b};
-        };
-        auto byteValidatesCombo = [&](int byte) -> bool {
-            auto [g, b] = comboBitsForByte(byte);
-            if (g == 0 || b == 0) return false;
-            // Look up the green_blue step's max on this byte.
-            for (const auto& r : m_results) {
-                if (r.def.key != QStringLiteral("green_blue") || !r.captured) continue;
-                if (byte < 0 || byte >= m_reportLen) return false;
-                const int max = r.bytes[byte].max;
-                const int baseline = m_baselineMax[byte];
-                return (max & ~baseline) == (g | b);
-            }
-            return false;
-        };
-        int chosenByte = -1, chosenCoverage = 0, chosenBaseline = 0x7FFFFFFF;
-        bool chosenValidated = false;
-        for (const auto& [byte, count] : coverage) {
-            const int base = m_baselineMax[byte];
-            const bool validated = byteValidatesCombo(byte);
-            // Prefer (1) bytes that pass the combo check, (2) higher fret
-            // coverage, (3) lower baseline. Order matters: a byte that passes
-            // the combo beats a higher-coverage byte that doesn't.
-            const auto rank = [&](bool v, int c, int b) {
-                return std::make_tuple(v ? 1 : 0, c, -b);
-            };
-            if (rank(validated, count, base) >
-                rank(chosenValidated, chosenCoverage, chosenBaseline)) {
-                chosenByte = byte;
-                chosenCoverage = count;
-                chosenBaseline = base;
-                chosenValidated = validated;
-            }
-        }
-        if (chosenByte >= 0) {
-            for (int i = 0; i < 5; ++i) {
-                for (const auto& [byte, mask] : fretCandidates[i]) {
-                    if (byte != chosenByte) continue;
-                    button_bits.push_back({byte, mask, fretMaps[i].name,
-                                           fretMaps[i].origin});
-                    break;
-                }
-            }
-        }
-        scalePlan = {};
-    } else {
-        deviceClass = "drum";
-        dudPlan = {
-            {2, velByte("yellow_cymbal"), "yellow velocity"},
-            {3, velByte("red_pad"),       "red velocity"},
-            {4, velByte("green_pad"),     "green velocity"},
-            {5, velByte("blue_pad"),      "blue velocity"},
-            {6, velByte("kick_pedal"),    "kick velocity"},
-            {7, velByte("orange_cymbal"), "orange velocity"},
-        };
-        const uint8_t b_sq = flagBit("button_square",   0);
-        const uint8_t b_cr = flagBit("button_cross",    0);
-        const uint8_t b_ci = flagBit("button_circle",   0);
-        const uint8_t b_tr = flagBit("button_triangle", 0);
-        const uint8_t face = b_sq | b_cr | b_ci | b_tr;
-        const uint8_t b_kick   = flagBit("kick_pedal",   0) & ~face;
-        const uint8_t b_orange = flagBit("orange_cymbal", 0) & ~face;
-        button_bits = {
-            {0, b_sq,     "square",   "blue pad"},
-            {0, b_cr,     "cross",    "green pad"},
-            {0, b_ci,     "circle",   "red pad"},
-            {0, b_tr,     "triangle", "yellow pad / yellow cymbal"},
-            {0, b_kick,   "l1",       "kick pedal"},
-            {0, b_orange, "r1",       "orange cymbal (5th lane in GH-mode)"},
-        };
-        scalePlan = {
-            {2, "yellow_cymbal", "yellow"},
-            {3, "red_pad",       "red"},
-            {4, "green_pad",     "green"},
-            {5, "blue_pad",      "blue"},
-            {6, "kick_pedal",    "kick"},
-            {7, "orange_cymbal", "orange"},
-        };
+    KitProbeData data;
+    data.vid = m_vid;
+    data.pid = m_pid;
+    data.device_name = m_deviceName.toStdString();
+    data.is_xinput = m_isXInput;
+    data.report_length = m_reportLen;
+    switch (m_deviceType) {
+    case DeviceType::Drum:    data.device_type = ProbeDeviceType::Drum;    break;
+    case DeviceType::ProDrum: data.device_type = ProbeDeviceType::ProDrum; break;
+    case DeviceType::Guitar:  data.device_type = ProbeDeviceType::Guitar;  break;
     }
-
-    int dud[12];
-    dud[0]  = 0;
-    dud[1]  = 1;
-    for (int i = 2; i <= 7; ++i) dud[i] = -1;
-    for (const auto& e : dudPlan) dud[e.idx] = e.rawByte;
-    dud[8]  = hatByte;
-    dud[9]  = -1;
-    dud[10] = -1;
-    dud[11] = std::max(0, m_reportLen - 1);
-
-    std::ostringstream os;
-    os << "# Generated by KitProbeDialog. Picked up at next launch.\n\n";
-    os << "schema       = \"shadps4-legacy-instrument/v1\"\n";
-    os << "vendor_id    = \"0x" << std::hex << m_vid << "\"\n";
-    os << "product_id   = \"0x" << m_pid << "\"\n";
-    os << std::dec;
-    os << "name         = \"" << m_deviceName.toStdString() << "\"\n";
-    os << "device_class = \"" << deviceClass << "\"\n";
-    if (m_isXInput) {
-        os << "source       = \"xinput\"\n";
+    for (int i = 0; i < 64; ++i) {
+        data.baseline_max[i] = m_baselineMax[i];
+        data.baseline_min[i] = m_baselineMin[i];
     }
-    os << "report_length = " << m_reportLen << "\n";
-    os << "device_unique_data = [";
-    for (int i = 0; i < 12; ++i) {
-        if (i) os << ", ";
-        os << dud[i];
+    data.motion_bytes = m_motionBytes;
+    data.results.reserve(m_results.size());
+    for (const auto& r : m_results) {
+        StepResultData out;
+        out.key = r.def.key.toStdString();
+        out.kind = r.def.kind.toStdString();
+        out.captured = r.captured;
+        for (int i = 0; i < 64; ++i) {
+            out.bytes[i].min = r.bytes[i].min;
+            out.bytes[i].max = r.bytes[i].max;
+            out.bytes[i].min_nonzero = r.bytes[i].min_nonzero;
+            out.bytes[i].transitions = r.bytes[i].transitions;
+            out.bytes[i].samples = r.bytes[i].samples;
+        }
+        out.raw = r.raw;
+        data.results.push_back(std::move(out));
     }
-    os << "]\n";
-    // Only emit clear_dud0_when_raw1_bits when Start/Select share the byte
-    // that carries the fret bitmap (PS3 GH: both at byte 1, fret at byte 0).
-    // On PS4/PS5 layouts the fret bitmap and menu buttons live in different
-    // bytes so the suppression isn't needed.
-    if (selByte == 1 && staByte == 1) {
-        os << "clear_dud0_when_raw1_bits = 0x" << std::hex
-           << int(b_sel | b_sta) << std::dec << "\n";
-    }
-
-    // Derive fret_byte / fret_mask / dud0_bit_remap from the same chosen
-    // byte we already picked when populating button_bits above. PS3 layouts
-    // (frets at byte 0) and PS4 RB / PS5 Riffmaster (dedicated fret bitmap
-    // byte 43/46) both end up here without a second pass through the per-
-    // step heuristic.
-    int fretByte = -1;
-    int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-    bool needs_remap = false;
-    if (m_deviceType == DeviceType::Guitar) {
-        struct FretMap { const char* step; int ps4_bit; };
-        const FretMap frets[] = {
-            {"green_fret",  0},
-            {"red_fret",    1},
-            {"yellow_fret", 2},
-            {"blue_fret",   3},
-            {"orange_fret", 4},
-        };
-        uint8_t fretMaskBits = 0;
-        // Re-run the coverage scan locally so this block doesn't depend on
-        // the button_bits state above.
-        std::map<int, int> coverage;
-        std::array<std::vector<std::pair<int, uint8_t>>, 5> cands;
-        for (int i = 0; i < 5; ++i) {
-            cands[i] = detectAllFlagCandidates(frets[i].step);
-            for (const auto& [byte, _] : cands[i]) ++coverage[byte];
-        }
-        int chosen = -1, chosenCov = 0, chosenBase = 0x7FFFFFFF;
-        for (const auto& [byte, count] : coverage) {
-            const int base = m_baselineMax[byte];
-            if (count > chosenCov || (count == chosenCov && base < chosenBase)) {
-                chosen = byte; chosenCov = count; chosenBase = base;
-            }
-        }
-        for (int i = 0; i < 5; ++i) {
-            for (const auto& [byte, mask] : cands[i]) {
-                if (byte != chosen) continue;
-                if (fretByte < 0) fretByte = byte;
-                fretMaskBits |= mask;
-                for (int b = 0; b < 8; ++b) {
-                    if (mask & (1 << b)) {
-                        if (b != frets[i].ps4_bit) needs_remap = true;
-                        remap[b] = frets[i].ps4_bit;
-                        break;
-                    }
-                }
-                break;
-            }
-        }
-        if (needs_remap) {
-            os << "dud0_bit_remap = [";
-            for (int i = 0; i < 8; ++i) {
-                if (i) os << ", ";
-                os << remap[i];
-            }
-            os << "]\n";
-        }
-        // Emit fret_mask when only some bits of fretByte hold fret data
-        // (PS4 RB / PS5 Riffmaster share the byte with HAT in the low nibble).
-        if (fretMaskBits != 0 && fretMaskBits != 0xFF) {
-            os << "fret_mask = 0x" << std::hex << int(fretMaskBits) << std::dec << "\n";
-        }
-    }
-    os << "hat_byte = " << hatByte << "\n";
-    if (m_deviceType == DeviceType::ProDrum) {
-        os << "drum_ps4_layout = true\n";
-        const int red_b    = velByte("red_pad");
-        const int blue_b   = velByte("blue_pad");
-        const int yellow_b = velByte("yellow_pad");
-        const int green_b  = velByte("green_pad");
-        const int y_cym    = velByte("yellow_cymbal");
-        const int b_cym    = velByte("blue_cymbal");
-        const int g_cym    = velByte("green_cymbal");
-        const int o_cym    = velByte("orange_cymbal");
-        os << "drum_red_byte           = " << red_b    << "\n";
-        os << "drum_blue_byte          = " << blue_b   << "\n";
-        os << "drum_yellow_byte        = " << (yellow_b >= 0 ? yellow_b : y_cym) << "\n";
-        os << "drum_green_byte         = " << green_b  << "\n";
-        os << "drum_yellow_cymbal_byte = " << (y_cym >= 0 ? y_cym : yellow_b) << "\n";
-        os << "drum_blue_cymbal_byte   = " << b_cym    << "\n";
-        os << "drum_green_cymbal_byte  = " << (g_cym >= 0 ? g_cym : o_cym) << "\n";
-    }
-    if (m_deviceType == DeviceType::Guitar) {
-        os << "guitar_ps4_layout = true\n";
-        if (fretByte >= 0) os << "fret_byte = " << fretByte << "\n";
-        const int whammy = velByte("whammy_bar");
-        const int touch  = velByte("touch_slider");
-        if (whammy >= 0) {
-            os << "whammy_byte = " << whammy << "\n";
-            // PS3 GH guitars idle at 0x80 (centered axis); PS4 RB / PS5
-            // Riffmaster idle at 0x00. Use the captured baseline to decide.
-            const int wb = m_baselineMax[whammy];
-            if (wb < 0x40) os << "whammy_baseline = 0\n";
-        }
-        if (touch  >= 0) os << "touch_byte  = " << touch  << "\n";
-        if (touch  >= 0) os << "tone_byte   = " << touch  << "\n";
-    }
-    if (m_deviceType == DeviceType::Guitar && !m_motionBytes.empty()) {
-        const int tilt = *m_motionBytes.begin();
-        os << "tilt_byte      = " << tilt << "\n";
-        const bool has_high = m_motionBytes.count(tilt + 1) > 0;
-        const int baseline = (m_baselineMin[tilt] + m_baselineMax[tilt]) / 2;
-        // Compare the tilt byte while the user actively lifts the guitar
-        // (the dedicated "tilt_up" step) against its idle midpoint, so we
-        // know whether raw INCREASES or DECREASES when pointed up. Works
-        // regardless of accel polarity (PS3 GH: lower = up; PS5: higher = up).
-        int up_min = baseline, up_max = baseline;
-        for (const auto& r : m_results) {
-            if (r.def.key != QStringLiteral("tilt_up") || !r.captured) continue;
-            if (tilt < 0 || tilt >= m_reportLen) break;
-            up_min = r.bytes[tilt].min;
-            up_max = r.bytes[tilt].max;
-            break;
-        }
-        const int up_delta_high = up_max - baseline;
-        const int up_delta_low  = baseline - up_min;
-        const bool invert = up_delta_high > up_delta_low;
-        if (has_high) {
-            os << "tilt_byte_high = " << (tilt + 1) << "\n";
-            os << "tilt_baseline  = 512\n";
-            os << "tilt_scale     = 128\n";
-        } else {
-            os << "tilt_baseline  = " << baseline << "\n";
-            os << "tilt_scale     = 80\n";
-        }
-        os << "tilt_invert    = " << (invert ? "true" : "false") << "\n";
-    }
-    if (!m_motionBytes.empty()) {
-        os << "motion_bytes = [";
-        bool first = true;
-        for (int b : m_motionBytes) { if (!first) os << ", "; os << b; first = false; }
-        os << "]\n";
-    }
-    // Fold Start/Select into the per-byte map so each TOML section gets
-    // emitted exactly once, even when the kit puts menu buttons in the
-    // same byte as the face buttons (or a totally different byte on PS4/PS5).
-    const char* selName = (m_deviceType == DeviceType::Guitar) ? "left" : "touchpad";
-    const char* selOrigin = (m_deviceType == DeviceType::Guitar)
-        ? "Select (Star Power)" : "Select";
-    if (b_sel) button_bits.push_back({selByte, b_sel, selName, selOrigin});
-    if (b_sta) button_bits.push_back({staByte, b_sta, "options", "Start"});
-
-    std::map<int, std::vector<ButtonBit>> by_byte;
-    for (const auto& b : button_bits) {
-        if (b.mask != 0) by_byte[b.byte].push_back(b);
-    }
-    auto emit_bit = [&](uint8_t bit, const char* name, const char* origin) {
-        os << "\"0x" << std::hex;
-        if (bit < 0x10) os << "0";
-        os << int(bit) << std::dec << "\" = \"" << name << "\"";
-        if (origin && *origin) os << "  # " << origin;
-        os << '\n';
-    };
-    for (const auto& [byte_idx, bits] : by_byte) {
-        os << "\n[buttons_byte_" << byte_idx << "]\n";
-        // Same bit can be claimed by multiple inputs (e.g. drum kick + orange
-        // both on L1); de-dupe so we don't emit duplicate TOML keys.
-        std::map<uint8_t, std::pair<const char*, const char*>> uniq;
-        for (const auto& b : bits) {
-            uniq.try_emplace(b.mask, std::make_pair(b.name, b.origin));
-        }
-        for (const auto& [mask, name_origin] : uniq) {
-            emit_bit(mask, name_origin.first, name_origin.second);
-        }
-    }
-
-    bool emitted_scaling_header = false;
-    for (const auto& s : scalePlan) {
-        int bestByte = -1, bestRange = 0;
-        for (const auto& r : m_results) {
-            if (r.def.key != s.stepKey || !r.captured) continue;
-            for (int i = 3; i < m_reportLen; ++i) {
-                if (m_motionBytes.count(i)) continue;
-                const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                const int range = b.max - b.min;
-                if (range > bestRange && b.max >= 0x10 && i != 26) {
-                    bestRange = range; bestByte = i;
-                }
-            }
-        }
-        if (bestByte < 0) continue;
-        int lo = -1, hi = -1;
-        for (const auto& r : m_results) {
-            if (r.def.key != s.stepKey || !r.captured) continue;
-            lo = std::max(0, m_baselineMax[bestByte]) + 2;
-            hi = r.bytes[bestByte].max;
-            break;
-        }
-        if (hi <= lo) continue;
-        if (!emitted_scaling_header) {
-            os << "\n[velocity_scaling]\n";
-            emitted_scaling_header = true;
-        }
-        os << '"' << s.dudIdx << "\" = { lo = " << lo << ", hi = " << hi
-           << " }  # " << s.comment << '\n';
-    }
-
-    return QString::fromStdString(os.str());
+    return QString::fromStdString(Input::HidInstrument::DeriveKitToml(data));
 }
+
 
 void KitProbeDialog::onSaveResults() {
     // Always write into <user>/kits/ so the C++ runtime loader picks the
@@ -1221,15 +791,21 @@ void KitProbeDialog::onSaveResults() {
         case DeviceType::ProDrum: deviceTypeStr = "drum_pro"; break;
         case DeviceType::Guitar:  deviceTypeStr = "guitar"; break;
         }
+        // "source" distinguishes raw HID dumps from SDL_GameController/XInput
+        // taps. The test harness uses it to decide whether report[0] is a HID
+        // report-ID or already the first data byte.
+        const char* sourceStr = m_isXInput ? "xinput" : "hid";
         QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":1,"
+            "{\"type\":\"meta\",\"version\":2,"
             "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
             "\"device_name\":\"%3\",\"device_type\":\"%4\","
-            "\"report_length\":%5,\"timestamp\":\"%6\"}\n")
+            "\"source\":\"%5\","
+            "\"report_length\":%6,\"timestamp\":\"%7\"}\n")
             .arg(m_vid, 4, 16, QChar('0'))
             .arg(m_pid, 4, 16, QChar('0'))
             .arg(QString(m_deviceName).replace('"', '\''))
             .arg(QString::fromLatin1(deviceTypeStr))
+            .arg(QString::fromLatin1(sourceStr))
             .arg(m_reportLen)
             .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
         rf.write(meta.toUtf8());

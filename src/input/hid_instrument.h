@@ -103,4 +103,13 @@ void* OpenXInputGamepad(int instance_id);
 void CloseXInputGamepad(void* gamepad);
 void PollXInputGamepad(void* gamepad, u8* out);
 
+// Test-only hooks. The hidtest harness loads a wizard-derived TOML and
+// replays captured frames through PackButtons / PackDeviceUniqueData
+// without opening a real HID device. Not safe to call concurrently with
+// the live poll thread — tests must not call EnsureInit().
+namespace Testing {
+void ResetForTesting();
+bool BindKitFromTomlForTesting(int slot, const std::string& toml_path);
+}  // namespace Testing
+
 }  // namespace Input::HidInstrument

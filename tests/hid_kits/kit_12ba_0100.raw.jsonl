@@ -1,3 +1,4 @@
+{"type": "meta", "vendor_id": "0x12ba", "product_id": "0x0100", "device_name": "kit_12ba_0100.raw", "device_type": "guitar", "source": "hid", "report_length": 27}
 {"step":"_motion_baseline","bytes":[0,0,8,128,128,128,128,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,2,0,2,0,2]}
 {"step":"_motion_baseline","bytes":[0,0,8,128,128,128,128,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,2,0,2,0,2]}
 {"step":"_motion_baseline","bytes":[0,0,8,128,128,128,128,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,2,0,2,0,2]}

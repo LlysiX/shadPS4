@@ -936,4 +936,30 @@ bool ShouldHideFromUsbd(u16 vid, u16 pid) {
     return false;
 }
 
+namespace Testing {
+
+void ResetForTesting() {
+    for (auto& s : g_slots) {
+        CloseSlot(s);
+        s.kit = nullptr;
+    }
+    std::lock_guard<std::mutex> lk(g_kits_mu);
+    g_kits.clear();
+}
+
+bool BindKitFromTomlForTesting(int slot, const std::string& toml_path) {
+    if (slot < 1 || slot > kNumSlots) return false;
+    if (!LoadKitFromToml(toml_path)) return false;
+    std::lock_guard<std::mutex> lk(g_kits_mu);
+    for (auto& k : g_kits) {
+        if (k.source_file == toml_path) {
+            g_slots[slot - 1].kit = &k;
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace Testing
+
 }  // namespace Input::HidInstrument

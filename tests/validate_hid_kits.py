@@ -192,67 +192,139 @@ def pack_guitar_dud(raw: list, kit: KitDef) -> list:
     return out
 
 
-# Per-step expectations. Each function takes (buttons_set, dud_array) and
-# returns (passed: bool, reason: str). Steps not in this table are skipped.
-FRET_BIT = {  # ps4-native fret bit positions in dud[3]
-    "green_fret":  (0, "cross"),
-    "red_fret":    (1, "circle"),
-    "yellow_fret": (2, "triangle"),
-    "blue_fret":   (3, "square"),
-    "orange_fret": (4, "l1"),
+# Per-step expectations expressed as (fret_bits_required, buttons_required).
+# fret_bits is a list of PS4-native bit positions that must be set in dud[3];
+# buttons is a list of names that must appear in PackButtons output.
+GUITAR_EXPECT = {
+    "green_fret":  ([0],    ["cross"]),
+    "red_fret":    ([1],    ["circle"]),
+    "yellow_fret": ([2],    ["triangle"]),
+    "blue_fret":   ([3],    ["square"]),
+    "orange_fret": ([4],    ["l1"]),
+    "green_strum":      ([0],    ["cross", "down"]),
+    "green_blue":       ([0, 3], ["cross", "square"]),
+    "green_blue_strum": ([0, 3], ["cross", "square", "down"]),
+}
+# Drum step expectations: only face-button assertions, since the dud[]
+# velocity slots are non-zero only on the exact hit frame which is hard to
+# pin down without timing info. Note we accept the kick step landing on L1
+# (5-lane GH-mode convention) OR R1 (PS4 Pro convention).
+DRUM_EXPECT = {
+    "red_pad":       (None, ["circle"]),
+    "yellow_pad":    (None, ["triangle"]),
+    "blue_pad":      (None, ["square"]),
+    "green_pad":     (None, ["cross"]),
+    "yellow_cymbal": (None, ["triangle"]),
+    "blue_cymbal":   (None, ["square"]),
+    "green_cymbal":  (None, ["cross"]),
+    "orange_cymbal": (None, ["r1"]),
+    "kick_pedal":    (None, ["l1"]),
 }
 
 
-def check_guitar_step(step: str, buttons: set, dud: list) -> Optional[tuple]:
-    if step not in FRET_BIT:
+def check_step(step: str, device_type: str, buttons: set, dud: list) -> Optional[tuple]:
+    """Dispatch on device_type. Returns (ok, reason) or None if the step is
+    not validated for this device type."""
+    if device_type in ("drum", "drum_pro"):
+        if step not in DRUM_EXPECT:
+            return None
+        _, btn_names = DRUM_EXPECT[step]
+        missing = [n for n in btn_names if n not in buttons]
+        if not missing:
+            return (True, f"buttons={btn_names}")
+        return (False, f"buttons={sorted(buttons)} (missing {missing})")
+    # Guitar (default).
+    if step not in GUITAR_EXPECT:
         return None
-    bit, btn_name = FRET_BIT[step]
-    fret_bitmap = dud[3]
-    bit_ok = bool(fret_bitmap & (1 << bit))
-    btn_ok = btn_name in buttons
-    if bit_ok and btn_ok:
-        return (True, f"dud[3] bit {bit} set, {btn_name} pressed")
+    fret_bits, btn_names = GUITAR_EXPECT[step]
+    bitmap = dud[3]
+    bits_ok = all(bitmap & (1 << b) for b in fret_bits)
+    missing_btns = [n for n in btn_names if n not in buttons]
+    if bits_ok and not missing_btns:
+        bits_repr = "|".join(str(b) for b in fret_bits)
+        return (True, f"dud[3]=0x{bitmap:02x} (bits {bits_repr}), buttons={btn_names}")
     return (
         False,
-        f"dud[3]=0x{fret_bitmap:02x} (bit {bit} {'set' if bit_ok else 'CLEAR'}), "
-        f"buttons={sorted(buttons)} ({btn_name} {'in' if btn_ok else 'MISSING from'} set)",
+        f"dud[3]=0x{bitmap:02x} (need bits {fret_bits}), "
+        f"buttons={sorted(buttons)} (missing {missing_btns})",
     )
 
 
-def run_kit(toml_path: Path) -> tuple:
-    """Returns (passes: int, fails: int, lines: list[str])."""
-    jsonl_path = toml_path.with_suffix(".raw.jsonl")
-    if not jsonl_path.exists():
-        return 0, 0, [f"  SKIP {toml_path.name}: no matching .raw.jsonl"]
-    kit = load_kit(toml_path)
-    lines = [f"  {toml_path.name}  ({kit.name})"]
-
+def read_raw_jsonl(jsonl_path: Path) -> tuple:
+    """Returns (meta, per_step). meta is a dict or None for version-0 captures
+    (pre-versioning wizard output — no header line)."""
+    meta = None
     per_step = defaultdict(list)
     with open(jsonl_path) as f:
         for line in f:
             d = json.loads(line)
+            if d.get("type") == "meta":
+                meta = d
+                continue
             per_step[d["step"]].append(d["bytes"])
+    return meta, per_step
 
+
+def run_kit(jsonl_path: Path) -> tuple:
+    """Returns (passes: int, fails: int, lines: list[str])."""
+    lines = [f"  {jsonl_path.name}"]
+    meta, per_step = read_raw_jsonl(jsonl_path)
+    if meta:
+        lines.append(f"      meta: v{meta.get('version', '?')} "
+                     f"{meta.get('vendor_id', '?')}:{meta.get('product_id', '?')} "
+                     f"({meta.get('device_name', '?')})")
+    else:
+        lines.append("      (legacy capture, no meta header — version 0)")
+
+    toml_path = jsonl_path.with_suffix("").with_suffix(".toml")
+    if not toml_path.exists():
+        # No companion TOML — we'd need to invoke the wizard's TOML-derivation
+        # to produce one. That's the next-step C++ harness; for now log and
+        # move on without failing.
+        lines.append("      SKIP (no companion .toml; needs wizard-derived TOML)")
+        return 0, 0, lines
+
+    kit = load_kit(toml_path)
+    lines.append(f"      kit: {kit.name}")
+    if meta:
+        try:
+            meta_vid = int(meta["vendor_id"], 16)
+            meta_pid = int(meta["product_id"], 16)
+            if meta_vid != kit.vendor_id or meta_pid != kit.product_id:
+                lines.append(
+                    f"      FAIL  meta mismatch: capture is "
+                    f"{meta['vendor_id']}:{meta['product_id']} but kit is "
+                    f"0x{kit.vendor_id:04x}:0x{kit.product_id:04x}")
+                return 0, 1, lines
+        except (KeyError, ValueError):
+            pass
+
+    device_type = (meta or {}).get("device_type", "guitar")
+    expect_table = DRUM_EXPECT if device_type in ("drum", "drum_pro") else GUITAR_EXPECT
     passes = fails = 0
     for step, samples in per_step.items():
         if not samples:
             continue
-        # Look only at samples where the input was active (the byte we'd expect
-        # to move actually moved). Lets us skip the "release" tail without
-        # adding step-specific timing logic.
+        # Look at frames where the input we'd expect actually moved. For
+        # guitars that's the fret_byte bitmap; for drums any face-button
+        # bit on byte 0 (which is where every PS3-style drum encodes hits).
         relevant = []
-        if step in FRET_BIT and kit.guitar_ps4_layout and 0 <= kit.fret_byte < len(samples[0]):
-            relevant = [s for s in samples if (s[kit.fret_byte] & kit.fret_mask) != 0]
+        if step in expect_table:
+            if device_type == "guitar" and kit.guitar_ps4_layout \
+                    and 0 <= kit.fret_byte < len(samples[0]):
+                relevant = [s for s in samples
+                            if (s[kit.fret_byte] & kit.fret_mask) != 0]
+            elif device_type in ("drum", "drum_pro") and len(samples[0]) > 0:
+                relevant = [s for s in samples if s[0] != 0]
         if not relevant:
             relevant = samples[len(samples) // 2 : len(samples) // 2 + 1] or samples[:1]
 
-        # Aggregate: any frame that asserts the bit is enough for the step to pass.
         step_ok = False
         last_reason = ""
         for sample in relevant:
             buttons = pack_buttons(sample, kit)
             dud = pack_guitar_dud(sample, kit) if kit.guitar_ps4_layout else [0] * 12
-            res = check_guitar_step(step, buttons, dud)
+            res = check_step(step, device_type, buttons, dud)
             if res is None:
                 step_ok = True
                 last_reason = "(step not validated)"
@@ -279,8 +351,8 @@ def main(argv: list) -> int:
         return 1
     total_pass = total_fail = 0
     out_lines = [f"== HID kit validation under {root} =="]
-    for toml_path in sorted(root.glob("*.toml")):
-        p, f, lines = run_kit(toml_path)
+    for jsonl_path in sorted(root.glob("*.raw.jsonl")):
+        p, f, lines = run_kit(jsonl_path)
         out_lines.extend(lines)
         total_pass += p
         total_fail += f

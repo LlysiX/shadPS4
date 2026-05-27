@@ -87,7 +87,6 @@ private:
     void startStep(int idx);
     void finishStep();
     QString deriveKitToml() const;
-    QString deriveCalibrationJson() const;
 
     std::unique_ptr<Ui::KitProbeDialog> ui;
 

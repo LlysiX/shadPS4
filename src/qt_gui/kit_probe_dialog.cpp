@@ -6,6 +6,7 @@
 
 #include <QBrush>
 #include <QColor>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QHeaderView>
@@ -698,62 +699,9 @@ void KitProbeDialog::onTickTimer() {
 }
 
 // ============================================================================
-// Output: JSON (calibration) and TOML (runtime kit def)
+// Output: TOML (runtime kit def). Raw HID captures are streamed to .raw.jsonl
+// during save (see onSaveResults).
 // ============================================================================
-
-QString KitProbeDialog::deriveCalibrationJson() const {
-    std::ostringstream os;
-    os << "{\n";
-    os << "  \"schema\": \"shadps4-legacy-instrument-map/v1\",\n";
-    os << "  \"device\": {\n"
-       << "    \"vendor_id\": \"0x" << std::hex << m_vid << "\",\n"
-       << "    \"product_id\": \"0x" << std::hex << m_pid << "\",\n"
-       << "    \"name\": \"" << m_deviceName.toStdString() << "\",\n"
-       << "    \"hidraw_path\": \"" << m_devicePath.toStdString() << "\"\n"
-       << "  },\n";
-    os << std::dec;
-    os << "  \"report_length\": " << m_reportLen << ",\n";
-    os << "  \"mapping\": {\n";
-    bool first = true;
-    for (const auto& r : m_results) {
-        if (!r.captured) continue;
-        if (!first) os << ",\n";
-        first = false;
-        os << "    \"" << r.def.key.toStdString() << "\": {\n";
-        os << "      \"kind\": \"" << r.def.kind.toStdString() << "\",\n";
-        // Pick the "velocity byte" = byte with the largest range outside b0/b1/b2.
-        int vel_byte = -1, vel_max = 0;
-        for (int i = 3; i < m_reportLen; ++i) {
-            if (m_motionBytes.count(i)) continue;  // skip motion sensor noise
-            const auto& b = r.bytes[i];
-            if (b.samples == 0) continue;
-            if ((b.max - b.min) > vel_max && b.max >= 0x10 &&
-                i != 26 /* tag */ && (i < 3 || i > 4) /* not sticks */) {
-                vel_max = b.max - b.min;
-                vel_byte = i;
-            }
-        }
-        os << "      \"velocity_byte\": ";
-        if (vel_byte >= 0) os << vel_byte; else os << "null";
-        os << ",\n";
-        // Flag byte/mask: any rising bit in raw[0] or raw[1] during step
-        for (int fb : {0, 1, 2}) {
-            const auto& b = r.bytes[fb];
-            if (b.samples == 0 || b.max == 0) continue;
-            os << "      \"flag_byte\": " << fb << ",\n";
-            os << "      \"flag_mask\": \"0x" << std::hex << b.max
-               << "\",\n" << std::dec;
-            break;
-        }
-        os << "      \"observed_min\": " << (vel_byte >= 0 ? r.bytes[vel_byte].min : 0) << ",\n";
-        os << "      \"observed_max\": " << (vel_byte >= 0 ? r.bytes[vel_byte].max : 0) << ",\n";
-        os << "      \"sample_count\": " << (vel_byte >= 0 ? r.bytes[vel_byte].samples : 0) << "\n";
-        os << "    }";
-    }
-    os << "\n  }\n";
-    os << "}\n";
-    return QString::fromStdString(os.str());
-}
 
 QString KitProbeDialog::deriveKitToml() const {
     // Pick the byte with the widest range during a step. Skips counter / accel
@@ -1251,7 +1199,6 @@ void KitProbeDialog::onSaveResults() {
         .arg(m_vid, 4, 16, QChar('0'))
         .arg(m_pid, 4, 16, QChar('0'));
     const QString tomlPath = QString::fromStdString((dir / (base.toStdString() + ".toml")).string());
-    const QString jsonPath = QString::fromStdString((dir / (base.toStdString() + ".json")).string());
     const QString rawPath  = QString::fromStdString((dir / (base.toStdString() + ".raw.jsonl")).string());
 
     QFile f(tomlPath);
@@ -1262,14 +1209,30 @@ void KitProbeDialog::onSaveResults() {
     f.write(deriveKitToml().toUtf8());
     f.close();
 
-    QFile jf(jsonPath);
-    if (jf.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        jf.write(deriveCalibrationJson().toUtf8());
-        jf.close();
-    }
-
+    // Raw HID capture file. First line is a "meta" record with provenance
+    // (format version, VID:PID, device name, report length, ISO timestamp);
+    // subsequent lines are {"step":"name","bytes":[...]} samples. The test
+    // harness uses the meta to re-derive a TOML and replay scenarios.
     QFile rf(rawPath);
     if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        const char* deviceTypeStr = "guitar";
+        switch (m_deviceType) {
+        case DeviceType::Drum:    deviceTypeStr = "drum"; break;
+        case DeviceType::ProDrum: deviceTypeStr = "drum_pro"; break;
+        case DeviceType::Guitar:  deviceTypeStr = "guitar"; break;
+        }
+        QString meta = QStringLiteral(
+            "{\"type\":\"meta\",\"version\":1,"
+            "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
+            "\"device_name\":\"%3\",\"device_type\":\"%4\","
+            "\"report_length\":%5,\"timestamp\":\"%6\"}\n")
+            .arg(m_vid, 4, 16, QChar('0'))
+            .arg(m_pid, 4, 16, QChar('0'))
+            .arg(QString(m_deviceName).replace('"', '\''))
+            .arg(QString::fromLatin1(deviceTypeStr))
+            .arg(m_reportLen)
+            .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+        rf.write(meta.toUtf8());
         for (const auto& step : m_results) {
             if (!step.captured) continue;
             for (const auto& report : step.raw) {
@@ -1289,7 +1252,6 @@ void KitProbeDialog::onSaveResults() {
     QMessageBox::information(this, tr("Saved"),
         tr("Saved into your shadPS4 user folder:\n\n"
            "  %1   (runtime kit definition, auto-loaded at next launch)\n"
-           "  %2   (calibration record, share on Discord)\n"
-           "  %3   (raw HID captures, for re-deriving the mapping later)")
-            .arg(tomlPath).arg(jsonPath).arg(rawPath));
+           "  %2   (raw HID captures, for re-deriving the mapping later)")
+            .arg(tomlPath).arg(rawPath));
 }

@@ -94,6 +94,9 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
         {"orange_fret",    QObject::tr("ORANGE fret"),                                 "digital",  false},
         {"strum_up",       QObject::tr("Strum bar UP"),                                "digital",  false},
         {"strum_down",     QObject::tr("Strum bar DOWN"),                              "digital",  false},
+        {"green_strum",    QObject::tr("Hold GREEN and strum DOWN at the same time"),  "combo",    false},
+        {"green_blue",     QObject::tr("Hold GREEN and BLUE together"),                "combo",    false},
+        {"green_blue_strum", QObject::tr("Hold GREEN + BLUE and strum DOWN"),          "combo",    false},
         {"whammy_bar",     QObject::tr("Whammy bar — push and release through full range"), "velocity", false},
         {"touch_slider",   QObject::tr("Touch slider — slide finger across the whole strip"), "velocity", true},
         // (No separate tilt step — tilt is already captured by the motion
@@ -794,36 +797,48 @@ QString KitProbeDialog::deriveKitToml() const {
     // fret / face-button bits without hardcoding raw[0] — PS4 RB and PS5
     // Riffmaster put frets at byte 43/46, not 0 (which is the report ID).
     // Returns (byte_index, bit_mask) or (-1, 0).
-    auto detectFlagByteAndBit = [&](const QString& key) -> std::pair<int, uint8_t> {
+    // Collect every byte index that gained exactly one set bit during the
+    // step (raw[i] went baseline → baseline | (1 << k)). PS4 RB and PS5
+    // Riffmaster guitars expose each fret on two bytes (the HAT-shared face
+    // flag byte AND the dedicated fret bitmap byte) so the caller usually
+    // needs to look at all candidates before picking a winner.
+    auto detectAllFlagCandidates =
+        [&](const QString& key) -> std::vector<std::pair<int, uint8_t>> {
+        std::vector<std::pair<int, uint8_t>> out;
         for (const auto& r : m_results) {
             if (r.def.key != key || !r.captured) continue;
-            int best_byte = -1;
-            uint8_t best_mask = 0;
-            int best_score = 0;
             for (int i = 0; i < m_reportLen; ++i) {
                 if (m_motionBytes.count(i)) continue;
                 const auto& b = r.bytes[i];
                 if (b.samples == 0) continue;
                 const int baseline = m_baselineMax[i];
                 if (b.max <= baseline) continue;
-                // bits that turned on during the step (not present at baseline)
                 const int diff = b.max & ~baseline;
                 if (diff == 0) continue;
-                // Prefer single-bit deltas: real button flags toggle exactly
-                // one bit. Multi-bit deltas usually mean an analog axis or HAT.
                 if ((diff & (diff - 1)) != 0) continue;
-                // Score by how often this byte saw the same delta — buttons
-                // assert cleanly, noise jitters.
-                const int score = b.transitions;
-                if (score > best_score) {
-                    best_score = score;
-                    best_byte = i;
-                    best_mask = static_cast<uint8_t>(diff);
-                }
+                out.push_back({i, static_cast<uint8_t>(diff)});
             }
-            return {best_byte, best_mask};
+            break;
         }
-        return {-1, 0};
+        return out;
+    };
+    // Single-button steps (Start, Select, etc.) pick the cleanest candidate:
+    // the one whose source byte has the lowest baseline value. Reduces the
+    // chance of latching onto a byte that already has unrelated flags set
+    // (e.g. the HAT byte where the low nibble carries dpad data).
+    auto detectFlagByteAndBit = [&](const QString& key) -> std::pair<int, uint8_t> {
+        auto cands = detectAllFlagCandidates(key);
+        if (cands.empty()) return {-1, 0};
+        auto best = cands.front();
+        int best_baseline = m_baselineMax[best.first];
+        for (std::size_t k = 1; k < cands.size(); ++k) {
+            const int base = m_baselineMax[cands[k].first];
+            if (base < best_baseline) {
+                best = cands[k];
+                best_baseline = base;
+            }
+        }
+        return best;
     };
     auto detectHatByte = [&]() -> int {
         static const QStringList keys = {"dpad_up", "dpad_down",
@@ -864,6 +879,12 @@ QString KitProbeDialog::deriveKitToml() const {
             {2, velByte("whammy_bar"),    "whammy bar"},
             {3, velByte("touch_slider"),  "touch slider"},
         };
+        // Pick the raw byte that covers the MOST frets cleanly. PS4 RB and
+        // PS5 Riffmaster expose each fret on two bytes (face-flag byte AND
+        // dedicated bitmap byte); only the bitmap byte covers all five with
+        // clean baselines. Per-step independent detection picked whichever
+        // byte happened to satisfy the single-bit check first, which led to
+        // mixed-byte fret definitions that didn't round-trip into dud[3].
         struct FretMap { const char* step; const char* name; const char* origin; };
         const FretMap fretMaps[] = {
             {"green_fret",  "cross",    "green fret"},
@@ -872,10 +893,69 @@ QString KitProbeDialog::deriveKitToml() const {
             {"blue_fret",   "square",   "blue fret"},
             {"orange_fret", "l1",       "orange fret"},
         };
-        for (const auto& fm : fretMaps) {
-            auto [byte, mask] = detectFlagByteAndBit(fm.step);
-            if (byte < 0) continue;
-            button_bits.push_back({byte, mask, fm.name, fm.origin});
+        std::array<std::vector<std::pair<int, uint8_t>>, 5> fretCandidates;
+        std::map<int, int> coverage;
+        for (int i = 0; i < 5; ++i) {
+            fretCandidates[i] = detectAllFlagCandidates(fretMaps[i].step);
+            for (const auto& [byte, mask] : fretCandidates[i]) {
+                ++coverage[byte];
+            }
+        }
+        // Tiebreak by the green_blue combo step. The CORRECT fret bitmap byte
+        // shows bits (green | blue) set cleanly — i.e. its max during the
+        // combo equals (its own baseline | green_mask | blue_mask). Bytes
+        // that share space with HAT/face flags would show extra unrelated
+        // bits and not match. This filters out the "face flag" candidate
+        // (byte 5 on PS4 RB) in favour of the dedicated bitmap byte (46).
+        auto comboBitsForByte = [&](int byte) -> std::pair<uint8_t, uint8_t> {
+            // returns (green_bit, blue_bit) on this byte from the per-step
+            // candidates, or (0, 0) if either is missing.
+            uint8_t g = 0, b = 0;
+            for (const auto& [bb, mm] : fretCandidates[0]) if (bb == byte) { g = mm; break; }
+            for (const auto& [bb, mm] : fretCandidates[3]) if (bb == byte) { b = mm; break; }
+            return {g, b};
+        };
+        auto byteValidatesCombo = [&](int byte) -> bool {
+            auto [g, b] = comboBitsForByte(byte);
+            if (g == 0 || b == 0) return false;
+            // Look up the green_blue step's max on this byte.
+            for (const auto& r : m_results) {
+                if (r.def.key != QStringLiteral("green_blue") || !r.captured) continue;
+                if (byte < 0 || byte >= m_reportLen) return false;
+                const int max = r.bytes[byte].max;
+                const int baseline = m_baselineMax[byte];
+                return (max & ~baseline) == (g | b);
+            }
+            return false;
+        };
+        int chosenByte = -1, chosenCoverage = 0, chosenBaseline = 0x7FFFFFFF;
+        bool chosenValidated = false;
+        for (const auto& [byte, count] : coverage) {
+            const int base = m_baselineMax[byte];
+            const bool validated = byteValidatesCombo(byte);
+            // Prefer (1) bytes that pass the combo check, (2) higher fret
+            // coverage, (3) lower baseline. Order matters: a byte that passes
+            // the combo beats a higher-coverage byte that doesn't.
+            const auto rank = [&](bool v, int c, int b) {
+                return std::make_tuple(v ? 1 : 0, c, -b);
+            };
+            if (rank(validated, count, base) >
+                rank(chosenValidated, chosenCoverage, chosenBaseline)) {
+                chosenByte = byte;
+                chosenCoverage = count;
+                chosenBaseline = base;
+                chosenValidated = validated;
+            }
+        }
+        if (chosenByte >= 0) {
+            for (int i = 0; i < 5; ++i) {
+                for (const auto& [byte, mask] : fretCandidates[i]) {
+                    if (byte != chosenByte) continue;
+                    button_bits.push_back({byte, mask, fretMaps[i].name,
+                                           fretMaps[i].origin});
+                    break;
+                }
+            }
         }
         scalePlan = {};
     } else {
@@ -950,9 +1030,11 @@ QString KitProbeDialog::deriveKitToml() const {
            << int(b_sel | b_sta) << std::dec << "\n";
     }
 
-    // Detect which raw byte holds the fret bitmap (PS3: byte 0; PS4 RB: 46;
-    // PS5 Riffmaster: 43) and whether the bit order needs remapping to the
-    // PS4-native (G=0, R=1, Y=2, B=3, O=4) layout RB4 reads.
+    // Derive fret_byte / fret_mask / dud0_bit_remap from the same chosen
+    // byte we already picked when populating button_bits above. PS3 layouts
+    // (frets at byte 0) and PS4 RB / PS5 Riffmaster (dedicated fret bitmap
+    // byte 43/46) both end up here without a second pass through the per-
+    // step heuristic.
     int fretByte = -1;
     int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
     bool needs_remap = false;
@@ -966,20 +1048,34 @@ QString KitProbeDialog::deriveKitToml() const {
             {"orange_fret", 4},
         };
         uint8_t fretMaskBits = 0;
-        for (const auto& fm : frets) {
-            auto [byte, mask] = detectFlagByteAndBit(fm.step);
-            if (byte < 0 || mask == 0) continue;
-            if (fretByte < 0) fretByte = byte;
-            // Only contribute to the mask if the fret was found on the same
-            // byte as the others — different bytes mean a mixed layout the
-            // single fret_mask can't capture.
-            if (byte == fretByte) fretMaskBits |= mask;
-            for (int b = 0; b < 8; ++b) {
-                if (mask & (1 << b)) {
-                    if (b != fm.ps4_bit) needs_remap = true;
-                    remap[b] = fm.ps4_bit;
-                    break;
+        // Re-run the coverage scan locally so this block doesn't depend on
+        // the button_bits state above.
+        std::map<int, int> coverage;
+        std::array<std::vector<std::pair<int, uint8_t>>, 5> cands;
+        for (int i = 0; i < 5; ++i) {
+            cands[i] = detectAllFlagCandidates(frets[i].step);
+            for (const auto& [byte, _] : cands[i]) ++coverage[byte];
+        }
+        int chosen = -1, chosenCov = 0, chosenBase = 0x7FFFFFFF;
+        for (const auto& [byte, count] : coverage) {
+            const int base = m_baselineMax[byte];
+            if (count > chosenCov || (count == chosenCov && base < chosenBase)) {
+                chosen = byte; chosenCov = count; chosenBase = base;
+            }
+        }
+        for (int i = 0; i < 5; ++i) {
+            for (const auto& [byte, mask] : cands[i]) {
+                if (byte != chosen) continue;
+                if (fretByte < 0) fretByte = byte;
+                fretMaskBits |= mask;
+                for (int b = 0; b < 8; ++b) {
+                    if (mask & (1 << b)) {
+                        if (b != frets[i].ps4_bit) needs_remap = true;
+                        remap[b] = frets[i].ps4_bit;
+                        break;
+                    }
                 }
+                break;
             }
         }
         if (needs_remap) {

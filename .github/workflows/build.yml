@@ -20,6 +20,19 @@ jobs:
     - uses: actions/checkout@v5
     - uses: fsfe/reuse-action@v5
 
+  hid-tests:
+    # Runs the HID kit validator against every kit fixture in tests/hid_kits/.
+    # Fast — pure Python, no build needed — so this lives outside the per-OS
+    # build matrix and gives quick feedback on wizard / packer regressions.
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    - name: Run HID kit validator
+      run: python3 tests/validate_hid_kits.py tests/hid_kits/
+
   clang-format:
     runs-on: ubuntu-24.04
     continue-on-error: true

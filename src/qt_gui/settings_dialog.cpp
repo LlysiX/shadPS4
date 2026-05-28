@@ -245,6 +245,12 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
         // widget promotion, so we insert it programmatically).
         m_mic_level_meter = new MicLevelMeter(ui->micLevelContainer);
         ui->micLevelContainerLayout->addWidget(m_mic_level_meter);
+        // LoadValuesFromConfig() already ran in the constructor (before
+        // this block), so the sliders/checkbox hold the loaded values but
+        // the meter didn't exist yet to receive them. Push them now so the
+        // threshold marker is positioned correctly the moment the dialog
+        // opens, without waiting for the user to nudge a slider.
+        UpdateMicGateLabels();
 
         connect(ui->micGateThresholdSlider, &QSlider::valueChanged, this,
                 [this](int value) {

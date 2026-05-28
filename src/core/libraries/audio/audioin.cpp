@@ -95,18 +95,18 @@ int PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle, u32* silent_state) {
     // Real ABI takes (handle, silent_state*) and writes a channel-bitmask
     // (each set bit = a silent channel) into *silent_state. The previous
     // stub took no arguments and ignored both — meaning the game's
-    // silent_state variable kept whatever stack garbage was in it,
-    // so RB4 saw a random pattern of "silent / not silent" per call.
-    // That can flip the vocal-mix decision frame-by-frame and is a
-    // plausible cause of the doubled / pitch-shifted mic playback.
-    // For now we treat every channel as active (not silent); a future
-    // pass could track the put-callback level and decay it to detect
-    // genuine silence.
-    if (silent_state) {
-        *silent_state = 0;
-    }
+    // silent_state variable kept whatever stack garbage was in it.
+    // The software noise gate (SDLAudioIn) tracks the live input level;
+    // we surface its decision here so the game can skip its vocal mix
+    // while the user isn't talking. All-bits-set = silent, 0 = active.
     if (handle < 1) {
+        if (silent_state) {
+            *silent_state = 0xFFFFFFFF;
+        }
         return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
+    if (silent_state) {
+        *silent_state = audio->IsSilent(handle) ? 0xFFFFFFFF : 0;
     }
     return ORBIS_OK;
 }

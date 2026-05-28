@@ -4,6 +4,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -26,6 +28,11 @@ public:
     int AudioInOpen(int type, uint32_t samples_num, uint32_t freq, uint32_t format);
     int AudioInInput(int handle, void* out_buffer);
     void AudioInClose(int handle);
+    // True when the software noise gate currently considers the port's
+    // input silent. sceAudioInGetSilentState reads this so the game can
+    // skip its vocal mix while the user isn't talking. Returns true
+    // (silent) for an unopened/invalid handle.
+    bool IsSilent(int handle);
 
 private:
     // Per-port state. Lives in the fixed-size portsIn array so the pointer
@@ -50,6 +57,16 @@ private:
         std::unique_ptr<std::condition_variable> data_cv =
             std::make_unique<std::condition_variable>();
 
+        // Software noise gate. gate_open tracks whether the gate is
+        // currently passing audio; last_active is the last time the
+        // input level exceeded the threshold (used for the hangover so
+        // the tail of a word isn't chopped). silent mirrors the gate
+        // for sceAudioInGetSilentState — atomic because that query can
+        // come from a different thread than AudioInInput.
+        bool gate_open = false;
+        std::chrono::steady_clock::time_point last_active{};
+        std::atomic<bool> silent{true};
+
         void Reset() {
             isOpen = false;
             type = 0;
@@ -59,6 +76,9 @@ private:
             sample_size = 0;
             format = 0;
             stream = nullptr;
+            gate_open = false;
+            last_active = {};
+            silent.store(true, std::memory_order_relaxed);
             // mutex / cv are left in place — they're recycled when the
             // slot is reopened.
         }

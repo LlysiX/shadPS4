@@ -175,6 +175,14 @@ static ConfigEntry<bool> backgroundControllerInput(false);
 static ConfigEntry<string> micDevice("Default Device");
 static ConfigEntry<string> mainOutputDevice("Default Device");
 static ConfigEntry<string> padSpkOutputDevice("Default Device");
+// Software noise gate on the mic. When the input level falls below
+// `micGateThresholdDb` for longer than `micGateHoldMs`, AudioInInput
+// hands the game a zero-filled buffer and sceAudioInGetSilentState
+// reports "all channels silent" — letting the game's vocal-mix path
+// (RB4 etc.) skip the mix instead of broadcasting room hum.
+static ConfigEntry<bool> micGateEnabled(true);
+static ConfigEntry<int> micGateThresholdDb(-50);
+static ConfigEntry<int> micGateHoldMs(300);
 
 // GPU
 static ConfigEntry<u32> windowWidth(1280);
@@ -356,6 +364,30 @@ int getCursorHideTimeout() {
 
 string getMicDevice() {
     return micDevice.get();
+}
+
+bool getMicGateEnabled() {
+    return micGateEnabled.get();
+}
+
+void setMicGateEnabled(bool enabled, bool is_game_specific) {
+    micGateEnabled.set(enabled, is_game_specific);
+}
+
+int getMicGateThresholdDb() {
+    return micGateThresholdDb.get();
+}
+
+void setMicGateThresholdDb(int db, bool is_game_specific) {
+    micGateThresholdDb.set(db, is_game_specific);
+}
+
+int getMicGateHoldMs() {
+    return micGateHoldMs.get();
+}
+
+void setMicGateHoldMs(int ms, bool is_game_specific) {
+    micGateHoldMs.set(ms, is_game_specific);
 }
 
 std::string getMainOutputDevice() {
@@ -981,6 +1013,9 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
         micDevice.setFromToml(audio, "micDevice", is_game_specific);
         mainOutputDevice.setFromToml(audio, "mainOutputDevice", is_game_specific);
         padSpkOutputDevice.setFromToml(audio, "padSpkOutputDevice", is_game_specific);
+        micGateEnabled.setFromToml(audio, "micGateEnabled", is_game_specific);
+        micGateThresholdDb.setFromToml(audio, "micGateThresholdDb", is_game_specific);
+        micGateHoldMs.setFromToml(audio, "micGateHoldMs", is_game_specific);
     }
 
     if (data.contains("GPU")) {
@@ -1162,6 +1197,9 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
     micDevice.setTomlValue(data, "Audio", "micDevice", is_game_specific);
     mainOutputDevice.setTomlValue(data, "Audio", "mainOutputDevice", is_game_specific);
     padSpkOutputDevice.setTomlValue(data, "Audio", "padSpkOutputDevice", is_game_specific);
+    micGateEnabled.setTomlValue(data, "Audio", "micGateEnabled", is_game_specific);
+    micGateThresholdDb.setTomlValue(data, "Audio", "micGateThresholdDb", is_game_specific);
+    micGateHoldMs.setTomlValue(data, "Audio", "micGateHoldMs", is_game_specific);
 
     windowWidth.setTomlValue(data, "GPU", "screenWidth", is_game_specific);
     windowHeight.setTomlValue(data, "GPU", "screenHeight", is_game_specific);
@@ -1314,6 +1352,9 @@ void setDefaultValues(bool is_game_specific) {
 
     // GS - Audio
     micDevice.set("Default Device", is_game_specific);
+    micGateEnabled.set(true, is_game_specific);
+    micGateThresholdDb.set(-50, is_game_specific);
+    micGateHoldMs.set(300, is_game_specific);
 
     // GS - GPU
     windowWidth.set(1280, is_game_specific);

@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 #include <QCompleter>
 #include <QDirIterator>
 #include <QFileDialog>
 #include <QHoverEvent>
 #include <QMessageBox>
+#include <QTimer>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
 
@@ -232,6 +236,39 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
 
     connect(ui->tabWidgetSettings, &QTabWidget::currentChanged, this,
             [this]() { ui->buttonBox->button(QDialogButtonBox::Close)->setFocus(); });
+
+    // MIC NOISE GATE
+    {
+        connect(ui->micGateThresholdSlider, &QSlider::valueChanged, this,
+                [this](int value) {
+                    Config::setMicGateThresholdDb(value, is_game_specific);
+                    UpdateMicGateLabels();
+                });
+        connect(ui->micGateHoldSlider, &QSlider::valueChanged, this, [this](int value) {
+            Config::setMicGateHoldMs(value, is_game_specific);
+            UpdateMicGateLabels();
+        });
+#if (QT_VERSION < QT_VERSION_CHECK(6, 7, 0))
+        connect(ui->micGateCheckBox, &QCheckBox::stateChanged, this, [this](int state) {
+            Config::setMicGateEnabled(state == Qt::Checked, is_game_specific);
+            UpdateMicGateLabels();
+        });
+#else
+        connect(ui->micGateCheckBox, &QCheckBox::checkStateChanged, this,
+                [this](Qt::CheckState state) {
+                    Config::setMicGateEnabled(state == Qt::Checked, is_game_specific);
+                    UpdateMicGateLabels();
+                });
+#endif
+        // Reopen the preview stream when the selected mic changes.
+        connect(ui->micComboBox, &QComboBox::currentIndexChanged, this,
+                [this](int) { StartMicPreview(); });
+
+        m_mic_preview_timer = new QTimer(this);
+        m_mic_preview_timer->setInterval(33);  // ~30 Hz meter refresh
+        connect(m_mic_preview_timer, &QTimer::timeout, this,
+                &SettingsDialog::UpdateMicPreview);
+    }
 
     // GENERAL TAB
     {
@@ -552,6 +589,8 @@ void SettingsDialog::closeEvent(QCloseEvent* event) {
         SyncRealTimeWidgetstoConfig();
     }
 
+    StopMicPreview();
+
     SdlEventWrapper::Wrapper::wrapperActive = false;
     if (!is_game_running) {
         SDL_Event quitLoop{};
@@ -670,6 +709,12 @@ void SettingsDialog::LoadValuesFromConfig() {
     } else {
         ui->micComboBox->setCurrentIndex(0);
     }
+
+    ui->micGateCheckBox->setChecked(toml::find_or<bool>(data, "Audio", "micGateEnabled", true));
+    ui->micGateThresholdSlider->setValue(
+        toml::find_or<int>(data, "Audio", "micGateThresholdDb", -50));
+    ui->micGateHoldSlider->setValue(toml::find_or<int>(data, "Audio", "micGateHoldMs", 300));
+    UpdateMicGateLabels();
 
     ui->readbacksCheckBox->setChecked(toml::find_or<bool>(data, "GPU", "readbacks", false));
     ui->readbackLinearImagesCheckBox->setChecked(
@@ -838,10 +883,133 @@ void SettingsDialog::VolumeSliderChange(int value) {
 }
 
 int SettingsDialog::exec() {
+    StartMicPreview();
     return QDialog::exec();
 }
 
-SettingsDialog::~SettingsDialog() {}
+SettingsDialog::~SettingsDialog() {
+    StopMicPreview();
+}
+
+void SettingsDialog::UpdateMicGateLabels() {
+    const bool enabled = ui->micGateCheckBox->isChecked();
+    ui->micGateThresholdValueLabel->setText(
+        QStringLiteral("%1 dB").arg(ui->micGateThresholdSlider->value()));
+    ui->micGateHoldValueLabel->setText(
+        QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
+    ui->micGateThresholdSlider->setEnabled(enabled);
+    ui->micGateHoldSlider->setEnabled(enabled);
+    if (!enabled) {
+        ui->micGateStatusLabel->setText(tr("Gate: disabled (mic always open)"));
+    }
+}
+
+void SettingsDialog::StartMicPreview() {
+    // Don't fight a running game for the capture device.
+    if (is_game_running) {
+        return;
+    }
+    StopMicPreview();
+
+    const QString dev_data = ui->micComboBox->currentData().toString();
+    m_mic_preview_device = dev_data;
+    if (dev_data == "None") {
+        return;  // nothing to preview
+    }
+
+    SDL_AudioDeviceID dev_id = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
+    if (dev_data != "Default Device") {
+        bool ok = false;
+        const uint dev = dev_data.toUInt(&ok);
+        if (ok) {
+            dev_id = static_cast<SDL_AudioDeviceID>(dev);
+        }
+    }
+
+    SDL_AudioSpec spec;
+    SDL_zero(spec);
+    spec.format = SDL_AUDIO_S16;
+    spec.channels = 1;
+    spec.freq = 44100;
+    SDL_InitSubSystem(SDL_INIT_AUDIO);
+    m_mic_preview_stream = SDL_OpenAudioDeviceStream(dev_id, &spec, nullptr, nullptr);
+    if (!m_mic_preview_stream) {
+        return;
+    }
+    SDL_ResumeAudioStreamDevice(m_mic_preview_stream);
+    m_mic_preview_gate_open = false;
+    m_mic_preview_last_active = std::chrono::steady_clock::now();
+    if (m_mic_preview_timer) {
+        m_mic_preview_timer->start();
+    }
+}
+
+void SettingsDialog::StopMicPreview() {
+    if (m_mic_preview_timer) {
+        m_mic_preview_timer->stop();
+    }
+    if (m_mic_preview_stream) {
+        SDL_DestroyAudioStream(m_mic_preview_stream);
+        m_mic_preview_stream = nullptr;
+    }
+    if (ui && ui->micLevelBar) {
+        ui->micLevelBar->setValue(0);
+    }
+}
+
+void SettingsDialog::UpdateMicPreview() {
+    if (!m_mic_preview_stream) {
+        return;
+    }
+    // Drain whatever the device has captured since the last tick and keep
+    // only the most recent ~20ms window for the level estimate.
+    int avail = SDL_GetAudioStreamAvailable(m_mic_preview_stream);
+    if (avail <= 0) {
+        return;
+    }
+    static thread_local std::vector<int16_t> buf;
+    const int max_bytes = 4096;  // ~46ms mono @ 44100; bound the read
+    const int to_read = std::min(avail, max_bytes);
+    buf.resize(to_read / sizeof(int16_t));
+    const int got = SDL_GetAudioStreamData(m_mic_preview_stream, buf.data(), to_read);
+    if (got <= 0) {
+        return;
+    }
+    const int count = got / static_cast<int>(sizeof(int16_t));
+
+    double sum_sq = 0.0;
+    for (int i = 0; i < count; ++i) {
+        const double s = static_cast<double>(buf[i]) / 32768.0;
+        sum_sq += s * s;
+    }
+    const double rms = count > 0 ? std::sqrt(sum_sq / count) : 0.0;
+    const double level_db = rms > 1e-7 ? 20.0 * std::log10(rms) : -120.0;
+
+    // Map [-90 dB, 0 dB] onto the 0..100 bar.
+    constexpr double kFloorDb = -90.0;
+    int bar = static_cast<int>((level_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
+    bar = std::clamp(bar, 0, 100);
+    ui->micLevelBar->setValue(bar);
+
+    // Mirror the runtime gate logic so the indicator matches in-game.
+    const int threshold_db = ui->micGateThresholdSlider->value();
+    const auto hold = std::chrono::milliseconds(ui->micGateHoldSlider->value());
+    const auto now = std::chrono::steady_clock::now();
+    if (level_db >= threshold_db) {
+        m_mic_preview_gate_open = true;
+        m_mic_preview_last_active = now;
+    } else if (m_mic_preview_gate_open && (now - m_mic_preview_last_active) >= hold) {
+        m_mic_preview_gate_open = false;
+    }
+
+    if (!ui->micGateCheckBox->isChecked()) {
+        ui->micGateStatusLabel->setText(tr("Gate: disabled (mic always open)"));
+    } else if (m_mic_preview_gate_open) {
+        ui->micGateStatusLabel->setText(tr("Gate: OPEN — voice passing"));
+    } else {
+        ui->micGateStatusLabel->setText(tr("Gate: closed — below threshold"));
+    }
+}
 
 void SettingsDialog::updateNoteTextEdit(const QString& elementName) {
     QString text;
@@ -1048,6 +1216,9 @@ void SettingsDialog::UpdateSettings(bool is_specific) {
     Config::setLogType(logTypeMap.value(ui->logTypeComboBox->currentText()).toStdString(),
                        is_specific);
     Config::setMicDevice(ui->micComboBox->currentData().toString().toStdString(), is_specific);
+    Config::setMicGateEnabled(ui->micGateCheckBox->isChecked(), is_specific);
+    Config::setMicGateThresholdDb(ui->micGateThresholdSlider->value(), is_specific);
+    Config::setMicGateHoldMs(ui->micGateHoldSlider->value(), is_specific);
     Config::setLogFilter(ui->logFilterLineEdit->text().toStdString(), is_specific);
     Config::setUserName(ui->userNameLineEdit->text().toStdString(), is_specific);
     Config::setCursorState(ui->hideCursorComboBox->currentIndex(), is_specific);

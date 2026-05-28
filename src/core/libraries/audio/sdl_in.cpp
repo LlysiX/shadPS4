@@ -2,12 +2,27 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <common/config.h>
 #include <common/logging/log.h>
 #include "sdl_in.h"
 
 namespace {
+// RMS level of a block of signed-16-bit samples, in dBFS (0 dB = full
+// scale). Returns a large negative number for digital silence.
+float RmsDbS16(const int16_t* samples, int count) {
+    if (count <= 0) return -120.0f;
+    double sum_sq = 0.0;
+    for (int i = 0; i < count; ++i) {
+        const double s = static_cast<double>(samples[i]) / 32768.0;
+        sum_sq += s * s;
+    }
+    const double rms = std::sqrt(sum_sq / static_cast<double>(count));
+    if (rms <= 1e-7) return -120.0f;
+    return static_cast<float>(20.0 * std::log10(rms));
+}
 // SDL picks per-OS defaults for the mic capture buffer — typically
 // 1024–4096 frames, which is 23–93 ms at 44100 Hz. RB4 polls the mic on
 // its vocal-mix path; if the first SDL chunk doesn't arrive until tens
@@ -165,9 +180,11 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     }
     if (stream_null) {
         // Null-stream port (mic disabled). Match the old caller contract:
-        // hand back zero-filled samples so games don't stall.
+        // hand back zero-filled samples so games don't stall. A disabled
+        // mic is by definition silent.
         const int bytesToRead = samples_num * sample_size * channels_num;
         std::memset(out_buffer, 0, bytesToRead);
+        if (port_ptr) port_ptr->silent.store(true, std::memory_order_relaxed);
         return samples_num;
     }
 
@@ -217,7 +234,48 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
         LOG_ERROR(Lib_AudioIn, "AudioInInput error: {}", SDL_GetError());
         return ORBIS_AUDIO_IN_ERROR_STREAM_FAIL;
     }
+
+    // Software noise gate. Still holding data_lock, so gate_open /
+    // last_active are safe to touch; `silent` is atomic for the
+    // cross-thread sceAudioInGetSilentState query.
+    if (Config::getMicGateEnabled() && sample_size == 2 && bytesRead > 0) {
+        const auto* samples = static_cast<const int16_t*>(out_buffer);
+        const int sample_count = bytesRead / 2;
+        const float level_db = RmsDbS16(samples, sample_count);
+        const float threshold_db = static_cast<float>(Config::getMicGateThresholdDb());
+        const auto hold = std::chrono::milliseconds(Config::getMicGateHoldMs());
+        const auto now = std::chrono::steady_clock::now();
+
+        if (level_db >= threshold_db) {
+            port_ptr->gate_open = true;
+            port_ptr->last_active = now;
+        } else if (port_ptr->gate_open && (now - port_ptr->last_active) >= hold) {
+            // Held quiet long enough — close the gate.
+            port_ptr->gate_open = false;
+        }
+
+        if (!port_ptr->gate_open) {
+            std::memset(out_buffer, 0, static_cast<std::size_t>(bytesRead));
+            port_ptr->silent.store(true, std::memory_order_relaxed);
+        } else {
+            port_ptr->silent.store(false, std::memory_order_relaxed);
+        }
+    } else {
+        // Gate disabled (or non-S16 format we don't analyse): always
+        // report active so the game mixes the mic unchanged.
+        port_ptr->gate_open = true;
+        port_ptr->silent.store(false, std::memory_order_relaxed);
+    }
+
     return bytesRead / frame_size;
+}
+
+bool SDLAudioIn::IsSilent(int handle) {
+    std::scoped_lock lock{m_mutex};
+    if (handle < 1 || handle > static_cast<int>(portsIn.size())) return true;
+    auto& port = portsIn[handle - 1];
+    if (!port.isOpen) return true;
+    return port.silent.load(std::memory_order_relaxed);
 }
 
 void SDLAudioIn::AudioInClose(int handle) {

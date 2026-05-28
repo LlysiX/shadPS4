@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <span>
 #include <QDialog>
@@ -13,6 +14,9 @@
 #include "common/path_util.h"
 #include "gui_settings.h"
 #include "qt_gui/compatibility_info.h"
+
+class QTimer;
+struct SDL_AudioStream;
 
 namespace Ui {
 class SettingsDialog;
@@ -50,6 +54,15 @@ private:
     void onAudioDeviceChange(bool isAdd);
     void pollSDLevents();
 
+    // Live mic-input preview for the noise-gate UI. Opens an SDL capture
+    // stream on the selected device, polls its RMS level on a timer, and
+    // drives the level bar + "gate open/closed" indicator so the user
+    // can dial in the threshold like Discord's input sensitivity meter.
+    void StartMicPreview();
+    void StopMicPreview();
+    void UpdateMicPreview();
+    void UpdateMicGateLabels();
+
     std::unique_ptr<Ui::SettingsDialog> ui;
 
     std::map<std::string, int> languages;
@@ -66,4 +79,10 @@ private:
 
     std::shared_ptr<gui_settings> m_gui_settings;
     QFuture<void> Polling;
+
+    QTimer* m_mic_preview_timer = nullptr;
+    SDL_AudioStream* m_mic_preview_stream = nullptr;
+    QString m_mic_preview_device;  // device data string currently open for preview
+    bool m_mic_preview_gate_open = false;
+    std::chrono::steady_clock::time_point m_mic_preview_last_active{};
 };

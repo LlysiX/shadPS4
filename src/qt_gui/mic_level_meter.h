@@ -56,8 +56,8 @@ protected:
         // gate is disabled = always passing), grey otherwise.
         const int fill_w = w * m_level / 100;
         const bool passing = !m_gate_enabled || m_gate_open;
-        const QColor fill = passing ? QColor(0x4c, 0xc2, 0x5a)   // green
-                                    : QColor(0x6a, 0x6a, 0x6a);  // grey
+        const QColor fill = passing ? QColor(0x4c, 0xc2, 0x5a)  // green
+                                    : QColor(0x6a, 0x6a, 0x6a); // grey
         if (fill_w > 0) {
             p.fillRect(0, 0, fill_w, h, fill);
         }
@@ -73,7 +73,7 @@ protected:
         // gate. Hidden when the gate is disabled.
         if (m_gate_enabled) {
             const int x = std::clamp(w * m_threshold / 100, 0, w - 1);
-            p.setPen(QPen(QColor(0xff, 0xc0, 0x30), 2));  // amber
+            p.setPen(QPen(QColor(0xff, 0xc0, 0x30), 2)); // amber
             p.drawLine(x, 0, x, h);
         }
 

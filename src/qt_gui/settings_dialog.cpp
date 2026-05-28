@@ -252,11 +252,10 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
         // opens, without waiting for the user to nudge a slider.
         UpdateMicGateLabels();
 
-        connect(ui->micGateThresholdSlider, &QSlider::valueChanged, this,
-                [this](int value) {
-                    Config::setMicGateThresholdDb(value, is_game_specific);
-                    UpdateMicGateLabels();
-                });
+        connect(ui->micGateThresholdSlider, &QSlider::valueChanged, this, [this](int value) {
+            Config::setMicGateThresholdDb(value, is_game_specific);
+            UpdateMicGateLabels();
+        });
         connect(ui->micGateHoldSlider, &QSlider::valueChanged, this, [this](int value) {
             Config::setMicGateHoldMs(value, is_game_specific);
             UpdateMicGateLabels();
@@ -278,9 +277,8 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
                 [this](int) { StartMicPreview(); });
 
         m_mic_preview_timer = new QTimer(this);
-        m_mic_preview_timer->setInterval(33);  // ~30 Hz meter refresh
-        connect(m_mic_preview_timer, &QTimer::timeout, this,
-                &SettingsDialog::UpdateMicPreview);
+        m_mic_preview_timer->setInterval(33); // ~30 Hz meter refresh
+        connect(m_mic_preview_timer, &QTimer::timeout, this, &SettingsDialog::UpdateMicPreview);
     }
 
     // GENERAL TAB
@@ -908,8 +906,7 @@ void SettingsDialog::UpdateMicGateLabels() {
     const bool enabled = ui->micGateCheckBox->isChecked();
     const int threshold_db = ui->micGateThresholdSlider->value();
     ui->micGateThresholdValueLabel->setText(QStringLiteral("%1 dB").arg(threshold_db));
-    ui->micGateHoldValueLabel->setText(
-        QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
+    ui->micGateHoldValueLabel->setText(QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
     ui->micGateThresholdSlider->setEnabled(enabled);
     ui->micGateHoldSlider->setEnabled(enabled);
     if (m_mic_level_meter) {
@@ -935,7 +932,7 @@ void SettingsDialog::StartMicPreview() {
     const QString dev_data = ui->micComboBox->currentData().toString();
     m_mic_preview_device = dev_data;
     if (dev_data == "None") {
-        return;  // nothing to preview
+        return; // nothing to preview
     }
 
     SDL_AudioDeviceID dev_id = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
@@ -990,7 +987,7 @@ void SettingsDialog::UpdateMicPreview() {
         return;
     }
     static thread_local std::vector<int16_t> buf;
-    const int max_bytes = 4096;  // ~46ms mono @ 44100; bound the read
+    const int max_bytes = 4096; // ~46ms mono @ 44100; bound the read
     const int to_read = std::min(avail, max_bytes);
     buf.resize(to_read / sizeof(int16_t));
     const int got = SDL_GetAudioStreamData(m_mic_preview_stream, buf.data(), to_read);

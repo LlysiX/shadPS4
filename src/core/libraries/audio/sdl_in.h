@@ -90,6 +90,6 @@ private:
     // one port doesn't stall opens/closes on another.
     std::mutex m_mutex;
 
-    static void SDLCALL OnStreamPut(void* userdata, SDL_AudioStream* stream,
-                                    int additional_amount, int total_amount);
+    static void SDLCALL OnStreamPut(void* userdata, SDL_AudioStream* stream, int additional_amount,
+                                    int total_amount);
 };

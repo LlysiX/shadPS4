@@ -13,14 +13,16 @@ namespace {
 // RMS level of a block of signed-16-bit samples, in dBFS (0 dB = full
 // scale). Returns a large negative number for digital silence.
 float RmsDbS16(const int16_t* samples, int count) {
-    if (count <= 0) return -120.0f;
+    if (count <= 0)
+        return -120.0f;
     double sum_sq = 0.0;
     for (int i = 0; i < count; ++i) {
         const double s = static_cast<double>(samples[i]) / 32768.0;
         sum_sq += s * s;
     }
     const double rms = std::sqrt(sum_sq / static_cast<double>(count));
-    if (rms <= 1e-7) return -120.0f;
+    if (rms <= 1e-7)
+        return -120.0f;
     return static_cast<float>(20.0 * std::log10(rms));
 }
 // SDL picks per-OS defaults for the mic capture buffer — typically
@@ -43,7 +45,7 @@ constexpr auto kInputTimeout = std::chrono::milliseconds(100);
 // arrives, so this is just a safety net — short enough that we don't
 // stall noticeably if the callback ever misfires.
 constexpr auto kInputWaitSlice = std::chrono::milliseconds(5);
-}  // namespace
+} // namespace
 
 int SDLAudioIn::AudioInit() {
     return SDL_InitSubSystem(SDL_INIT_AUDIO);
@@ -56,7 +58,8 @@ void SDLCALL SDLAudioIn::OnStreamPut(void* userdata, SDL_AudioStream* /*stream*/
     // more data on this port; the waiter re-checks SDL_GetAudioStreamAvailable
     // under the port mutex and drains what it needs.
     auto* port = static_cast<AudioInPort*>(userdata);
-    if (!port || !port->data_cv) return;
+    if (!port || !port->data_cv)
+        return;
     port->data_cv->notify_all();
 }
 
@@ -133,8 +136,7 @@ int SDLAudioIn::AudioInOpen(int type, uint32_t samples_num, uint32_t freq, uint3
             // so its element addresses are stable for the SDLAudioIn
             // lifetime.
             if (!SDL_SetAudioStreamPutCallback(port.stream, OnStreamPut, &port)) {
-                LOG_WARNING(Lib_AudioIn,
-                            "AudioInOpen: SDL_SetAudioStreamPutCallback failed: {}",
+                LOG_WARNING(Lib_AudioIn, "AudioInOpen: SDL_SetAudioStreamPutCallback failed: {}",
                             SDL_GetError());
                 // Non-fatal — the wait loop falls back to its kInputWaitSlice
                 // timeouts. The mic still works, just with the old poll
@@ -171,7 +173,8 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     {
         std::scoped_lock lock{m_mutex};
         auto& port = portsIn[handle - 1];
-        if (!port.isOpen) return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+        if (!port.isOpen)
+            return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
         sample_size = port.sample_size;
         channels_num = port.channels_num;
         samples_num = port.samples_num;
@@ -184,7 +187,8 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
         // mic is by definition silent.
         const int bytesToRead = samples_num * sample_size * channels_num;
         std::memset(out_buffer, 0, bytesToRead);
-        if (port_ptr) port_ptr->silent.store(true, std::memory_order_relaxed);
+        if (port_ptr)
+            port_ptr->silent.store(true, std::memory_order_relaxed);
         return samples_num;
     }
 
@@ -199,16 +203,19 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     // here, so open/close on OTHER ports keeps working normally.
     std::unique_lock data_lock{*port_ptr->data_mu};
     SDL_AudioStream* live = port_ptr->stream;
-    if (!live) return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    if (!live)
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
 
     while (SDL_GetAudioStreamAvailable(live) < bytesToRead) {
-        if (std::chrono::steady_clock::now() >= deadline) break;
+        if (std::chrono::steady_clock::now() >= deadline)
+            break;
         // wait_for atomically releases data_lock while sleeping; the
         // put callback notifies us as soon as SDL pushes more bytes
         // into the stream.
         port_ptr->data_cv->wait_for(data_lock, kInputWaitSlice);
         live = port_ptr->stream;
-        if (!live) return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+        if (!live)
+            return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
     }
 
     const int avail = SDL_GetAudioStreamAvailable(live);
@@ -227,7 +234,8 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     // for a quantum that may not come.
     const int read_target = std::min(avail, bytesToRead);
     const int aligned_target = (read_target / frame_size) * frame_size;
-    if (aligned_target <= 0) return ORBIS_AUDIO_IN_ERROR_TIMEOUT;
+    if (aligned_target <= 0)
+        return ORBIS_AUDIO_IN_ERROR_TIMEOUT;
 
     const int bytesRead = SDL_GetAudioStreamData(live, out_buffer, aligned_target);
     if (bytesRead < 0) {
@@ -272,9 +280,11 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
 
 bool SDLAudioIn::IsSilent(int handle) {
     std::scoped_lock lock{m_mutex};
-    if (handle < 1 || handle > static_cast<int>(portsIn.size())) return true;
+    if (handle < 1 || handle > static_cast<int>(portsIn.size()))
+        return true;
     auto& port = portsIn[handle - 1];
-    if (!port.isOpen) return true;
+    if (!port.isOpen)
+        return true;
     return port.silent.load(std::memory_order_relaxed);
 }
 
@@ -283,9 +293,11 @@ void SDLAudioIn::AudioInClose(int handle) {
     AudioInPort* port_ptr = nullptr;
     {
         std::scoped_lock lock{m_mutex};
-        if (handle < 1 || handle > static_cast<int>(portsIn.size())) return;
+        if (handle < 1 || handle > static_cast<int>(portsIn.size()))
+            return;
         auto& port = portsIn[handle - 1];
-        if (!port.isOpen) return;
+        if (!port.isOpen)
+            return;
         port_ptr = &port;
         // Take the port's data mutex too — any AudioInInput call still
         // inside the wait loop holds this; we'll get the lock once it

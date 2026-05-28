@@ -276,7 +276,10 @@ void RescanKits() {
 bool EnsureInit() {
     bool ok = true;
     std::call_once(g_init_once, [&] {
-        LoadAllKits();
+        // Use the shared lazy loader so the kit list is populated exactly
+        // once, regardless of whether ShouldHideFromUsbd() or EnsureInit()
+        // wins the race during game boot.
+        EnsureKitsLoaded();
         if (SDL_hid_init() != 0) {
             LOG_ERROR(Input, "SDL_hid_init failed");
             ok = false;

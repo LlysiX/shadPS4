@@ -46,8 +46,11 @@ struct KitProbeData {
     // version key): basic guitar/drum step list, no combos. v2: added
     // version field. v3: GuitarSteps gained combo steps (green_strum,
     // green_blue, green_blue_strum); added GuitarSolo device type with
-    // solo_fret_* steps; DrumSteps gained orange_pad. Tests use the
-    // version to know which steps MUST be present.
+    // solo_fret_* steps; DrumSteps gained orange_pad. v4: added the
+    // _idle_baseline step (used to set baseline_min/max separately from
+    // the motion-sensor sweep). v5: GuitarSolo gained solo_green_blue
+    // (two-solo-fret combo) and fx_switch (pickup/FX position sweep).
+    // Tests use the version to know which steps MUST be present.
     int version = 1;
     uint16_t vid = 0;
     uint16_t pid = 0;

@@ -276,6 +276,126 @@ bool RoundTripStep(const StepResultData& step, std::string& detail) {
     return false;
 }
 
+// Per-fret face-button check, used for the 5 solo_*_fret steps on a
+// GuitarSolo kit with either a dedicated solo_fret_byte OR a
+// solo_modifier_byte/mask. Each press must:
+//   (a) flip a bit in dud[4] (the fretSolo flag), AND
+//   (b) fire a face-button bit (Cross / Circle / Triangle / Square / L1)
+//       in PackButtons output — without [buttons_byte_<solo>] mapping
+//       RB4 sees the solo flag but no button press, and the note never
+//       registers as held.
+// We also require that some frame in the step left dud[3] == 0 while
+// dud[4] != 0: that's the proof the solo-modifier code path actually
+// routes the bits to dud[4] instead of letting them stay in the main
+// fret slot. Catches a regression where solo_modifier_byte is set but
+// PackDeviceUniqueData ignores it.
+bool SoloFretStep(const StepResultData& step, std::string& detail) {
+    using B = Libraries::Pad::OrbisPadButtonDataOffset;
+    const u32 face_mask =
+        static_cast<u32>(B::Cross) | static_cast<u32>(B::Circle) |
+        static_cast<u32>(B::Triangle) | static_cast<u32>(B::Square) |
+        static_cast<u32>(B::L1);
+    if (step.raw.empty()) {
+        detail = "solo step '" + step.key + "' has no frames";
+        return false;
+    }
+    bool saw_solo_dud = false, saw_face_button = false, saw_solo_isolated = false;
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+        if (dud[4] != 0) {
+            saw_solo_dud = true;
+            if (dud[3] == 0) saw_solo_isolated = true;
+        }
+        const u32 buttons = HID::PackButtons(
+            1, frame.data(), frame.size(),
+            Libraries::Pad::OrbisPadDeviceClass::Guitar);
+        if (buttons & face_mask) saw_face_button = true;
+        if (saw_solo_dud && saw_face_button && saw_solo_isolated) return true;
+    }
+    if (!saw_solo_dud) {
+        detail = "solo step '" + step.key + "' produced no dud[4] bit";
+        return false;
+    }
+    if (!saw_face_button) {
+        detail = "solo step '" + step.key + "' fired dud[4] but no face button bit "
+                 "(missing [buttons_byte_<solo>] mapping?)";
+        return false;
+    }
+    detail = "solo step '" + step.key + "' set dud[4] but never cleared dud[3] "
+             "in the same frame (solo_modifier_byte not gating dud[3]?)";
+    return false;
+}
+
+// Counterpart for the regular fret_* steps on a GuitarSolo kit: pressing
+// a main fret with NO solo modifier held must leave dud[4] == 0. Without
+// this, a kit derived as solo-modifier-style but with a buggy packer
+// (modifier always active) would route every fret press to dud[4],
+// effectively breaking the whole main fretboard — and SoloFretStep alone
+// wouldn't catch it because it doesn't run on non-solo steps.
+bool MainFretStep(const StepResultData& step, std::string& detail) {
+    if (step.raw.empty()) {
+        detail = "fret step '" + step.key + "' has no frames";
+        return false;
+    }
+    bool saw_main_dud = false;
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+        if (dud[4] != 0) {
+            detail = "fret step '" + step.key +
+                     "' leaked into dud[4] (modifier code path stuck on?)";
+            return false;
+        }
+        if (dud[3] != 0) saw_main_dud = true;
+    }
+    if (!saw_main_dud) {
+        detail = "fret step '" + step.key + "' produced no dud[3] bit";
+        return false;
+    }
+    return true;
+}
+
+// "Both solo frets held" combo (e.g. solo_green_blue). The capture must
+// produce a frame where:
+//   - dud[4] has TWO bits set (green + blue solo positions), AND
+//   - PackButtons fires BOTH face buttons simultaneously (Cross | Square).
+// Catches kit derivations that pick a fret mask too narrow to cover both
+// bits, or that drop the [buttons_byte_<solo>] entries for individual
+// colours so the combined press only fires one button.
+bool SoloFretComboStep(const StepResultData& step, std::string& detail) {
+    using B = Libraries::Pad::OrbisPadButtonDataOffset;
+    const u32 both_buttons = static_cast<u32>(B::Cross) | static_cast<u32>(B::Square);
+    if (step.raw.empty()) {
+        detail = "solo combo '" + step.key + "' has no frames";
+        return false;
+    }
+    bool saw_two_dud_bits = false, saw_both_buttons = false;
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+        const u8 d4 = dud[4];
+        if (d4 != 0 && (d4 & (d4 - 1)) != 0) saw_two_dud_bits = true;
+        const u32 buttons = HID::PackButtons(
+            1, frame.data(), frame.size(),
+            Libraries::Pad::OrbisPadDeviceClass::Guitar);
+        if ((buttons & both_buttons) == both_buttons) saw_both_buttons = true;
+        if (saw_two_dud_bits && saw_both_buttons) return true;
+    }
+    if (!saw_two_dud_bits) {
+        detail = "solo combo '" + step.key +
+                 "' never set two bits in dud[4] (solo_fret_byte mask too narrow?)";
+        return false;
+    }
+    detail = "solo combo '" + step.key +
+             "' set two dud[4] bits but never fired both face buttons "
+             "(missing solo bit→button mapping for one of green/blue?)";
+    return false;
+}
+
 CaseResult RunCase(const fs::path& path) {
     CaseResult r{};
     r.name = path.filename().string();
@@ -310,6 +430,12 @@ CaseResult RunCase(const fs::path& path) {
             return r;
         }
     }
+    if (data.version >= 5 && data.device_type == ProbeDeviceType::GuitarSolo) {
+        if (!has_step("solo_green_blue")) {
+            r.detail = "v5 guitar_solo missing combo step 'solo_green_blue'";
+            return r;
+        }
+    }
     if (is_guitar) {
         if (!TomlContains(toml, "device_class = \"guitar\"")) {
             r.detail = "expected device_class = \"guitar\"";
@@ -319,9 +445,15 @@ CaseResult RunCase(const fs::path& path) {
             r.detail = "missing fret_byte for guitar";
             return r;
         }
+        // GuitarSolo TOMLs must declare at least one solo-encoding path:
+        //   solo_fret_byte         (PS4 Mustang / PS5 Riffmaster — dedicated byte)
+        //   solo_modifier_byte     (X360 RB / Strat — main fret + L3 modifier)
+        // If neither shows up, the wizard didn't actually capture solo
+        // frets — call it out.
         if (data.device_type == ProbeDeviceType::GuitarSolo &&
-            !TomlContains(toml, "solo_fret_byte = ")) {
-            r.detail = "missing solo_fret_byte for guitar_solo";
+            !TomlContains(toml, "solo_fret_byte = ") &&
+            !TomlContains(toml, "solo_modifier_byte = ")) {
+            r.detail = "missing solo_fret_byte / solo_modifier_byte for guitar_solo";
             return r;
         }
         if (!TomlContains(toml, "[buttons_byte_")) {
@@ -363,6 +495,10 @@ CaseResult RunCase(const fs::path& path) {
         // packing the 2nd kick frame produces no output. Optional step.
         "kick_pedal_2",
     };
+    const bool check_solo_buttons =
+        data.device_type == ProbeDeviceType::GuitarSolo &&
+        (TomlContains(toml, "solo_fret_byte = ") ||
+         TomlContains(toml, "solo_modifier_byte = "));
     for (const auto& step : data.results) {
         if (step.key.empty() || step.key[0] == '_') continue;
         if (std::find(kSkipSteps.begin(), kSkipSteps.end(), step.key) !=
@@ -370,6 +506,42 @@ CaseResult RunCase(const fs::path& path) {
             continue;
         }
         std::string detail;
+        // Stronger check for the 5 solo frets on a GuitarSolo kit with a
+        // dedicated solo_fret_byte: each press must produce BOTH a dud[4]
+        // bit AND a face-button bit. The generic RoundTripStep only
+        // requires one of the two, which lets the regression slip
+        // through.
+        const bool is_solo_step =
+            step.key.rfind("solo_", 0) == 0 &&
+            step.key.find("_fret") != std::string::npos;
+        if (check_solo_buttons && is_solo_step) {
+            if (!SoloFretStep(step, detail)) {
+                r.detail = detail;
+                return r;
+            }
+            continue;
+        }
+        if (check_solo_buttons && step.key == "solo_green_blue") {
+            if (!SoloFretComboStep(step, detail)) {
+                r.detail = detail;
+                return r;
+            }
+            continue;
+        }
+        // On a GuitarSolo kit, main fret presses must NOT leak into
+        // dud[4]. green_blue / green_blue_strum are combo steps that
+        // skip strict main-fret checking (HAT byte may interact);
+        // green_strum strums while holding green — also fine.
+        const bool is_main_fret =
+            step.key.find("_fret") != std::string::npos &&
+            step.key.rfind("solo_", 0) != 0;
+        if (check_solo_buttons && is_main_fret) {
+            if (!MainFretStep(step, detail)) {
+                r.detail = detail;
+                return r;
+            }
+            continue;
+        }
         if (!RoundTripStep(step, detail)) {
             r.detail = detail;
             return r;

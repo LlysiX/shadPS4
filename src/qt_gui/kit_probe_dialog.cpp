@@ -119,6 +119,16 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
 const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
     static const std::vector<KitProbeDialog::StepDef> steps = [] {
         std::vector<KitProbeDialog::StepDef> v = GuitarSteps();
+        // PS4 RB Mustang / PS5 Riffmaster don't have a continuous touch
+        // strip — they ship a pickup-switch instead (already captured as
+        // `fx_switch`). Skip the touch_slider step for this device type so
+        // users don't waste a slot on something that doesn't exist on
+        // their kit.
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [](const KitProbeDialog::StepDef& s) {
+                                   return s.key == "touch_slider";
+                               }),
+                v.end());
         auto insertAt = v.begin();
         for (auto it = v.begin(); it != v.end(); ++it) {
             if (it->key == "strum_up") { insertAt = it; break; }
@@ -129,6 +139,16 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
             {"solo_yellow_fret", QObject::tr("UPPER solo YELLOW fret"),                       "digital", false},
             {"solo_blue_fret",   QObject::tr("UPPER solo BLUE fret"),                         "digital", false},
             {"solo_orange_fret", QObject::tr("UPPER solo ORANGE fret"),                       "digital", false},
+            // Solo-frets combo — analogue of green_blue for the main
+            // neck. Catches kits where solo bits land on the same byte
+            // but a single press fires multiple bits (broken bit mask)
+            // or where two simultaneous solo bits get swallowed
+            // (button-bytes section missing).
+            {"solo_green_blue",  QObject::tr("Hold UPPER solo GREEN and UPPER solo BLUE together"), "combo", false},
+            // PS4 RB Mustang / PS5 Riffmaster / X360 RB all ship a
+            // discrete pickup/FX switch (the only guitars that DO);
+            // capture it here instead of in the standard walkthrough.
+            {"fx_switch",        QObject::tr("FX / pickup switch — sweep through every position"), "velocity", false},
         });
         return v;
     }();
@@ -906,7 +926,7 @@ void KitProbeDialog::onSaveResults() {
         // report-ID or already the first data byte.
         const char* sourceStr = m_isXInput ? "xinput" : "hid";
         QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":4,"
+            "{\"type\":\"meta\",\"version\":5,"
             "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
             "\"device_name\":\"%3\",\"device_type\":\"%4\","
             "\"source\":\"%5\","

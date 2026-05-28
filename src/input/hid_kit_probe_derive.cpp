@@ -382,26 +382,44 @@ std::string DeriveKitToml(const KitProbeData& data) {
         if (fretByte >= 0) os << "fret_byte = " << fretByte << "\n";
         const int whammy = velByte("whammy_bar");
         const int touch = velByte("touch_slider");
+        const int fx = velByte("fx_switch");
         if (whammy >= 0) {
             os << "whammy_byte = " << whammy << "\n";
             const int wb = baseline_max[whammy];
             if (wb < 0x40) os << "whammy_baseline = 0\n";
         }
+        // PS3 GH/RB guitars have a continuous touch strip (tone slider).
+        // PS4 RB Mustang / PS5 Riffmaster / X360 RB guitars have a
+        // discrete pickup/FX switch instead. Both map to dud[0] in PS4
+        // wire format via tone_byte, so the runtime treats them the
+        // same; we just prefer fx_switch when present.
+        // Pick the source byte for dud[0] (tone position). PS3 GH/RB
+        // guitars feed it from a continuous touch strip; PS4/PS5/X360
+        // guitars feed it from a discrete pickup/FX switch — the runtime
+        // (PackDeviceUniqueData) treats both as a 0x10–0xFF ramp mapped
+        // onto positions 1–4. Prefer the FX switch when both are present
+        // (a Mustang user might have noisily brushed the touch_slider
+        // step even though the kit has no strip).
+        const int tone_src = (fx >= 0) ? fx : touch;
         if (touch >= 0) os << "touch_byte  = " << touch << "\n";
-        if (touch >= 0) os << "tone_byte   = " << touch << "\n";
+        if (tone_src >= 0) os << "tone_byte   = " << tone_src << "\n";
         // PS4/PS5 RB guitars have a second set of solo frets on the upper
         // neck — they pack into dud[4] (fretSolo). Pick the byte with max
         // coverage across all 5 solo-fret presses, same algorithm as for
         // the main fret_byte but limited to the upper-neck capture steps.
-        const char* solo_steps[] = {
-            "solo_green_fret", "solo_red_fret", "solo_yellow_fret",
-            "solo_blue_fret", "solo_orange_fret",
+        struct SoloMap { const char* step; const char* name; const char* origin; };
+        const SoloMap solo_frets[] = {
+            {"solo_green_fret",  "cross",    "solo green fret"},
+            {"solo_red_fret",    "circle",   "solo red fret"},
+            {"solo_yellow_fret", "triangle", "solo yellow fret"},
+            {"solo_blue_fret",   "square",   "solo blue fret"},
+            {"solo_orange_fret", "l1",       "solo orange fret"},
         };
+        std::array<std::vector<std::pair<int, uint8_t>>, 5> solo_cands;
         std::map<int, int> solo_cov;
-        for (const char* step : solo_steps) {
-            for (const auto& [byte, _] : detectAllFlagCandidates(step)) {
-                ++solo_cov[byte];
-            }
+        for (int i = 0; i < 5; ++i) {
+            solo_cands[i] = detectAllFlagCandidates(solo_frets[i].step);
+            for (const auto& [byte, _] : solo_cands[i]) ++solo_cov[byte];
         }
         int solo_byte = -1, solo_cov_best = 0, solo_base_best = 0x7FFFFFFF;
         for (const auto& [byte, count] : solo_cov) {
@@ -415,6 +433,51 @@ std::string DeriveKitToml(const KitProbeData& data) {
         }
         if (solo_byte >= 0 && solo_byte != fretByte) {
             os << "solo_fret_byte = " << solo_byte << "\n";
+            // ALSO map each solo fret bit to its PS4 face button. Without
+            // this, pressing a solo fret only sets dud[4] (the fretSolo
+            // flag byte) — RB4 sees no button press, so the note isn't
+            // recognised as held. Real PS4 Mustang / PS5 Riffmaster fire
+            // the face button alongside the solo bit; the wizard
+            // synthesises the same behaviour by emitting
+            // [buttons_byte_<solo>] with the same bit→name table the main
+            // fret byte got.
+            for (int i = 0; i < 5; ++i) {
+                for (const auto& [byte, mask] : solo_cands[i]) {
+                    if (byte != solo_byte) continue;
+                    button_bits.push_back({byte, mask, solo_frets[i].name,
+                                           solo_frets[i].origin});
+                    break;
+                }
+            }
+        } else if (solo_byte < 0 || solo_byte == fretByte) {
+            // X360 RB Guitar / Strat-style: solo frets land on the SAME
+            // byte as main frets (their bits coincide), with a separate
+            // modifier button (L3 on X360, R3 on some Strats) held down to
+            // distinguish a solo press from a regular fret. Look for a
+            // (byte, bit) pair that appears in EVERY solo step's candidate
+            // list and is distinct from fretByte — that's the modifier.
+            std::map<std::pair<int, uint8_t>, int> mod_count;
+            for (int i = 0; i < 5; ++i) {
+                for (const auto& [byte, mask] : solo_cands[i]) {
+                    if (byte == fretByte) continue;
+                    ++mod_count[{byte, mask}];
+                }
+            }
+            int mod_byte = -1; uint8_t mod_mask = 0;
+            for (const auto& [bm, count] : mod_count) {
+                // Require ALL 5 solo presses to have surfaced this same
+                // (byte, bit) — that's the modifier signature.
+                if (count == 5) {
+                    mod_byte = bm.first;
+                    mod_mask = bm.second;
+                    break;
+                }
+            }
+            if (mod_byte >= 0) {
+                os << "solo_modifier_byte = " << mod_byte << "\n";
+                os << "solo_modifier_mask = 0x" << std::hex
+                   << int(mod_mask) << std::dec << "\n";
+            }
         }
     }
     if (IsGuitarType(data.device_type) && !motion_bytes.empty()) {

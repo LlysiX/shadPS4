@@ -50,6 +50,14 @@ struct KitDef {
     int fret_byte = 0;
     u8 fret_mask = 0xFF;
     int solo_fret_byte = -1;
+    // Some guitars (Xbox 360 RB, original Stratocaster) don't have a
+    // dedicated solo-fret bitmask — they encode "solo press" as "main fret
+    // bit held while a modifier button (left-stick click on X360) is
+    // also held". When solo_modifier_byte/mask are set the packer routes
+    // the main fret value to dud[4] instead of dud[3] for the duration
+    // the modifier is pressed.
+    int solo_modifier_byte = -1;
+    u8 solo_modifier_mask = 0;
     bool guitar_ps4_layout = false;
     bool drum_ps4_layout = false;
     int drum_red_byte           = -1;
@@ -92,6 +100,12 @@ extern SlotState g_slots[kNumSlots];
 // Pure-logic helpers exposed for the IO layer + tests. Defined in hid_packer.cpp.
 bool LoadKitFromToml(const std::string& file_path);
 void LoadAllKits();
+// Lazy no-SDL version — populates g_kits exactly once across the process.
+// Both EnsureInit() (IO layer) and ShouldHideFromUsbd() (libusb shim) call
+// it; whoever runs first wins the race, the other becomes a no-op. This
+// prevents the "device shows up twice" failure when the game enumerates
+// USB devices before its first scePadRead.
+void EnsureKitsLoaded();
 const KitDef* FindKit(u16 vid, u16 pid);
 bool PathInUseByOtherSlot(const std::string& path, int this_slot_index);
 constexpr u8 ScaleVel7to8(u8 v) {

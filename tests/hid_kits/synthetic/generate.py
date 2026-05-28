@@ -42,21 +42,49 @@ OUTDIR = Path(__file__).resolve().parent
 # transition counts, and lets the round-trip stage prove a transition
 # fired between baseline and the press.
 # ---------------------------------------------------------------------------
-SYNTHETIC_VERSION = 3  # combo + solo-fret + orange_pad capture coverage
+SYNTHETIC_VERSION = 5  # v3 combo+solo+orange, v4 idle-baseline, v5 solo_green_blue
 
 
 class Kit:
-    def __init__(self, name: str, meta: dict, idle: list[int]):
+    def __init__(self, name: str, meta: dict, idle: list[int],
+                 motion_bytes: tuple[int, ...] = ()):
+        """`motion_bytes` lists raw byte indices that jitter during the
+        `_motion_baseline` sweep (tilt sensor / gyro on guitars). Real
+        captures of a hand-shaken guitar show these bytes swinging across
+        a wide range while the rest of the report holds at idle; the
+        wizard uses that delta to flag them and exclude them from the
+        per-step velocity heuristic. Pass an empty tuple for kits with no
+        motion sensor (drums)."""
         meta.setdefault("version", SYNTHETIC_VERSION)
         self.name = name
         self.meta = meta
         self.idle = list(idle)
+        self.motion_bytes = motion_bytes
         self.frames: list[tuple[str, list[int]]] = []
         # Sanity check vs. the meta's report_length.
         assert len(idle) == meta["report_length"], \
             f"{name}: idle len {len(idle)} != report_length {meta['report_length']}"
+        # v4 split: _idle_baseline = device at rest (used as noise floor);
+        # _motion_baseline = user actively moving the guitar through its
+        # full tilt range (used to identify motion-sensor bytes). v < 4
+        # captures only had _motion_baseline and treated it as both —
+        # DeriveBaselineAndMotion in hid_kit_probe_derive.cpp falls back
+        # to that codepath when _idle_baseline is missing.
         for _ in range(30):
-            self.frames.append(("_motion_baseline", list(idle)))
+            self.frames.append(("_idle_baseline", list(idle)))
+        for i in range(40):
+            frame = list(idle)
+            # Sweep each declared motion byte through a sinusoidal
+            # range so DeriveBaselineAndMotion sees max-min > 3 and
+            # flags it. Values stay near the idle byte's value at the
+            # endpoints so the frame still looks like an idle device.
+            for b in motion_bytes:
+                base = idle[b]
+                # 0..39 → cycles roughly twice around the idle value.
+                offset = ((i * 13) % 60) - 30
+                v = max(0, min(255, base + offset))
+                frame[b] = v
+            self.frames.append(("_motion_baseline", frame))
 
     def _press_cycle(self, key: str, mutate, n_cycles: int = 3, samples_per_phase: int = 4):
         """Emit `n_cycles` press/release cycles. `mutate(frame, pressed)` writes
@@ -161,6 +189,7 @@ def gen_ps4_rb_mustang() -> None:
          "device_type": "guitar_solo", "source": "hid",
          "report_length": rep_len},
         idle,
+        motion_bytes=(45,),  # tilt
     )
     # tilt: byte 45 ramps up
     k.step_axis("tilt_up", 45, 0xE0, center=0x00)
@@ -190,10 +219,14 @@ def gen_ps4_rb_mustang() -> None:
         f[46] |= 0x01 | 0x08
         f[5] = 0x04
     k.step_combo("green_blue_strum", green_blue_strum)
+    # Solo combo: solo green + solo blue held together on byte 47.
+    def solo_green_blue(f):
+        f[47] |= 0x01 | 0x08
+    k.step_combo("solo_green_blue", solo_green_blue)
     # whammy: byte 44 ramps 0→0xFF
     k.step_velocity("whammy_bar", 44, peak=0xFF, baseline=0x00)
-    # touch / tone slider: byte 43 takes positions 0x10..0xFF
-    k.step_velocity("touch_slider", 43, peak=0xE0, baseline=0x00)
+    # FX / pickup switch: byte 43 takes discrete positions 0..4.
+    k.step_velocity("fx_switch", 43, peak=0xE0, baseline=0x00)
     # menu buttons
     k.step_bits("button_start",  6, 0x20)
     k.step_bits("button_select", 6, 0x10)
@@ -219,6 +252,7 @@ def gen_ps5_riffmaster() -> None:
          "device_type": "guitar_solo", "source": "hid",
          "report_length": rep_len},
         idle,
+        motion_bytes=(42,),  # tilt
     )
     k.step_axis("tilt_up", 42, 0xF0, center=0x10)
     for bit, key in enumerate(("green_fret", "red_fret", "yellow_fret",
@@ -243,8 +277,11 @@ def gen_ps5_riffmaster() -> None:
         f[43] |= 0x01 | 0x08
         f[8] = 0x04
     k.step_combo("green_blue_strum", green_blue_strum)
+    def solo_green_blue(f):
+        f[44] |= 0x01 | 0x08
+    k.step_combo("solo_green_blue", solo_green_blue)
     k.step_velocity("whammy_bar", 41, peak=0xFF, baseline=0x00)
-    # Riffmaster has no touch slider — skip.
+    # Riffmaster has no touch slider or pickup switch axis worth probing.
     k.step_bits("button_start",  9, 0x20)
     k.step_bits("button_select", 9, 0x10)
     k.step_bits("button_ps",    10, 0x01)
@@ -269,6 +306,7 @@ def gen_ps3_rb_guitar() -> None:
          "device_type": "guitar", "source": "hid",
          "report_length": rep_len},
         idle,
+        motion_bytes=(19, 20),  # PS3 GH accel.x (10-bit split across two bytes)
     )
     # tilt: PS3 accel.x is 10-bit across bytes 19 (low) and 20 (high 2 bits).
     # Tilt up DROPS the raw → step_axis with peak below center.
@@ -303,9 +341,19 @@ def gen_ps3_rb_guitar() -> None:
 
 # Spec: PlasticBand 5-Fret Guitar/Rock Band/Xbox 360.md
 #   XInput; 17-byte synthetic report from FillXInputReport.
-#   frets: A=green(bit0), B=red(bit1), Y=blue(bit3), X=yellow(bit2),
-#   LB=orange(bit4); strum on byte 2 d-pad bitmap; whammy on byte 5 (RX u8);
-#   tilt on byte 6 (RY u8); pickup on byte 7 (LT u8).
+#   Upper frets:  A=green(bit0), B=red(bit1), Y=blue(bit3), X=yellow(bit2),
+#                 LB=orange(bit4) on byte 0.
+#   Lower (solo): "Same buttons combined with left stick click" — L3 lives
+#                 on byte 1 bit 3 in our XInput synth. So a solo green press
+#                 sets byte 0 bit 0 AND byte 1 bit 3 simultaneously.
+#   Strum: byte 2 d-pad bitmap. Whammy: byte 5 (RX u8). Tilt: byte 6 (RY u8).
+#   Pickup / FX switch: byte 7 (LT u8).
+# Device type is `guitar_solo` to match the hardware capability, even
+# though our current packer doesn't materialise the L3-modified solo bits
+# into solo_fret_byte — the wizard derivation just sees them as the same
+# main fret byte and skips solo_fret_byte emission. That's still a useful
+# regression target: confirms the v3+ combo step coverage and the v5
+# solo_green_blue requirement parse without forcing a separate code path.
 def gen_x360_rb_guitar() -> None:
     rep_len = 17
     idle = [0] * rep_len
@@ -315,15 +363,31 @@ def gen_x360_rb_guitar() -> None:
         "x360_rb_guitar.raw.jsonl",
         {"vendor_id": "0x1bad", "product_id": "0x0004",
          "device_name": "Xbox 360 RB Guitar (synthetic)",
-         "device_type": "guitar", "source": "xinput",
+         "device_type": "guitar_solo", "source": "xinput",
          "report_length": rep_len},
         idle,
+        motion_bytes=(6,),  # RY = tilt on XInput RB guitar
     )
     k.step_axis("tilt_up", 6, 0xE0, center=0x80)
-    for bit, key in (
-            (0, "green_fret"), (1, "red_fret"), (3, "blue_fret"),
-            (2, "yellow_fret"), (4, "orange_fret")):
-        k.step_bits(key, 0, 1 << bit)
+    fret_bits = {"green": 0, "red": 1, "yellow": 2, "blue": 3, "orange": 4}
+    for colour, bit in fret_bits.items():
+        k.step_bits(f"{colour}_fret", 0, 1 << bit)
+    # Solo frets: main fret bit AND L3 (byte 1 bit 3) held together. The
+    # mainline packer doesn't have a code path for the L3 modifier yet
+    # (handled as a known limitation in tests/hidtest/main.cpp), but the
+    # capture still goes through DeriveKitToml + the per-step round-trip.
+    for colour, bit in fret_bits.items():
+        def make_mutator(b, captured=bit):
+            def m(f, pressed):
+                if pressed:
+                    f[0] |= 1 << captured
+                    f[1] |= 0x08          # L3 modifier
+            return m
+        k._press_cycle(f"solo_{colour}_fret", make_mutator(bit))
+    def solo_green_blue(f):
+        f[0] |= (1 << fret_bits["green"]) | (1 << fret_bits["blue"])
+        f[1] |= 0x08
+    k.step_combo("solo_green_blue", solo_green_blue)
     # XInput byte 2 is a 4-bit dpad bitmap, NOT an HID HAT.
     for key, bit in (("strum_up", 0), ("strum_down", 1),
                      ("dpad_up", 0), ("dpad_down", 1),
@@ -341,7 +405,8 @@ def gen_x360_rb_guitar() -> None:
         f[2] |= 0x02
     k.step_combo("green_blue_strum", green_blue_strum)
     k.step_velocity("whammy_bar", 5, peak=0xFF, baseline=0x80)
-    k.step_velocity("touch_slider", 7, peak=0xFF, baseline=0x00)  # via LT
+    # X360 RB Guitar ships an FX / pickup switch on the left trigger.
+    k.step_velocity("fx_switch", 7, peak=0xFF, baseline=0x00)
     k.step_bits("button_start",  1, 0x01)
     k.step_bits("button_select", 1, 0x02)
     k.step_bits("button_ps",     1, 0x04)
@@ -363,6 +428,7 @@ def gen_x360_gh_guitar() -> None:
          "device_type": "guitar", "source": "xinput",
          "report_length": rep_len},
         idle,
+        motion_bytes=(6,),  # RY = tilt on XInput GH guitar
     )
     k.step_axis("tilt_up", 6, 0xE0, center=0x80)
     for bit, key in (

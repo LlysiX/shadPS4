@@ -127,6 +127,9 @@ bool LoadKitFromToml(const std::string& file_path) {
         k.fret_byte = toml::find_or<int>(root, "fret_byte", 0);
         k.fret_mask = static_cast<u8>(toml::find_or<int>(root, "fret_mask", 0xFF));
         k.solo_fret_byte = toml::find_or<int>(root, "solo_fret_byte", -1);
+        k.solo_modifier_byte = toml::find_or<int>(root, "solo_modifier_byte", -1);
+        k.solo_modifier_mask = static_cast<u8>(
+            toml::find_or<int>(root, "solo_modifier_mask", 0));
         k.whammy_baseline = toml::find_or<int>(root, "whammy_baseline", 0x80);
         k.tilt_invert = toml::find_or<bool>(root, "tilt_invert", false);
         k.guitar_ps4_layout = toml::find_or<bool>(root, "guitar_ps4_layout", false);
@@ -205,6 +208,21 @@ bool LoadKitFromToml(const std::string& file_path) {
         LOG_WARNING(Input, "kit {}: parse error: {}", file.filename().string(), e.what());
         return false;
     }
+}
+
+namespace {
+std::once_flag g_kits_loaded_once;
+}  // namespace
+
+// Lazy-load all kit TOMLs exactly once, no SDL / no poll thread. The
+// full EnsureInit() in the IO layer also chains through here, so the
+// kit list is populated by whichever path hits first — sceUsbdGetDeviceList
+// (which calls ShouldHideFromUsbd to decide whether to drop a device from
+// the libusb list) typically fires during game boot, BEFORE any scePadRead
+// triggers EnsureInit; without this hook the Les Paul + Riffmaster show up
+// twice (once as the HID-passthrough pad, once via libusb).
+void EnsureKitsLoaded() {
+    std::call_once(g_kits_loaded_once, [] { LoadAllKits(); });
 }
 
 void LoadAllKits() {
@@ -355,10 +373,28 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             }
             frets = remapped;
         }
-        out[3] = frets;
-        if (kit->solo_fret_byte >= 0 &&
-            static_cast<std::size_t>(kit->solo_fret_byte) < raw_len) {
-            out[4] = at(kit->solo_fret_byte);
+        // Three solo-fret encodings, in priority order:
+        //   1. solo_modifier_byte/mask set (X360 RB Guitar, Strat-style):
+        //      while the modifier bit is held, the main fret bits are
+        //      treated as a SOLO press — routed to dud[4], dud[3] = 0.
+        //   2. solo_fret_byte set (PS4 Mustang, PS5 Riffmaster):
+        //      a dedicated byte carries the solo bitmask independently
+        //      from the main fret byte. Both can fire simultaneously.
+        //   3. Neither: dud[3] = main frets, dud[4] = 0.
+        const bool solo_active =
+            kit->solo_modifier_byte >= 0 &&
+            kit->solo_modifier_mask != 0 &&
+            static_cast<std::size_t>(kit->solo_modifier_byte) < raw_len &&
+            (raw[kit->solo_modifier_byte] & kit->solo_modifier_mask) != 0;
+        if (solo_active) {
+            out[3] = 0;
+            out[4] = frets;
+        } else {
+            out[3] = frets;
+            if (kit->solo_fret_byte >= 0 &&
+                static_cast<std::size_t>(kit->solo_fret_byte) < raw_len) {
+                out[4] = at(kit->solo_fret_byte);
+            }
         }
         return kMaxDeviceUniqueData;
     }
@@ -495,6 +531,10 @@ bool ShouldHideFromUsbd(u16 vid, u16 pid) {
         }
     }
     if (!any_enabled) return false;
+    // sceUsbdGetDeviceList usually runs during game boot, before any
+    // scePadRead triggers EnsureInit(). Populate the kit list lazily here
+    // so the very first libusb enumeration sees a non-empty g_kits.
+    EnsureKitsLoaded();
     std::lock_guard<std::mutex> lk(g_kits_mu);
     for (const auto& k : g_kits) {
         if (k.vid == vid && k.pid == pid) return true;

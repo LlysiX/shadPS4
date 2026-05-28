@@ -91,8 +91,23 @@ int PS4_SYSV_ABI sceAudioInGetRerouteCount() {
     return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI sceAudioInGetSilentState() {
-    LOG_ERROR(Lib_AudioIn, "(STUBBED) called");
+int PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle, u32* silent_state) {
+    // Real ABI takes (handle, silent_state*) and writes a channel-bitmask
+    // (each set bit = a silent channel) into *silent_state. The previous
+    // stub took no arguments and ignored both — meaning the game's
+    // silent_state variable kept whatever stack garbage was in it,
+    // so RB4 saw a random pattern of "silent / not silent" per call.
+    // That can flip the vocal-mix decision frame-by-frame and is a
+    // plausible cause of the doubled / pitch-shifted mic playback.
+    // For now we treat every channel as active (not silent); a future
+    // pass could track the put-callback level and decay it to detect
+    // genuine silence.
+    if (silent_state) {
+        *silent_state = 0;
+    }
+    if (handle < 1) {
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
     return ORBIS_OK;
 }
 

@@ -65,7 +65,11 @@ private:
         // come from a different thread than AudioInInput.
         bool gate_open = false;
         std::chrono::steady_clock::time_point last_active{};
-        std::atomic<bool> silent{true};
+        // Defaults to ACTIVE (not silent). A freshly opened mic must read
+        // as active so a game that polls sceAudioInGetSilentState before
+        // its first sceAudioInInput call isn't told the mic is silent —
+        // otherwise it may skip reading forever and the flag never clears.
+        std::atomic<bool> silent{false};
 
         void Reset() {
             isOpen = false;
@@ -78,7 +82,7 @@ private:
             stream = nullptr;
             gate_open = false;
             last_active = {};
-            silent.store(true, std::memory_order_relaxed);
+            silent.store(false, std::memory_order_relaxed);
             // mutex / cv are left in place — they're recycled when the
             // slot is reopened.
         }

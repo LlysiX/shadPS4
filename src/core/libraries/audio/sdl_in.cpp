@@ -183,12 +183,14 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     }
     if (stream_null) {
         // Null-stream port (mic disabled). Match the old caller contract:
-        // hand back zero-filled samples so games don't stall. A disabled
-        // mic is by definition silent.
+        // hand back zero-filled samples so games don't stall. Report
+        // ACTIVE (not silent) — a game that gates its reads on
+        // sceAudioInGetSilentState must keep calling AudioInInput; if we
+        // said "silent" it could stop polling entirely.
         const int bytesToRead = samples_num * sample_size * channels_num;
         std::memset(out_buffer, 0, bytesToRead);
         if (port_ptr)
-            port_ptr->silent.store(true, std::memory_order_relaxed);
+            port_ptr->silent.store(false, std::memory_order_relaxed);
         return samples_num;
     }
 
@@ -279,12 +281,18 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
 }
 
 bool SDLAudioIn::IsSilent(int handle) {
+    // When the noise gate is off, the mic is never reported silent — this
+    // matches the original always-active stub and guarantees a game that
+    // gates its reads on sceAudioInGetSilentState keeps polling the mic.
+    if (!Config::getMicGateEnabled()) {
+        return false;
+    }
     std::scoped_lock lock{m_mutex};
     if (handle < 1 || handle > static_cast<int>(portsIn.size()))
-        return true;
+        return false;  // unknown handle: report active, never block reads
     auto& port = portsIn[handle - 1];
     if (!port.isOpen)
-        return true;
+        return false;
     return port.silent.load(std::memory_order_relaxed);
 }
 

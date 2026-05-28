@@ -721,7 +721,7 @@ void SettingsDialog::LoadValuesFromConfig() {
         ui->micComboBox->setCurrentIndex(0);
     }
 
-    ui->micGateCheckBox->setChecked(toml::find_or<bool>(data, "Audio", "micGateEnabled", true));
+    ui->micGateCheckBox->setChecked(toml::find_or<bool>(data, "Audio", "micGateEnabled", false));
     ui->micGateThresholdSlider->setValue(
         toml::find_or<int>(data, "Audio", "micGateThresholdDb", -50));
     ui->micGateHoldSlider->setValue(toml::find_or<int>(data, "Audio", "micGateHoldMs", 300));

@@ -180,7 +180,7 @@ static ConfigEntry<string> padSpkOutputDevice("Default Device");
 // hands the game a zero-filled buffer and sceAudioInGetSilentState
 // reports "all channels silent" — letting the game's vocal-mix path
 // (RB4 etc.) skip the mix instead of broadcasting room hum.
-static ConfigEntry<bool> micGateEnabled(true);
+static ConfigEntry<bool> micGateEnabled(false);
 static ConfigEntry<int> micGateThresholdDb(-50);
 static ConfigEntry<int> micGateHoldMs(300);
 
@@ -1352,7 +1352,7 @@ void setDefaultValues(bool is_game_specific) {
 
     // GS - Audio
     micDevice.set("Default Device", is_game_specific);
-    micGateEnabled.set(true, is_game_specific);
+    micGateEnabled.set(false, is_game_specific);
     micGateThresholdDb.set(-50, is_game_specific);
     micGateHoldMs.set(300, is_game_specific);
 

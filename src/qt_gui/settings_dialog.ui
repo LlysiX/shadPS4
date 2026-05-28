@@ -1985,19 +1985,27 @@
                 </widget>
                </item>
                <item>
-                <widget class="QProgressBar" name="micLevelBar">
-                 <property name="minimum">
-                  <number>0</number>
+                <widget class="QWidget" name="micLevelContainer" native="true">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>22</height>
+                  </size>
                  </property>
-                 <property name="maximum">
-                  <number>100</number>
-                 </property>
-                 <property name="value">
-                  <number>0</number>
-                 </property>
-                 <property name="textVisible">
-                  <bool>false</bool>
-                 </property>
+                 <layout class="QVBoxLayout" name="micLevelContainerLayout">
+                  <property name="leftMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="topMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="rightMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="bottomMargin">
+                   <number>0</number>
+                  </property>
+                 </layout>
                 </widget>
                </item>
                <item>

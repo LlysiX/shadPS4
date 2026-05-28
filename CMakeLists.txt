@@ -1135,6 +1135,7 @@ set(QT_GUI src/qt_gui/about_dialog.cpp
            src/qt_gui/main_window_themes.h
            src/qt_gui/log_presets_dialog.cpp
            src/qt_gui/log_presets_dialog.h
+           src/qt_gui/mic_level_meter.h
            src/qt_gui/settings_dialog.cpp
            src/qt_gui/settings_dialog.h
            src/qt_gui/settings_dialog.ui

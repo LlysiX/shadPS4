@@ -85,4 +85,5 @@ private:
     QString m_mic_preview_device;  // device data string currently open for preview
     bool m_mic_preview_gate_open = false;
     std::chrono::steady_clock::time_point m_mic_preview_last_active{};
+    class MicLevelMeter* m_mic_level_meter = nullptr;
 };

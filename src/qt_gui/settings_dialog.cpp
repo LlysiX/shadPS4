@@ -32,6 +32,7 @@
 #include "common/logging/backend.h"
 #include "common/logging/filter.h"
 #include "log_presets_dialog.h"
+#include "mic_level_meter.h"
 #include "sdl_event_wrapper.h"
 #include "settings_dialog.h"
 #include "ui_settings_dialog.h"
@@ -239,6 +240,12 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
 
     // MIC NOISE GATE
     {
+        // The level meter is a custom widget dropped into the container
+        // placeholder from the .ui (the project doesn't use Designer
+        // widget promotion, so we insert it programmatically).
+        m_mic_level_meter = new MicLevelMeter(ui->micLevelContainer);
+        ui->micLevelContainerLayout->addWidget(m_mic_level_meter);
+
         connect(ui->micGateThresholdSlider, &QSlider::valueChanged, this,
                 [this](int value) {
                     Config::setMicGateThresholdDb(value, is_game_specific);
@@ -893,12 +900,20 @@ SettingsDialog::~SettingsDialog() {
 
 void SettingsDialog::UpdateMicGateLabels() {
     const bool enabled = ui->micGateCheckBox->isChecked();
-    ui->micGateThresholdValueLabel->setText(
-        QStringLiteral("%1 dB").arg(ui->micGateThresholdSlider->value()));
+    const int threshold_db = ui->micGateThresholdSlider->value();
+    ui->micGateThresholdValueLabel->setText(QStringLiteral("%1 dB").arg(threshold_db));
     ui->micGateHoldValueLabel->setText(
         QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
     ui->micGateThresholdSlider->setEnabled(enabled);
     ui->micGateHoldSlider->setEnabled(enabled);
+    if (m_mic_level_meter) {
+        // Map [-90 dB, 0 dB] onto the 0..100 meter scale (same mapping as
+        // UpdateMicPreview's level calc) so the marker lines up with the bar.
+        constexpr double kFloorDb = -90.0;
+        const int marker = static_cast<int>((threshold_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
+        m_mic_level_meter->setThreshold(marker);
+        m_mic_level_meter->setGateEnabled(enabled);
+    }
     if (!enabled) {
         ui->micGateStatusLabel->setText(tr("Gate: disabled (mic always open)"));
     }
@@ -952,8 +967,9 @@ void SettingsDialog::StopMicPreview() {
         SDL_DestroyAudioStream(m_mic_preview_stream);
         m_mic_preview_stream = nullptr;
     }
-    if (ui && ui->micLevelBar) {
-        ui->micLevelBar->setValue(0);
+    if (m_mic_level_meter) {
+        m_mic_level_meter->setLevel(0);
+        m_mic_level_meter->setGateOpen(false);
     }
 }
 
@@ -989,7 +1005,6 @@ void SettingsDialog::UpdateMicPreview() {
     constexpr double kFloorDb = -90.0;
     int bar = static_cast<int>((level_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
     bar = std::clamp(bar, 0, 100);
-    ui->micLevelBar->setValue(bar);
 
     // Mirror the runtime gate logic so the indicator matches in-game.
     const int threshold_db = ui->micGateThresholdSlider->value();
@@ -1000,6 +1015,11 @@ void SettingsDialog::UpdateMicPreview() {
         m_mic_preview_last_active = now;
     } else if (m_mic_preview_gate_open && (now - m_mic_preview_last_active) >= hold) {
         m_mic_preview_gate_open = false;
+    }
+
+    if (m_mic_level_meter) {
+        m_mic_level_meter->setLevel(bar);
+        m_mic_level_meter->setGateOpen(m_mic_preview_gate_open);
     }
 
     if (!ui->micGateCheckBox->isChecked()) {

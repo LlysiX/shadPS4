@@ -90,6 +90,11 @@ struct SlotState {
     std::size_t last_report_len = 0;
     bool has_data = false;
     bool open_failed_logged = false;
+    // PS3/Wii/X360 RB Guitar pickup switch reports raw 0x7F when idle
+    // (between user input), which would otherwise quantize to the middle
+    // notch and false-trigger. Per the PlasticBand spec we hold the last
+    // real notch across those rest reads.
+    u8 last_pickup_notch = 0;
 };
 
 // Defined in hid_packer.cpp; the IO layer reads them.

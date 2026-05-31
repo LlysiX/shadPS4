@@ -339,10 +339,31 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         std::memset(out, 0, kMaxDeviceUniqueData);
         if (kit->tone_byte >= 0) {
             const u8 tone_raw = at(kit->tone_byte);
-            if (tone_raw > 0x10) {
-                u8 pos = static_cast<u8>(1 + ((tone_raw - 0x10) * 4 / 0xF0));
-                if (pos > 4) pos = 4;
-                out[0] = pos;
+            // PlasticBand spec: PS3 / Wii / X360 RB guitars report raw
+            // 0x7F when the pickup switch is at rest — must be filtered
+            // or the middle notch (vibe) constantly false-triggers and
+            // collides with the real notch 3. PS4/PS5 don't use this
+            // sentinel; on those, raw never lands exactly on 0x7F.
+            // Five-notch quantization is `raw / (255 / 5)`, which is
+            // identical for the PS3/Wii/X360 detent values (~25/76/121/
+            // 178/229) AND the PS4 Mustang/Riffmaster discrete values
+            // (~0x00/0x40/0x80/0xC0/0xFF).
+            if (slot >= 1 && slot <= 4) {
+                auto& last = g_slots[slot - 1].last_pickup_notch;
+                if (tone_raw == 0x7F) {
+                    out[0] = last;
+                } else {
+                    u8 notch = static_cast<u8>(tone_raw / (0xFFu / 5u));
+                    if (notch > 4) notch = 4;
+                    last = notch;
+                    out[0] = notch;
+                }
+            } else {
+                u8 notch = (tone_raw == 0x7F)
+                               ? 0
+                               : static_cast<u8>(tone_raw / (0xFFu / 5u));
+                if (notch > 4) notch = 4;
+                out[0] = notch;
             }
         }
         if (kit->whammy_byte >= 0) {

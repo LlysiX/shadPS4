@@ -63,13 +63,15 @@ void SDLCALL SDLAudioIn::OnStreamPut(void* userdata, SDL_AudioStream* /*stream*/
     port->data_cv->notify_all();
 }
 
-int SDLAudioIn::AudioInOpen(int type, uint32_t samples_num, uint32_t freq, uint32_t format) {
+int SDLAudioIn::AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_t freq,
+                            uint32_t format) {
     std::scoped_lock lock{m_mutex};
 
     for (int id = 0; id < static_cast<int>(portsIn.size()); ++id) {
         auto& port = portsIn[id];
         if (!port.isOpen) {
             port.isOpen = true;
+            port.user_id = user_id;
             port.type = type;
             port.samples_num = samples_num;
             port.freq = freq;
@@ -98,7 +100,11 @@ int SDLAudioIn::AudioInOpen(int type, uint32_t samples_num, uint32_t freq, uint3
             fmt.channels = port.channels_num;
             fmt.freq = port.freq;
 
-            std::string micDevStr = Config::getMicDevice();
+            // Per-user device pick. user_id is 1..N in shadPS4 controller
+            // convention; Config's slot index is 0..N-1. user_id outside
+            // that range (e.g. SYSTEM 0xFF or INVALID -1) falls back to
+            // slot 0 via the Config clamp.
+            std::string micDevStr = Config::getMicDevice(user_id - 1);
             uint32_t devId;
 
             bool nullDevice = false;
@@ -247,12 +253,15 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
 
     // Software noise gate. Still holding data_lock, so gate_open /
     // last_active are safe to touch; `silent` is atomic for the
-    // cross-thread sceAudioInGetSilentState query.
-    if (Config::getMicGateEnabled() && sample_size == 2 && bytesRead > 0) {
+    // cross-thread sceAudioInGetSilentState query. Enable + threshold
+    // are per-user-slot so harmony singers can tune their own gate;
+    // hold is shared because the tail-decay feel rarely varies per mic.
+    const int slot = port_ptr->user_id - 1;  // Config clamps OOB internally
+    if (Config::getMicGateEnabled(slot) && sample_size == 2 && bytesRead > 0) {
         const auto* samples = static_cast<const int16_t*>(out_buffer);
         const int sample_count = bytesRead / 2;
         const float level_db = RmsDbS16(samples, sample_count);
-        const float threshold_db = static_cast<float>(Config::getMicGateThresholdDb());
+        const float threshold_db = static_cast<float>(Config::getMicGateThresholdDb(slot));
         const auto hold = std::chrono::milliseconds(Config::getMicGateHoldMs());
         const auto now = std::chrono::steady_clock::now();
 
@@ -281,17 +290,17 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
 }
 
 bool SDLAudioIn::IsSilent(int handle) {
-    // When the noise gate is off, the mic is never reported silent — this
-    // matches the original always-active stub and guarantees a game that
-    // gates its reads on sceAudioInGetSilentState keeps polling the mic.
-    if (!Config::getMicGateEnabled()) {
-        return false;
-    }
+    // Per-slot gate state: when the gate is off for THIS player's slot,
+    // the mic is never reported silent — matches the original always-
+    // active stub and guarantees a game that gates its reads on
+    // sceAudioInGetSilentState keeps polling the mic.
     std::scoped_lock lock{m_mutex};
     if (handle < 1 || handle > static_cast<int>(portsIn.size()))
         return false;  // unknown handle: report active, never block reads
     auto& port = portsIn[handle - 1];
     if (!port.isOpen)
+        return false;
+    if (!Config::getMicGateEnabled(port.user_id - 1))
         return false;
     return port.silent.load(std::memory_order_relaxed);
 }

@@ -2036,6 +2036,225 @@
          </layout>
         </item>
         <item>
+         <widget class="QGroupBox" name="extraMicsGroupBox">
+          <property name="title">
+           <string>Per-player mics (harmonies)</string>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
+          </property>
+          <property name="checked">
+           <bool>false</bool>
+          </property>
+          <property name="toolTip">
+           <string>Open to assign different physical mics + gate settings to players 2, 3, and 4 — needed for Rock Band 4 vocal harmonies.</string>
+          </property>
+          <layout class="QGridLayout" name="extraMicsLayout">
+           <item row="0" column="0">
+            <widget class="QLabel" name="micPlayer2Label">
+             <property name="text">
+              <string>Player 2</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="micComboBox2"/>
+           </item>
+           <item row="0" column="2">
+            <widget class="QCheckBox" name="micGateCheckBox2">
+             <property name="text">
+              <string>Gate</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="3">
+            <widget class="QSlider" name="micGateThresholdSlider2">
+             <property name="minimum">
+              <number>-90</number>
+             </property>
+             <property name="maximum">
+              <number>0</number>
+             </property>
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="4">
+            <widget class="QLabel" name="micGateThresholdValueLabel2">
+             <property name="minimumSize">
+              <size>
+               <width>52</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>-50 dB</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1" colspan="4">
+            <widget class="QWidget" name="micLevelContainer2" native="true">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>18</height>
+              </size>
+             </property>
+             <layout class="QVBoxLayout" name="micLevelContainerLayout2">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+             </layout>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="micPlayer3Label">
+             <property name="text">
+              <string>Player 3</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QComboBox" name="micComboBox3"/>
+           </item>
+           <item row="2" column="2">
+            <widget class="QCheckBox" name="micGateCheckBox3">
+             <property name="text">
+              <string>Gate</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="3">
+            <widget class="QSlider" name="micGateThresholdSlider3">
+             <property name="minimum">
+              <number>-90</number>
+             </property>
+             <property name="maximum">
+              <number>0</number>
+             </property>
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="4">
+            <widget class="QLabel" name="micGateThresholdValueLabel3">
+             <property name="minimumSize">
+              <size>
+               <width>52</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>-50 dB</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1" colspan="4">
+            <widget class="QWidget" name="micLevelContainer3" native="true">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>18</height>
+              </size>
+             </property>
+             <layout class="QVBoxLayout" name="micLevelContainerLayout3">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+             </layout>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="micPlayer4Label">
+             <property name="text">
+              <string>Player 4</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QComboBox" name="micComboBox4"/>
+           </item>
+           <item row="4" column="2">
+            <widget class="QCheckBox" name="micGateCheckBox4">
+             <property name="text">
+              <string>Gate</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="3">
+            <widget class="QSlider" name="micGateThresholdSlider4">
+             <property name="minimum">
+              <number>-90</number>
+             </property>
+             <property name="maximum">
+              <number>0</number>
+             </property>
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="4">
+            <widget class="QLabel" name="micGateThresholdValueLabel4">
+             <property name="minimumSize">
+              <size>
+               <width>52</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>-50 dB</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="1" colspan="4">
+            <widget class="QWidget" name="micLevelContainer4" native="true">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>18</height>
+              </size>
+             </property>
+             <layout class="QVBoxLayout" name="micLevelContainerLayout4">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
          <spacer name="verticalSpacer_11">
           <property name="orientation">
            <enum>Qt::Orientation::Vertical</enum>

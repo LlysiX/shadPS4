@@ -97,19 +97,29 @@ double getTrophyNotificationDuration();
 void setTrophyNotificationDuration(double newTrophyNotificationDuration,
                                    bool is_game_specific = false);
 int getCursorHideTimeout();
-std::string getMicDevice();
-void setCursorHideTimeout(int newcursorHideTimeout);
+void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific = false);
 std::string getMainOutputDevice();
 void setMainOutputDevice(std::string device);
 std::string getPadSpkOutputDevice();
 void setPadSpkOutputDevice(std::string device);
+// Per-player mic config. Slot 0 = primary player; slots 1..3 = harmony
+// players for games that open multiple mics (RB4 vocals). The no-arg
+// overloads return slot 0 so callers that don't care about per-user
+// routing keep working unchanged. getNumMicSlots() returns the array
+// length so callers can iterate without hardcoding 4.
+int getNumMicSlots();
 std::string getMicDevice();
-void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific = false);
+std::string getMicDevice(int slot);
 void setMicDevice(std::string device, bool is_game_specific = false);
+void setMicDevice(int slot, std::string device, bool is_game_specific = false);
 bool getMicGateEnabled();
+bool getMicGateEnabled(int slot);
 void setMicGateEnabled(bool enabled, bool is_game_specific = false);
+void setMicGateEnabled(int slot, bool enabled, bool is_game_specific = false);
 int getMicGateThresholdDb();
+int getMicGateThresholdDb(int slot);
 void setMicGateThresholdDb(int db, bool is_game_specific = false);
+void setMicGateThresholdDb(int slot, int db, bool is_game_specific = false);
 int getMicGateHoldMs();
 void setMicGateHoldMs(int ms, bool is_game_specific = false);
 void setSeparateLogFilesEnabled(bool enabled, bool is_game_specific = false);

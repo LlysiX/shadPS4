@@ -110,9 +110,12 @@ s32 PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle) {
 
 int PS4_SYSV_ABI sceAudioInHqOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                   u32 index, u32 len, u32 freq, u32 param) {
-    if (userId != 1)
-        return ORBIS_OK;
-    int result = audio->AudioInOpen(type, len, freq, param);
+    // The earlier `if (userId != 1) return ORBIS_OK` guard blocked every
+    // non-primary user from opening a mic — that broke RB4 vocal harmonies,
+    // which open one mic per logged-in player (userId 2/3/4 for players
+    // 2/3/4). The backend's 8-slot pool already supports concurrent opens;
+    // per-user device + gate config picks the right physical mic per slot.
+    int result = audio->AudioInOpen(userId, type, len, freq, param);
     if (result < 0) {
         LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
     }
@@ -145,9 +148,9 @@ int PS4_SYSV_ABI sceAudioInIsSharedDevice() {
 
 int PS4_SYSV_ABI sceAudioInOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                 u32 index, u32 len, u32 freq, u32 param) {
-    if (userId != 1)
-        return 0x80260005;
-    int result = audio->AudioInOpen(type, len, freq, param);
+    // See sceAudioInHqOpen above — the userId != 1 guard was a band-aid
+    // for the single-mic era; the backend now routes per-user.
+    int result = audio->AudioInOpen(userId, type, len, freq, param);
     if (result < 0) {
         LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
     }

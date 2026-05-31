@@ -25,7 +25,14 @@ enum OrbisAudioInParam {
 class SDLAudioIn {
 public:
     int AudioInit();
-    int AudioInOpen(int type, uint32_t samples_num, uint32_t freq, uint32_t format);
+    // user_id is the OrbisUserServiceUserId the game opened the mic for
+    // (1..4 for shadPS4's 4-controller convention). The backend uses it
+    // to pick the physical device from Config::getMicDevice(user_id - 1)
+    // and to read the per-slot noise gate config in AudioInInput, so
+    // games that open multiple mics for harmonies (RB4 vocals) route
+    // each player to its own device with its own gate threshold.
+    int AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_t freq,
+                    uint32_t format);
     int AudioInInput(int handle, void* out_buffer);
     void AudioInClose(int handle);
     // True when the software noise gate currently considers the port's
@@ -43,6 +50,10 @@ private:
     // to reset the slot; that path now goes through Reset() instead.
     struct AudioInPort {
         bool isOpen = false;
+        // user_id the game opened this port for. Drives device selection
+        // at open time and per-slot gate config in AudioInInput. 0 means
+        // unassigned (port closed or pre-multi-user open call).
+        int user_id = 0;
         int type = 0;
         uint32_t samples_num = 0;
         uint32_t freq = 0;
@@ -73,6 +84,7 @@ private:
 
         void Reset() {
             isOpen = false;
+            user_id = 0;
             type = 0;
             samples_num = 0;
             freq = 0;

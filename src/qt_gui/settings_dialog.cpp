@@ -2,10 +2,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QCompleter>
+#include <QLabel>
+#include <QSlider>
+#include <QVBoxLayout>
 #include <QDirIterator>
 #include <QFileDialog>
 #include <QHoverEvent>
@@ -173,8 +180,15 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
     ui->hideCursorComboBox->addItem(tr("Idle"));
     ui->hideCursorComboBox->addItem(tr("Always"));
 
-    ui->micComboBox->addItem(micMap.key("None"), "None");
-    ui->micComboBox->addItem(micMap.key("Default Device"), "Default Device");
+    // Populate every per-player mic combo from the same device list, so
+    // each harmony singer can pick a different physical mic from the
+    // same dropdown contents.
+    const std::array<QComboBox*, 4> micCombos = {
+        ui->micComboBox, ui->micComboBox2, ui->micComboBox3, ui->micComboBox4};
+    for (QComboBox* combo : micCombos) {
+        combo->addItem(micMap.key("None"), "None");
+        combo->addItem(micMap.key("Default Device"), "Default Device");
+    }
     SDL_InitSubSystem(SDL_INIT_AUDIO);
     int count = 0;
     SDL_AudioDeviceID* devices = SDL_GetAudioRecordingDevices(&count);
@@ -184,7 +198,9 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
             const char* name = SDL_GetAudioDeviceName(devId);
             if (name) {
                 QString qname = QString::fromUtf8(name);
-                ui->micComboBox->addItem(qname, QString::number(devId));
+                for (QComboBox* combo : micCombos) {
+                    combo->addItem(qname, QString::number(devId));
+                }
             }
         }
         SDL_free(devices);
@@ -240,11 +256,23 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
 
     // MIC NOISE GATE
     {
-        // The level meter is a custom widget dropped into the container
-        // placeholder from the .ui (the project doesn't use Designer
-        // widget promotion, so we insert it programmatically).
-        m_mic_level_meter = new MicLevelMeter(ui->micLevelContainer);
-        ui->micLevelContainerLayout->addWidget(m_mic_level_meter);
+        // The level meters are custom widgets dropped into per-slot
+        // container placeholders in the .ui (the project doesn't use
+        // Designer widget promotion, so we insert them programmatically).
+        // One per user slot — primary mic + 3 harmony mics — so all 4
+        // can show their level concurrently while the user dials in
+        // each gate threshold.
+        const std::array<std::pair<QWidget*, QVBoxLayout*>, 4> meter_slots = {
+            std::make_pair(ui->micLevelContainer, ui->micLevelContainerLayout),
+            std::make_pair(ui->micLevelContainer2, ui->micLevelContainerLayout2),
+            std::make_pair(ui->micLevelContainer3, ui->micLevelContainerLayout3),
+            std::make_pair(ui->micLevelContainer4, ui->micLevelContainerLayout4),
+        };
+        for (int slot = 0; slot < static_cast<int>(meter_slots.size()); ++slot) {
+            auto* meter = new MicLevelMeter(meter_slots[slot].first);
+            meter_slots[slot].second->addWidget(meter);
+            m_mic_previews[slot].meter = meter;
+        }
         // LoadValuesFromConfig() already ran in the constructor (before
         // this block), so the sliders/checkbox hold the loaded values but
         // the meter didn't exist yet to receive them. Push them now so the
@@ -272,9 +300,52 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
                     UpdateMicGateLabels();
                 });
 #endif
-        // Reopen the preview stream when the selected mic changes.
+        // Reopen the preview stream for the slot whose combo changed.
+        // Restart only that slot so we don't drop audio on the others.
         connect(ui->micComboBox, &QComboBox::currentIndexChanged, this,
-                [this](int) { StartMicPreview(); });
+                [this](int) { StartMicPreview(0); });
+        connect(ui->micComboBox2, &QComboBox::currentIndexChanged, this,
+                [this](int) { StartMicPreview(1); });
+        connect(ui->micComboBox3, &QComboBox::currentIndexChanged, this,
+                [this](int) { StartMicPreview(2); });
+        connect(ui->micComboBox4, &QComboBox::currentIndexChanged, this,
+                [this](int) { StartMicPreview(3); });
+
+        // Per-player (slots 1..3, mapped to players 2..4) mic combos +
+        // gate toggles + threshold sliders. Slot 0 (player 1) is the
+        // existing primary mic above; these are the harmony slots.
+        const std::array<std::tuple<int, QCheckBox*, QSlider*, QLabel*>, 3>
+            harmony_rows = {
+                std::make_tuple(1, ui->micGateCheckBox2, ui->micGateThresholdSlider2,
+                                ui->micGateThresholdValueLabel2),
+                std::make_tuple(2, ui->micGateCheckBox3, ui->micGateThresholdSlider3,
+                                ui->micGateThresholdValueLabel3),
+                std::make_tuple(3, ui->micGateCheckBox4, ui->micGateThresholdSlider4,
+                                ui->micGateThresholdValueLabel4),
+            };
+        for (const auto& [slot, checkbox, slider, value_label] : harmony_rows) {
+            connect(slider, &QSlider::valueChanged, this,
+                    [this, slot, value_label, slider](int value) {
+                        Config::setMicGateThresholdDb(slot, value, is_game_specific);
+                        value_label->setText(QStringLiteral("%1 dB").arg(value));
+                        slider->setEnabled(Config::getMicGateEnabled(slot));
+                    });
+#if (QT_VERSION < QT_VERSION_CHECK(6, 7, 0))
+            connect(checkbox, &QCheckBox::stateChanged, this,
+                    [this, slot, slider](int state) {
+                        const bool enabled = (state == Qt::Checked);
+                        Config::setMicGateEnabled(slot, enabled, is_game_specific);
+                        slider->setEnabled(enabled);
+                    });
+#else
+            connect(checkbox, &QCheckBox::checkStateChanged, this,
+                    [this, slot, slider](Qt::CheckState state) {
+                        const bool enabled = (state == Qt::Checked);
+                        Config::setMicGateEnabled(slot, enabled, is_game_specific);
+                        slider->setEnabled(enabled);
+                    });
+#endif
+        }
 
         m_mic_preview_timer = new QTimer(this);
         m_mic_preview_timer->setInterval(33); // ~30 Hz meter refresh
@@ -530,6 +601,10 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
         ui->backgroundControllerCheckBox->installEventFilter(this);
         ui->motionControlsCheckBox->installEventFilter(this);
         ui->micComboBox->installEventFilter(this);
+        ui->extraMicsGroupBox->installEventFilter(this);
+        ui->micComboBox2->installEventFilter(this);
+        ui->micComboBox3->installEventFilter(this);
+        ui->micComboBox4->installEventFilter(this);
 
         // Graphics
         ui->graphicsAdapterGroupBox->installEventFilter(this);
@@ -711,19 +786,44 @@ void SettingsDialog::LoadValuesFromConfig() {
                                 toml::find_or<int>(data, "Settings", "consoleLanguage", 6))) %
         languageIndexes.size());
 
-    std::string micDevice =
-        toml::find_or<std::string>(data, "Input", "micDevice", "Default Device");
-    QString micValue = QString::fromStdString(micDevice);
-    int micIndex = ui->micComboBox->findData(micValue);
-    if (micIndex != -1) {
-        ui->micComboBox->setCurrentIndex(micIndex);
-    } else {
-        ui->micComboBox->setCurrentIndex(0);
+    // Per-slot mic + gate state. Slot 0 = Player 1 (the primary mic widgets
+    // still living in MicGroupBox); slots 1..3 = the harmony rows in
+    // extraMicsGroupBox. Each slot reads from Config, which already
+    // migrated legacy `micDevice` / `micGateEnabled` / `micGateThresholdDb`
+    // keys into slot 0 on load.
+    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*, QLabel*>, 4>
+        mic_rows = {
+            std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox,
+                            ui->micGateThresholdSlider, ui->micGateThresholdValueLabel),
+            std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2,
+                            ui->micGateThresholdSlider2, ui->micGateThresholdValueLabel2),
+            std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3,
+                            ui->micGateThresholdSlider3, ui->micGateThresholdValueLabel3),
+            std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4,
+                            ui->micGateThresholdSlider4, ui->micGateThresholdValueLabel4),
+        };
+    for (const auto& [slot, combo, checkbox, slider, value_label] : mic_rows) {
+        const QString micValue = QString::fromStdString(Config::getMicDevice(slot));
+        const int idx = combo->findData(micValue);
+        combo->setCurrentIndex(idx != -1 ? idx : 0);
+        const bool gate_enabled = Config::getMicGateEnabled(slot);
+        const int threshold = Config::getMicGateThresholdDb(slot);
+        checkbox->setChecked(gate_enabled);
+        slider->setValue(threshold);
+        slider->setEnabled(gate_enabled);
+        value_label->setText(QStringLiteral("%1 dB").arg(threshold));
     }
-
-    ui->micGateCheckBox->setChecked(toml::find_or<bool>(data, "Audio", "micGateEnabled", false));
-    ui->micGateThresholdSlider->setValue(
-        toml::find_or<int>(data, "Audio", "micGateThresholdDb", -50));
+    // Auto-open the per-player group if any harmony slot is set up, so a
+    // returning user sees their saved config without hunting for the
+    // collapsed section.
+    bool any_harmony_active = false;
+    for (int slot = 1; slot < Config::getNumMicSlots(); ++slot) {
+        if (Config::getMicDevice(slot) != "None" || Config::getMicGateEnabled(slot)) {
+            any_harmony_active = true;
+            break;
+        }
+    }
+    ui->extraMicsGroupBox->setChecked(any_harmony_active);
     ui->micGateHoldSlider->setValue(toml::find_or<int>(data, "Audio", "micGateHoldMs", 300));
     UpdateMicGateLabels();
 
@@ -902,46 +1002,93 @@ SettingsDialog::~SettingsDialog() {
     StopMicPreview();
 }
 
-void SettingsDialog::UpdateMicGateLabels() {
-    const bool enabled = ui->micGateCheckBox->isChecked();
-    const int threshold_db = ui->micGateThresholdSlider->value();
-    ui->micGateThresholdValueLabel->setText(QStringLiteral("%1 dB").arg(threshold_db));
-    ui->micGateHoldValueLabel->setText(QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
-    ui->micGateThresholdSlider->setEnabled(enabled);
-    ui->micGateHoldSlider->setEnabled(enabled);
-    if (m_mic_level_meter) {
-        // Map [-90 dB, 0 dB] onto the 0..100 meter scale (same mapping as
-        // UpdateMicPreview's level calc) so the marker lines up with the bar.
-        constexpr double kFloorDb = -90.0;
-        const int marker = static_cast<int>((threshold_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
-        m_mic_level_meter->setThreshold(marker);
-        m_mic_level_meter->setGateEnabled(enabled);
+namespace {
+// Resolve a per-slot device combo / gate checkbox / threshold slider /
+// value label from the slot index. Slot 0 is the primary mic in
+// MicGroupBox; slots 1..3 are the harmony rows in extraMicsGroupBox.
+struct SlotWidgets {
+    QComboBox* combo;
+    QCheckBox* gate_checkbox;
+    QSlider* threshold_slider;
+    QLabel* threshold_value_label;
+};
+} // namespace
+
+static SlotWidgets ResolveSlotWidgets(Ui::SettingsDialog* ui, int slot) {
+    switch (slot) {
+    case 1:
+        return {ui->micComboBox2, ui->micGateCheckBox2,
+                ui->micGateThresholdSlider2, ui->micGateThresholdValueLabel2};
+    case 2:
+        return {ui->micComboBox3, ui->micGateCheckBox3,
+                ui->micGateThresholdSlider3, ui->micGateThresholdValueLabel3};
+    case 3:
+        return {ui->micComboBox4, ui->micGateCheckBox4,
+                ui->micGateThresholdSlider4, ui->micGateThresholdValueLabel4};
+    case 0:
+    default:
+        return {ui->micComboBox, ui->micGateCheckBox,
+                ui->micGateThresholdSlider, ui->micGateThresholdValueLabel};
     }
-    if (!enabled) {
+}
+
+void SettingsDialog::UpdateMicGateLabels() {
+    // Hold slider is the shared "feel" parameter — render its label here
+    // (per-slot rows only carry threshold + enable).
+    ui->micGateHoldValueLabel->setText(QStringLiteral("%1 ms").arg(ui->micGateHoldSlider->value()));
+    bool any_enabled = false;
+    for (int slot = 0; slot < static_cast<int>(m_mic_previews.size()); ++slot) {
+        const auto w = ResolveSlotWidgets(ui.get(), slot);
+        const bool enabled = w.gate_checkbox->isChecked();
+        const int threshold_db = w.threshold_slider->value();
+        w.threshold_value_label->setText(QStringLiteral("%1 dB").arg(threshold_db));
+        w.threshold_slider->setEnabled(enabled);
+        if (auto* meter = m_mic_previews[slot].meter) {
+            // Map [-90 dB, 0 dB] onto the 0..100 meter scale (same mapping
+            // as UpdateMicPreview's level calc) so the marker lines up
+            // with the filled bar.
+            constexpr double kFloorDb = -90.0;
+            const int marker =
+                static_cast<int>((threshold_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
+            meter->setThreshold(marker);
+            meter->setGateEnabled(enabled);
+        }
+        any_enabled = any_enabled || enabled;
+    }
+    ui->micGateHoldSlider->setEnabled(any_enabled);
+    if (!ui->micGateCheckBox->isChecked()) {
         ui->micGateStatusLabel->setText(tr("Gate: disabled (mic always open)"));
     }
 }
 
 void SettingsDialog::StartMicPreview() {
-    // Don't fight a running game for the capture device.
-    if (is_game_running) {
-        return;
+    for (int slot = 0; slot < static_cast<int>(m_mic_previews.size()); ++slot) {
+        StartMicPreview(slot);
     }
-    StopMicPreview();
+    if (m_mic_preview_timer) {
+        m_mic_preview_timer->start();
+    }
+}
 
-    const QString dev_data = ui->micComboBox->currentData().toString();
-    m_mic_preview_device = dev_data;
+void SettingsDialog::StartMicPreview(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size())) return;
+    // Don't fight a running game for the capture device.
+    if (is_game_running) return;
+    StopMicPreview(slot);
+
+    const auto w = ResolveSlotWidgets(ui.get(), slot);
+    const QString dev_data = w.combo->currentData().toString();
+    auto& s = m_mic_previews[slot];
+    s.device = dev_data;
     if (dev_data == "None") {
-        return; // nothing to preview
+        return; // nothing to preview for this slot
     }
 
     SDL_AudioDeviceID dev_id = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
     if (dev_data != "Default Device") {
         bool ok = false;
         const uint dev = dev_data.toUInt(&ok);
-        if (ok) {
-            dev_id = static_cast<SDL_AudioDeviceID>(dev);
-        }
+        if (ok) dev_id = static_cast<SDL_AudioDeviceID>(dev);
     }
 
     SDL_AudioSpec spec;
@@ -950,84 +1097,85 @@ void SettingsDialog::StartMicPreview() {
     spec.channels = 1;
     spec.freq = 44100;
     SDL_InitSubSystem(SDL_INIT_AUDIO);
-    m_mic_preview_stream = SDL_OpenAudioDeviceStream(dev_id, &spec, nullptr, nullptr);
-    if (!m_mic_preview_stream) {
-        return;
-    }
-    SDL_ResumeAudioStreamDevice(m_mic_preview_stream);
-    m_mic_preview_gate_open = false;
-    m_mic_preview_last_active = std::chrono::steady_clock::now();
-    if (m_mic_preview_timer) {
-        m_mic_preview_timer->start();
-    }
+    s.stream = SDL_OpenAudioDeviceStream(dev_id, &spec, nullptr, nullptr);
+    if (!s.stream) return;
+    SDL_ResumeAudioStreamDevice(s.stream);
+    s.gate_open = false;
+    s.last_active = std::chrono::steady_clock::now();
 }
 
 void SettingsDialog::StopMicPreview() {
     if (m_mic_preview_timer) {
         m_mic_preview_timer->stop();
     }
-    if (m_mic_preview_stream) {
-        SDL_DestroyAudioStream(m_mic_preview_stream);
-        m_mic_preview_stream = nullptr;
+    for (int slot = 0; slot < static_cast<int>(m_mic_previews.size()); ++slot) {
+        StopMicPreview(slot);
     }
-    if (m_mic_level_meter) {
-        m_mic_level_meter->setLevel(0);
-        m_mic_level_meter->setGateOpen(false);
+}
+
+void SettingsDialog::StopMicPreview(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size())) return;
+    auto& s = m_mic_previews[slot];
+    if (s.stream) {
+        SDL_DestroyAudioStream(s.stream);
+        s.stream = nullptr;
+    }
+    if (s.meter) {
+        s.meter->setLevel(0);
+        s.meter->setGateOpen(false);
     }
 }
 
 void SettingsDialog::UpdateMicPreview() {
-    if (!m_mic_preview_stream) {
-        return;
-    }
-    // Drain whatever the device has captured since the last tick and keep
-    // only the most recent ~20ms window for the level estimate.
-    int avail = SDL_GetAudioStreamAvailable(m_mic_preview_stream);
-    if (avail <= 0) {
-        return;
-    }
+    // Single timer drives all 4 slots — each one drains independently
+    // from its own SDL stream. A slot with stream==nullptr (None device
+    // or open failure) is skipped silently.
     static thread_local std::vector<int16_t> buf;
     const int max_bytes = 4096; // ~46ms mono @ 44100; bound the read
-    const int to_read = std::min(avail, max_bytes);
-    buf.resize(to_read / sizeof(int16_t));
-    const int got = SDL_GetAudioStreamData(m_mic_preview_stream, buf.data(), to_read);
-    if (got <= 0) {
-        return;
-    }
-    const int count = got / static_cast<int>(sizeof(int16_t));
-
-    double sum_sq = 0.0;
-    for (int i = 0; i < count; ++i) {
-        const double s = static_cast<double>(buf[i]) / 32768.0;
-        sum_sq += s * s;
-    }
-    const double rms = count > 0 ? std::sqrt(sum_sq / count) : 0.0;
-    const double level_db = rms > 1e-7 ? 20.0 * std::log10(rms) : -120.0;
-
-    // Map [-90 dB, 0 dB] onto the 0..100 bar.
-    constexpr double kFloorDb = -90.0;
-    int bar = static_cast<int>((level_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
-    bar = std::clamp(bar, 0, 100);
-
-    // Mirror the runtime gate logic so the indicator matches in-game.
-    const int threshold_db = ui->micGateThresholdSlider->value();
     const auto hold = std::chrono::milliseconds(ui->micGateHoldSlider->value());
     const auto now = std::chrono::steady_clock::now();
-    if (level_db >= threshold_db) {
-        m_mic_preview_gate_open = true;
-        m_mic_preview_last_active = now;
-    } else if (m_mic_preview_gate_open && (now - m_mic_preview_last_active) >= hold) {
-        m_mic_preview_gate_open = false;
-    }
+    for (int slot = 0; slot < static_cast<int>(m_mic_previews.size()); ++slot) {
+        auto& s = m_mic_previews[slot];
+        if (!s.stream) continue;
+        const int avail = SDL_GetAudioStreamAvailable(s.stream);
+        if (avail <= 0) continue;
+        const int to_read = std::min(avail, max_bytes);
+        buf.resize(to_read / sizeof(int16_t));
+        const int got = SDL_GetAudioStreamData(s.stream, buf.data(), to_read);
+        if (got <= 0) continue;
+        const int count = got / static_cast<int>(sizeof(int16_t));
 
-    if (m_mic_level_meter) {
-        m_mic_level_meter->setLevel(bar);
-        m_mic_level_meter->setGateOpen(m_mic_preview_gate_open);
-    }
+        double sum_sq = 0.0;
+        for (int i = 0; i < count; ++i) {
+            const double v = static_cast<double>(buf[i]) / 32768.0;
+            sum_sq += v * v;
+        }
+        const double rms = count > 0 ? std::sqrt(sum_sq / count) : 0.0;
+        const double level_db = rms > 1e-7 ? 20.0 * std::log10(rms) : -120.0;
 
+        constexpr double kFloorDb = -90.0;
+        int bar = static_cast<int>((level_db - kFloorDb) / (0.0 - kFloorDb) * 100.0);
+        bar = std::clamp(bar, 0, 100);
+
+        const auto w = ResolveSlotWidgets(ui.get(), slot);
+        const int threshold_db = w.threshold_slider->value();
+        if (level_db >= threshold_db) {
+            s.gate_open = true;
+            s.last_active = now;
+        } else if (s.gate_open && (now - s.last_active) >= hold) {
+            s.gate_open = false;
+        }
+        if (s.meter) {
+            s.meter->setLevel(bar);
+            s.meter->setGateOpen(s.gate_open);
+        }
+    }
+    // Status label only describes the primary mic (slot 0) — keeps the
+    // "Gate: open/closed" string single-line and unambiguous. The per-slot
+    // meters carry the same info visually for slots 1..3.
     if (!ui->micGateCheckBox->isChecked()) {
         ui->micGateStatusLabel->setText(tr("Gate: disabled (mic always open)"));
-    } else if (m_mic_preview_gate_open) {
+    } else if (m_mic_previews[0].gate_open) {
         ui->micGateStatusLabel->setText(tr("Gate: OPEN — voice passing"));
     } else {
         ui->micGateStatusLabel->setText(tr("Gate: closed — below threshold"));
@@ -1163,6 +1311,10 @@ void SettingsDialog::updateNoteTextEdit(const QString& elementName) {
         text = tr("Open Log Location:\\nOpen the folder where the log file is saved.");
     } else if (elementName == "micComboBox") {
         text = tr("Microphone:\\nNone: Does not use the microphone.\\nDefault Device: Will use the default device defined in the system.\\nOr manually choose the microphone to be used from the list.");
+    } else if (elementName == "extraMicsGroupBox" ||
+               elementName == "micComboBox2" || elementName == "micComboBox3" ||
+               elementName == "micComboBox4") {
+        text = tr("Per-player Microphones:\\nAssign a different physical mic to each player slot for games that capture vocal harmonies (e.g. Rock Band 4). The primary mic above stays Player 1; Player 2/3/4 can each pick their own device and gate threshold.");
     } else if (elementName == "volumeSliderElement") {
         text = tr("Volume:\\nAdjust volume for games on a global level, range goes from 0-500% with the default being 100%.");
     } else if (elementName == "chooseHomeTabGroupBox") {
@@ -1238,9 +1390,27 @@ void SettingsDialog::UpdateSettings(bool is_specific) {
     Config::setAllowHDR(ui->enableHDRCheckBox->isChecked(), is_specific);
     Config::setLogType(logTypeMap.value(ui->logTypeComboBox->currentText()).toStdString(),
                        is_specific);
-    Config::setMicDevice(ui->micComboBox->currentData().toString().toStdString(), is_specific);
-    Config::setMicGateEnabled(ui->micGateCheckBox->isChecked(), is_specific);
-    Config::setMicGateThresholdDb(ui->micGateThresholdSlider->value(), is_specific);
+    // Write every mic slot (0..3) — sliders/combos already updated Config
+    // live via their valueChanged/stateChanged handlers, but UpdateSettings
+    // is the only path that runs setMicDevice for the combos (no live
+    // handler for those) and is what eventually triggers Config::save().
+    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*>, 4>
+        save_mic_rows = {
+            std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox,
+                            ui->micGateThresholdSlider),
+            std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2,
+                            ui->micGateThresholdSlider2),
+            std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3,
+                            ui->micGateThresholdSlider3),
+            std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4,
+                            ui->micGateThresholdSlider4),
+        };
+    for (const auto& [slot, combo, checkbox, slider] : save_mic_rows) {
+        Config::setMicDevice(slot, combo->currentData().toString().toStdString(),
+                             is_specific);
+        Config::setMicGateEnabled(slot, checkbox->isChecked(), is_specific);
+        Config::setMicGateThresholdDb(slot, slider->value(), is_specific);
+    }
     Config::setMicGateHoldMs(ui->micGateHoldSlider->value(), is_specific);
     Config::setLogFilter(ui->logFilterLineEdit->text().toStdString(), is_specific);
     Config::setUserName(ui->userNameLineEdit->text().toStdString(), is_specific);

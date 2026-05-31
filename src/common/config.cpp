@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -172,7 +173,18 @@ static ConfigEntry<string> defaultControllerID("");
 static ConfigEntry<bool> backgroundControllerInput(false);
 
 // Audio
-static ConfigEntry<string> micDevice("Default Device");
+// Mic and noise-gate config is per-user-slot (1..kNumMicSlots) so games
+// that open multiple mics for harmonies (RB4 vocals) can route each one
+// to a distinct physical device and tune its gate threshold separately.
+// The hold time stays shared — it's a feel/decay parameter that rarely
+// needs per-mic tuning.
+constexpr int kNumMicSlots = 4;
+static std::array<ConfigEntry<string>, kNumMicSlots> micDevices{
+    ConfigEntry<string>{"Default Device"},
+    ConfigEntry<string>{"None"},
+    ConfigEntry<string>{"None"},
+    ConfigEntry<string>{"None"},
+};
 static ConfigEntry<string> mainOutputDevice("Default Device");
 static ConfigEntry<string> padSpkOutputDevice("Default Device");
 // Software noise gate on the mic. When the input level falls below
@@ -180,8 +192,14 @@ static ConfigEntry<string> padSpkOutputDevice("Default Device");
 // hands the game a zero-filled buffer and sceAudioInGetSilentState
 // reports "all channels silent" — letting the game's vocal-mix path
 // (RB4 etc.) skip the mix instead of broadcasting room hum.
-static ConfigEntry<bool> micGateEnabled(false);
-static ConfigEntry<int> micGateThresholdDb(-50);
+static std::array<ConfigEntry<bool>, kNumMicSlots> micGateEnabledSlots{
+    ConfigEntry<bool>{false}, ConfigEntry<bool>{false},
+    ConfigEntry<bool>{false}, ConfigEntry<bool>{false},
+};
+static std::array<ConfigEntry<int>, kNumMicSlots> micGateThresholdDbSlots{
+    ConfigEntry<int>{-50}, ConfigEntry<int>{-50},
+    ConfigEntry<int>{-50}, ConfigEntry<int>{-50},
+};
 static ConfigEntry<int> micGateHoldMs(300);
 
 // GPU
@@ -362,24 +380,59 @@ int getCursorHideTimeout() {
     return cursorHideTimeout.get();
 }
 
+// Clamp a caller-supplied user slot (1..kNumMicSlots) to a valid array
+// index. Out-of-range slots silently fall back to slot 0 — the same
+// behaviour the single-mic code path had before per-slot config existed,
+// so a game that opens a mic with an unexpected userId still gets the
+// primary mic settings instead of crashing.
+static int clampMicSlot(int slot) {
+    if (slot < 0) return 0;
+    if (slot >= kNumMicSlots) return kNumMicSlots - 1;
+    return slot;
+}
+
+int getNumMicSlots() {
+    return kNumMicSlots;
+}
+
 string getMicDevice() {
-    return micDevice.get();
+    return micDevices[0].get();
+}
+
+string getMicDevice(int slot) {
+    return micDevices[clampMicSlot(slot)].get();
 }
 
 bool getMicGateEnabled() {
-    return micGateEnabled.get();
+    return micGateEnabledSlots[0].get();
+}
+
+bool getMicGateEnabled(int slot) {
+    return micGateEnabledSlots[clampMicSlot(slot)].get();
 }
 
 void setMicGateEnabled(bool enabled, bool is_game_specific) {
-    micGateEnabled.set(enabled, is_game_specific);
+    micGateEnabledSlots[0].set(enabled, is_game_specific);
+}
+
+void setMicGateEnabled(int slot, bool enabled, bool is_game_specific) {
+    micGateEnabledSlots[clampMicSlot(slot)].set(enabled, is_game_specific);
 }
 
 int getMicGateThresholdDb() {
-    return micGateThresholdDb.get();
+    return micGateThresholdDbSlots[0].get();
+}
+
+int getMicGateThresholdDb(int slot) {
+    return micGateThresholdDbSlots[clampMicSlot(slot)].get();
 }
 
 void setMicGateThresholdDb(int db, bool is_game_specific) {
-    micGateThresholdDb.set(db, is_game_specific);
+    micGateThresholdDbSlots[0].set(db, is_game_specific);
+}
+
+void setMicGateThresholdDb(int slot, int db, bool is_game_specific) {
+    micGateThresholdDbSlots[clampMicSlot(slot)].set(db, is_game_specific);
 }
 
 int getMicGateHoldMs() {
@@ -716,7 +769,11 @@ void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific) {
 }
 
 void setMicDevice(std::string device, bool is_game_specific) {
-    micDevice.set(device, is_game_specific);
+    micDevices[0].set(device, is_game_specific);
+}
+
+void setMicDevice(int slot, std::string device, bool is_game_specific) {
+    micDevices[clampMicSlot(slot)].set(device, is_game_specific);
 }
 
 void setMainOutputDevice(std::string device, bool is_game_specific) {
@@ -1010,11 +1067,25 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
     if (data.contains("Audio")) {
         const toml::value& audio = data.at("Audio");
 
-        micDevice.setFromToml(audio, "micDevice", is_game_specific);
+        // Migration: pre-multi-mic configs only had `micDevice` / `micGateEnabled`
+        // / `micGateThresholdDb`. Read those into slot 0 first, then let the
+        // per-slot keys (micDevice0..micDevice3 etc.) override on top so a
+        // config written by a newer build wins. The next save writes only the
+        // per-slot keys; the legacy keys are no longer written.
+        micDevices[0].setFromToml(audio, "micDevice", is_game_specific);
+        micGateEnabledSlots[0].setFromToml(audio, "micGateEnabled", is_game_specific);
+        micGateThresholdDbSlots[0].setFromToml(audio, "micGateThresholdDb",
+                                               is_game_specific);
+        for (int i = 0; i < kNumMicSlots; ++i) {
+            const std::string suffix = std::to_string(i);
+            micDevices[i].setFromToml(audio, "micDevice" + suffix, is_game_specific);
+            micGateEnabledSlots[i].setFromToml(audio, "micGateEnabled" + suffix,
+                                               is_game_specific);
+            micGateThresholdDbSlots[i].setFromToml(audio, "micGateThresholdDb" + suffix,
+                                                   is_game_specific);
+        }
         mainOutputDevice.setFromToml(audio, "mainOutputDevice", is_game_specific);
         padSpkOutputDevice.setFromToml(audio, "padSpkOutputDevice", is_game_specific);
-        micGateEnabled.setFromToml(audio, "micGateEnabled", is_game_specific);
-        micGateThresholdDb.setFromToml(audio, "micGateThresholdDb", is_game_specific);
         micGateHoldMs.setFromToml(audio, "micGateHoldMs", is_game_specific);
     }
 
@@ -1194,11 +1265,17 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
     backgroundControllerInput.setTomlValue(data, "Input", "backgroundControllerInput",
                                            is_game_specific);
 
-    micDevice.setTomlValue(data, "Audio", "micDevice", is_game_specific);
+    for (int i = 0; i < kNumMicSlots; ++i) {
+        const std::string suffix = std::to_string(i);
+        micDevices[i].setTomlValue(data, "Audio", "micDevice" + suffix, is_game_specific);
+        micGateEnabledSlots[i].setTomlValue(data, "Audio", "micGateEnabled" + suffix,
+                                            is_game_specific);
+        micGateThresholdDbSlots[i].setTomlValue(data, "Audio",
+                                                "micGateThresholdDb" + suffix,
+                                                is_game_specific);
+    }
     mainOutputDevice.setTomlValue(data, "Audio", "mainOutputDevice", is_game_specific);
     padSpkOutputDevice.setTomlValue(data, "Audio", "padSpkOutputDevice", is_game_specific);
-    micGateEnabled.setTomlValue(data, "Audio", "micGateEnabled", is_game_specific);
-    micGateThresholdDb.setTomlValue(data, "Audio", "micGateThresholdDb", is_game_specific);
     micGateHoldMs.setTomlValue(data, "Audio", "micGateHoldMs", is_game_specific);
 
     windowWidth.setTomlValue(data, "GPU", "screenWidth", is_game_specific);
@@ -1351,9 +1428,15 @@ void setDefaultValues(bool is_game_specific) {
     backgroundControllerInput.set(false, is_game_specific);
 
     // GS - Audio
-    micDevice.set("Default Device", is_game_specific);
-    micGateEnabled.set(false, is_game_specific);
-    micGateThresholdDb.set(-50, is_game_specific);
+    for (int i = 0; i < kNumMicSlots; ++i) {
+        // Default the primary slot to the system default mic; harmony slots
+        // start as "None" so a fresh install doesn't grab every input
+        // device on first launch.
+        micDevices[i].set(i == 0 ? std::string{"Default Device"} : std::string{"None"},
+                          is_game_specific);
+        micGateEnabledSlots[i].set(false, is_game_specific);
+        micGateThresholdDbSlots[i].set(-50, is_game_specific);
+    }
     micGateHoldMs.set(300, is_game_specific);
 
     // GS - GPU

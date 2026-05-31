@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <memory>
 #include <span>
@@ -17,6 +18,7 @@
 
 class QTimer;
 struct SDL_AudioStream;
+class MicLevelMeter;
 
 namespace Ui {
 class SettingsDialog;
@@ -55,11 +57,15 @@ private:
     void pollSDLevents();
 
     // Live mic-input preview for the noise-gate UI. Opens an SDL capture
-    // stream on the selected device, polls its RMS level on a timer, and
-    // drives the level bar + "gate open/closed" indicator so the user
-    // can dial in the threshold like Discord's input sensitivity meter.
+    // stream per user slot (primary + harmony 2/3/4), polls each RMS
+    // level on a shared timer, and drives the per-row level bars + gate
+    // indicators so each singer can dial in their threshold like
+    // Discord's input sensitivity meter. The no-arg start/stop variants
+    // act on every slot; the indexed variants act on one.
     void StartMicPreview();
+    void StartMicPreview(int slot);
     void StopMicPreview();
+    void StopMicPreview(int slot);
     void UpdateMicPreview();
     void UpdateMicGateLabels();
 
@@ -81,9 +87,16 @@ private:
     QFuture<void> Polling;
 
     QTimer* m_mic_preview_timer = nullptr;
-    SDL_AudioStream* m_mic_preview_stream = nullptr;
-    QString m_mic_preview_device; // device data string currently open for preview
-    bool m_mic_preview_gate_open = false;
-    std::chrono::steady_clock::time_point m_mic_preview_last_active{};
-    class MicLevelMeter* m_mic_level_meter = nullptr;
+    // Per-user-slot preview state. Slot 0 = primary mic (the original
+    // single-mic preview widgets in MicGroupBox); slots 1..3 = harmony
+    // mics in extraMicsGroupBox. Each slot owns its own SDL capture
+    // stream so all 4 can run concurrently while the dialog is open.
+    struct MicPreviewSlot {
+        SDL_AudioStream* stream = nullptr;
+        QString device;  // device-data string currently open
+        bool gate_open = false;
+        std::chrono::steady_clock::time_point last_active{};
+        MicLevelMeter* meter = nullptr;
+    };
+    std::array<MicPreviewSlot, 4> m_mic_previews{};
 };

@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -358,6 +359,49 @@ bool MainFretStep(const StepResultData& step, std::string& detail) {
     return true;
 }
 
+// Pickup / FX switch sweep step (X360 RB Guitar, PS3/Wii guitars, and the
+// PS4 RB Mustang / PS5 Riffmaster pickup selector). Per the PlasticBand
+// spec the 5 detents must quantize to dud[0] values 0..4 (wah, vibe,
+// flange, chorus, echo). The X360 raw values cluster near 25/76/127/178/
+// 229; the old packer divided 0x10..0xFF into 4 slots which (a) skipped
+// wah-wah because no raw < 0x10 is ever produced and (b) collided notch 2
+// and notch 3 onto the same dud[0]=2. So the regression we want to catch
+// is exactly "wah-wah unreachable AND fewer than 4 distinct outputs."
+// Skipped if the kit's derived TOML doesn't declare a tone_byte (the
+// Riffmaster fixture's fx_switch capture is flat, so wizard omits it).
+bool PickupSwitchStep(const StepResultData& step, const std::string& toml,
+                      std::string& detail) {
+    if (toml.find("tone_byte") == std::string::npos) return true;
+    if (step.raw.empty()) {
+        detail = "fx_switch step has no frames";
+        return false;
+    }
+    std::set<u8> distinct;
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar,
+                                  dud);
+        distinct.insert(dud[0]);
+    }
+    if (distinct.size() < 3) {
+        detail = "fx_switch packed to only " + std::to_string(distinct.size()) +
+                 " distinct dud[0] values (sweep should hit ≥ 3 notches)";
+        return false;
+    }
+    if (*distinct.begin() != 0) {
+        detail = "fx_switch never reached dud[0] = 0 (wah-wah unreachable) "
+                 "— PlasticBand quantization broken?";
+        return false;
+    }
+    if (*distinct.rbegin() < 3) {
+        detail = "fx_switch never reached the high notches (max dud[0] = " +
+                 std::to_string(*distinct.rbegin()) + ")";
+        return false;
+    }
+    return true;
+}
+
 // "Both solo frets held" combo (e.g. solo_green_blue). The capture must
 // produce a frame where:
 //   - dud[4] has TWO bits set (green + blue solo positions), AND
@@ -537,6 +581,13 @@ CaseResult RunCase(const fs::path& path) {
             step.key.rfind("solo_", 0) != 0;
         if (check_solo_buttons && is_main_fret) {
             if (!MainFretStep(step, detail)) {
+                r.detail = detail;
+                return r;
+            }
+            continue;
+        }
+        if (step.key == "fx_switch") {
+            if (!PickupSwitchStep(step, toml, detail)) {
                 r.detail = detail;
                 return r;
             }

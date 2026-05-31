@@ -148,7 +148,9 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
             // PS4 RB Mustang / PS5 Riffmaster / X360 RB all ship a
             // discrete pickup/FX switch (the only guitars that DO);
             // capture it here instead of in the standard walkthrough.
-            {"fx_switch",        QObject::tr("FX / pickup switch — sweep through every position"), "velocity", false},
+            // Optional so kits with a broken or missing switch can move
+            // on — the rest of the kit still functions without it.
+            {"fx_switch",        QObject::tr("FX / pickup switch — sweep through every position (skip if absent)"), "velocity", true},
         });
         return v;
     }();

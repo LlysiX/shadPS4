@@ -167,6 +167,14 @@ static ConfigEntry<bool> specialPadLegacyPassUSBRawHID1(false);
 static ConfigEntry<bool> specialPadLegacyPassUSBRawHID2(false);
 static ConfigEntry<bool> specialPadLegacyPassUSBRawHID3(false);
 static ConfigEntry<bool> specialPadLegacyPassUSBRawHID4(false);
+
+// Per-player device assignment storage. Each slot owns a vector of
+// encoded device strings; encodePlayerDevice / decodePlayerDevice
+// translate between PlayerDevice and the string form. Empty list =
+// "auto" (no override, controller layer falls back to first-come-
+// first-served). Not a ConfigEntry<...> because the type isn't a
+// simple scalar — read/write directly from/to the TOML.
+static std::array<std::vector<std::string>, kNumPlayerSlots> playerSlotDevices{};
 static ConfigEntry<bool> isMotionControlsEnabled(true);
 static ConfigEntry<bool> useUnifiedInputConfig(true);
 static ConfigEntry<string> defaultControllerID("");
@@ -850,6 +858,107 @@ void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass) {
     }
 }
 
+int getNumPlayerSlots() {
+    return kNumPlayerSlots;
+}
+
+static int clampPlayerSlot(int slot) {
+    if (slot < 1) return 0;
+    if (slot > kNumPlayerSlots) return kNumPlayerSlots - 1;
+    return slot - 1;
+}
+
+// Wire format examples:
+//   gamepad:030000005e040000ea02000000007200
+//   kit:0x1209:0x2882
+//   keyboard
+//   midi:Roland TD-1KV
+// Lowercase kind prefix, fields separated by ':'. Keyboards have no
+// payload because there's only one virtual keyboard pad.
+std::string encodePlayerDevice(const PlayerDevice& dev) {
+    switch (dev.kind) {
+    case PlayerDeviceKind::Gamepad:
+        return "gamepad:" + dev.guid;
+    case PlayerDeviceKind::Kit:
+        return fmt::format("kit:0x{:04x}:0x{:04x}", dev.vid, dev.pid);
+    case PlayerDeviceKind::Keyboard:
+        return "keyboard";
+    case PlayerDeviceKind::Midi:
+        return "midi:" + dev.guid;
+    }
+    return {};
+}
+
+bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out) {
+    if (encoded.empty()) return false;
+    const auto colon = encoded.find(':');
+    const std::string kind = encoded.substr(0, colon);
+    const std::string rest =
+        (colon == std::string::npos) ? std::string() : encoded.substr(colon + 1);
+    if (kind == "gamepad") {
+        if (rest.empty()) return false;
+        out.kind = PlayerDeviceKind::Gamepad;
+        out.guid = rest;
+        return true;
+    }
+    if (kind == "kit") {
+        // Expect rest = "0xVVVV:0xPPPP"
+        const auto sep = rest.find(':');
+        if (sep == std::string::npos) return false;
+        const std::string vid_s = rest.substr(0, sep);
+        const std::string pid_s = rest.substr(sep + 1);
+        try {
+            const auto parse_hex = [](const std::string& s) -> u16 {
+                std::size_t pos = 0;
+                if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+                    pos = 2;
+                }
+                return static_cast<u16>(std::stoul(s.substr(pos), nullptr, 16));
+            };
+            out.kind = PlayerDeviceKind::Kit;
+            out.vid = parse_hex(vid_s);
+            out.pid = parse_hex(pid_s);
+            return out.vid != 0 && out.pid != 0;
+        } catch (...) {
+            return false;
+        }
+    }
+    if (kind == "keyboard") {
+        out.kind = PlayerDeviceKind::Keyboard;
+        return true;
+    }
+    if (kind == "midi") {
+        if (rest.empty()) return false;
+        out.kind = PlayerDeviceKind::Midi;
+        out.guid = rest;
+        return true;
+    }
+    return false;
+}
+
+std::vector<PlayerDevice> getPlayerSlotDevices(int slot) {
+    const int idx = clampPlayerSlot(slot);
+    std::vector<PlayerDevice> out;
+    out.reserve(playerSlotDevices[idx].size());
+    for (const auto& enc : playerSlotDevices[idx]) {
+        PlayerDevice dev;
+        if (decodePlayerDevice(enc, dev)) out.push_back(std::move(dev));
+    }
+    return out;
+}
+
+void setPlayerSlotDevices(int slot, const std::vector<PlayerDevice>& devices,
+                          bool /*is_game_specific*/) {
+    const int idx = clampPlayerSlot(slot);
+    std::vector<std::string> encoded;
+    encoded.reserve(devices.size());
+    for (const auto& dev : devices) {
+        std::string s = encodePlayerDevice(dev);
+        if (!s.empty()) encoded.push_back(std::move(s));
+    }
+    playerSlotDevices[idx] = std::move(encoded);
+}
+
 void setIsMotionControlsEnabled(bool use, bool is_game_specific) {
     isMotionControlsEnabled.set(use, is_game_specific);
 }
@@ -1059,6 +1168,11 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
         specialPadLegacyPassUSBRawHID2.setFromToml(input, "specialPadLegacyPassUSBRawHID2", is_game_specific);
         specialPadLegacyPassUSBRawHID3.setFromToml(input, "specialPadLegacyPassUSBRawHID3", is_game_specific);
         specialPadLegacyPassUSBRawHID4.setFromToml(input, "specialPadLegacyPassUSBRawHID4", is_game_specific);
+        for (int i = 0; i < kNumPlayerSlots; ++i) {
+            const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
+            playerSlotDevices[i] =
+                toml::find_or<std::vector<std::string>>(input, key, {});
+        }
         isMotionControlsEnabled.setFromToml(input, "isMotionControlsEnabled", is_game_specific);
         useUnifiedInputConfig.setFromToml(input, "useUnifiedInputConfig", is_game_specific);
         backgroundControllerInput.setFromToml(input, "backgroundControllerInput", is_game_specific);
@@ -1369,6 +1483,10 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
         data["Input"]["specialPadLegacyPassUSBRawHID2"] = specialPadLegacyPassUSBRawHID2.base_value;
         data["Input"]["specialPadLegacyPassUSBRawHID3"] = specialPadLegacyPassUSBRawHID3.base_value;
         data["Input"]["specialPadLegacyPassUSBRawHID4"] = specialPadLegacyPassUSBRawHID4.base_value;
+        for (int i = 0; i < kNumPlayerSlots; ++i) {
+            const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
+            data["Input"][key] = playerSlotDevices[i];
+        }
         // Legacy singular keys: kept in sync so older readers / community
         // configs still see consistent values. useSpecialPad = true if any
         // slot has a special pad; specialPadClass mirrors slot 1's class.
@@ -1495,6 +1613,7 @@ void setDefaultValues(bool is_game_specific) {
         specialPadLegacyPassUSBRawHID2.base_value = false;
         specialPadLegacyPassUSBRawHID3.base_value = false;
         specialPadLegacyPassUSBRawHID4.base_value = false;
+        for (auto& v : playerSlotDevices) v.clear();
         useUnifiedInputConfig.base_value = true;
         controllerCustomColorRGB[0] = 0;
         controllerCustomColorRGB[1] = 0;

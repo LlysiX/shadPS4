@@ -132,6 +132,41 @@ void setSpecialPadClass(int pad, int type);
 int getSpecialPadClass(int pad);
 void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass);
 bool getSpecialPadLegacyPassUSBRawHID(int pad);
+
+// Per-player device assignment. Each player slot 1..kNumPlayerSlots can
+// list any number of input devices that contribute to that slot's pad
+// state — a navigation gamepad PLUS a probed RB instrument PLUS a MIDI
+// drum module can all be on the same slot, or a single gamepad's slot
+// can be overridden to a non-default player. Storage only at this stage;
+// the controller open/poll layer still uses first-come-first-served and
+// will start consulting this map in a follow-up commit.
+constexpr int kNumPlayerSlots = 4;
+enum class PlayerDeviceKind {
+    Gamepad,   // SDL_Gamepad bound by SDL_JoystickGUID (32 hex chars)
+    Kit,       // probed RB instrument bound by VID:PID
+    Keyboard,  // emulator's virtual keyboard pad (singleton)
+    Midi,      // MIDI input port bound by name string
+};
+struct PlayerDevice {
+    PlayerDeviceKind kind = PlayerDeviceKind::Gamepad;
+    // For Gamepad: SDL GUID hex (32 chars). For Midi: port name. For Kit
+    // / Keyboard: unused.
+    std::string guid;
+    // For Kit: device VID:PID. Unused for other kinds.
+    u16 vid = 0;
+    u16 pid = 0;
+};
+int getNumPlayerSlots();
+// Returns the (possibly empty) device list bound to slot 1..kNumPlayerSlots.
+// An empty list means "auto" — same as the no-binding default.
+std::vector<PlayerDevice> getPlayerSlotDevices(int slot);
+void setPlayerSlotDevices(int slot, const std::vector<PlayerDevice>& devices,
+                          bool is_game_specific = false);
+// Wire-format encoders/decoders used for TOML storage. Exposed so the Qt
+// settings UI and the hidtest harness can round-trip device records
+// without re-implementing the format.
+std::string encodePlayerDevice(const PlayerDevice& dev);
+bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out);
 bool getPSNSignedIn();
 void setPSNSignedIn(bool sign, bool is_game_specific = false);
 bool patchShaders(); // no set

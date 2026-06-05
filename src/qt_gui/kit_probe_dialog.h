@@ -35,6 +35,11 @@ public:
         QString prompt;    // user-facing prompt
         QString kind;      // "velocity", "digital", or "motion"
         bool optional;     // user can skip
+        // Per-step sample window length, in ms. Digital button steps
+        // (start/select/dpad-left/right) only need a couple of taps so
+        // they default to 3 s; fret/velocity/motion need the full 5 s
+        // to see range. 0 means "use kStepDurationMs".
+        int duration_ms = 0;
     };
 
     enum class DeviceType {

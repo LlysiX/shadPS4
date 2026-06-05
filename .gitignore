@@ -418,3 +418,9 @@ FodyWeavers.xsd
 # JetBrains
 .idea
 cmake-build-*
+
+# Vendor docs cloned locally for cross-referencing during RB4-instrument
+# work — not part of the project, just a reference checkout the team
+# pulls down via `git clone https://github.com/TheNathannator/PlasticBand
+# docs/PlasticBand`.
+docs/PlasticBand/

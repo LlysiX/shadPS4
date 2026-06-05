@@ -8,6 +8,8 @@
 #include <QColor>
 #include <QDateTime>
 #include <QCryptographicHash>
+#include <QSysInfo>
+#include <QUuid>
 #include <QDir>
 #include <QFile>
 #include <QHeaderView>
@@ -66,17 +68,17 @@ const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
         {"orange_pad",      QObject::tr("Orange pad (5-lane GH kits only — skip if absent)"),  "velocity", true},
         {"kick_pedal",      QObject::tr("Kick pedal — press soft and hard"),                   "velocity", false},
         {"kick_pedal_2",    QObject::tr("2nd kick pedal (skip if absent)"),                    "velocity", true},
-        {"button_start",    QObject::tr("Start button"),                                        "digital",  false},
-        {"button_select",   QObject::tr("Select button"),                                       "digital",  false},
-        {"button_ps",       QObject::tr("PS / Home button (skip if absent)"),                   "digital",  true},
-        {"button_square",   QObject::tr("Square face button"),                                  "digital",  true},
-        {"button_cross",    QObject::tr("Cross / X face button"),                               "digital",  true},
-        {"button_circle",   QObject::tr("Circle face button"),                                  "digital",  true},
-        {"button_triangle", QObject::tr("Triangle face button"),                                "digital",  true},
-        {"dpad_up",         QObject::tr("D-pad UP (hold briefly)"),                             "digital",  false},
-        {"dpad_down",       QObject::tr("D-pad DOWN (hold briefly)"),                           "digital",  false},
-        {"dpad_left",       QObject::tr("D-pad LEFT (hold briefly)"),                           "digital",  false},
-        {"dpad_right",      QObject::tr("D-pad RIGHT (hold briefly)"),                          "digital",  false},
+        {"button_start",    QObject::tr("Start button (tap once or twice)"),                    "digital",  false, 3000},
+        {"button_select",   QObject::tr("Select button (tap once or twice)"),                   "digital",  false, 3000},
+        {"button_ps",       QObject::tr("PS / Home button (skip if absent)"),                   "digital",  true,  3000},
+        {"button_square",   QObject::tr("Square face button"),                                  "digital",  true,  3000},
+        {"button_cross",    QObject::tr("Cross / X face button"),                               "digital",  true,  3000},
+        {"button_circle",   QObject::tr("Circle face button"),                                  "digital",  true,  3000},
+        {"button_triangle", QObject::tr("Triangle face button"),                                "digital",  true,  3000},
+        {"dpad_up",         QObject::tr("D-pad UP (hold briefly)"),                             "digital",  false, 3000},
+        {"dpad_down",       QObject::tr("D-pad DOWN (hold briefly)"),                           "digital",  false, 3000},
+        {"dpad_left",       QObject::tr("D-pad LEFT (hold briefly)"),                           "digital",  false, 3000},
+        {"dpad_right",      QObject::tr("D-pad RIGHT (hold briefly)"),                          "digital",  false, 3000},
     };
     return steps;
 }
@@ -101,13 +103,16 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
         {"touch_slider",   QObject::tr("Touch slider — slide finger across the whole strip"), "velocity", true},
         // (No separate tilt step — tilt is already captured by the motion
         //  baseline step at the start of the walkthrough.)
-        {"button_start",   QObject::tr("Start button"),                                "digital",  false},
-        {"button_select",  QObject::tr("Select button"),                               "digital",  false},
-        {"button_ps",      QObject::tr("PS / Home button (skip if absent)"),           "digital",  true},
-        {"dpad_up",        QObject::tr("D-pad UP (skip if absent)"),                   "digital",  true},
-        {"dpad_down",      QObject::tr("D-pad DOWN (skip if absent)"),                 "digital",  true},
-        {"dpad_left",      QObject::tr("D-pad LEFT (skip if absent)"),                 "digital",  true},
-        {"dpad_right",     QObject::tr("D-pad RIGHT (skip if absent)"),                "digital",  true},
+        {"button_start",   QObject::tr("Start button (tap once or twice)"),                "digital",  false, 3000},
+        {"button_select",  QObject::tr("Select button (tap once or twice)"),               "digital",  false, 3000},
+        {"button_ps",      QObject::tr("PS / Home button (skip if absent)"),               "digital",  true,  3000},
+        // dpad_up / dpad_down deliberately omitted — guitar strum bars
+        // wire the same HAT bits as dpad up/down, and the strum_up/
+        // strum_down steps already capture them. Adding redundant dpad
+        // up/down steps only created cross-talk warnings on devices
+        // where the strum bar slightly bounced the dpad bit pattern.
+        {"dpad_left",      QObject::tr("D-pad LEFT (skip if absent)"),                     "digital",  true,  3000},
+        {"dpad_right",     QObject::tr("D-pad RIGHT (skip if absent)"),                    "digital",  true,  3000},
     };
     return steps;
 }
@@ -513,15 +518,17 @@ void KitProbeDialog::startStep(int idx) {
                                 .arg(idx + 2)
                                 .arg(Steps(m_deviceType).size() + 1)
                                 .arg(r.def.key));
+    const int dur_ms = r.def.duration_ms > 0 ? r.def.duration_ms : kStepDurationMs;
+    const int dur_s = (dur_ms + 500) / 1000;
     ui->stepPrompt->setText(
         r.def.prompt +
         tr("\n\nRead the prompt, get ready, then click \"Begin sampling\". "
-           "You'll have 5 s to wail on it lots of ways. Click Begin again "
-           "to redo if needed."));
-    ui->stepProgress->setMaximum(kStepDurationMs);
+           "You'll have %1 s to wail on it lots of ways. Click Begin again "
+           "to redo if needed.").arg(dur_s));
+    ui->stepProgress->setMaximum(dur_ms);
     ui->stepProgress->setValue(0);
     ui->crossTalkLabel->clear();
-    ui->beginBtn->setText(tr("Begin sampling (5 s)"));
+    ui->beginBtn->setText(tr("Begin sampling (%1 s)").arg(dur_s));
     ui->beginBtn->setEnabled(true);
     ui->nextBtn->setEnabled(false);
     ui->skipBtn->setEnabled(r.def.optional);
@@ -571,10 +578,23 @@ void KitProbeDialog::detectCrossTalkAndWarn() {
             for (int i = 0; i < m_reportLen; ++i) {
                 const auto& b = r.bytes[i];
                 if (b.samples == 0) continue;
-                if ((b.max - b.min) > 3) {
-                    m_motionBytes.insert(i);
-                    ++counted;
-                }
+                if ((b.max - b.min) <= 3) continue;
+                // A byte that only flips one or two bits across the whole
+                // motion-baseline step is a tilt FLAG or button bit that
+                // happened to fire while the user was tilting — not an
+                // accelerometer. Flagging it as motion permanently excludes
+                // it from fret/face-button detection in the remaining
+                // steps, which kills the kit. PS3 GH guitars (incl. the
+                // CRKD in PS3 mode) put the tilt flag on bit 5 of byte 0,
+                // the same byte that holds the fret bitmap, so falsely
+                // flagging byte 0 as motion silently drops every fret.
+                // True accelerometer bytes flip many bits as they sweep
+                // 0..0xFF; flag-bytes touch <= 2.
+                const int diff = (b.max ^ b.min) & 0xFF;
+                const int popcount = __builtin_popcount(static_cast<unsigned>(diff));
+                if (popcount <= 2) continue;
+                m_motionBytes.insert(i);
+                ++counted;
             }
             ui->crossTalkLabel->setText(
                 tr("Flagged %1 byte(s) as motion sensor — they will be ignored "
@@ -784,8 +804,12 @@ void KitProbeDialog::onTickTimer() {
             }
         }
     } else if (m_state == State::Step && m_sampling) {
-        ui->stepProgress->setValue(std::min(elapsed, kStepDurationMs));
-        if (elapsed >= kStepDurationMs) {
+        const int dur_ms = (m_currentStep >= 0 &&
+                            m_results[m_currentStep].def.duration_ms > 0)
+                               ? m_results[m_currentStep].def.duration_ms
+                               : kStepDurationMs;
+        ui->stepProgress->setValue(std::min(elapsed, dur_ms));
+        if (elapsed >= dur_ms) {
             finishStep();
         }
     }
@@ -927,19 +951,36 @@ void KitProbeDialog::onSaveResults() {
         // taps. The test harness uses it to decide whether report[0] is a HID
         // report-ID or already the first data byte.
         const char* sourceStr = m_isXInput ? "xinput" : "hid";
+        // capture_uuid: random per-capture id so two probes of the same
+        // device on the same PC can still be told apart in shared logs.
+        const QString capture_uuid =
+            QUuid::createUuid().toString(QUuid::WithoutBraces);
+        // host_hash: stable per-machine hash so multiple captures from the
+        // same PC group together, but reversible-to-real-machine info
+        // (hostname, MAC) is not exposed. SHA-256 of machineUniqueId with
+        // a project-specific salt; first 16 hex chars is enough collision
+        // resistance for the small community kit corpus.
+        QByteArray host_seed("shadps4-kit-probe-v6:");
+        host_seed += QSysInfo::machineUniqueId();
+        const QString host_hash = QString::fromLatin1(
+            QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256)
+                .toHex().left(16));
         QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":5,"
+            "{\"type\":\"meta\",\"version\":6,"
             "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
             "\"device_name\":\"%3\",\"device_type\":\"%4\","
             "\"source\":\"%5\","
-            "\"report_length\":%6,\"timestamp\":\"%7\"}\n")
+            "\"report_length\":%6,\"timestamp\":\"%7\","
+            "\"capture_uuid\":\"%8\",\"host_hash\":\"%9\"}\n")
             .arg(m_vid, 4, 16, QChar('0'))
             .arg(m_pid, 4, 16, QChar('0'))
             .arg(QString(m_deviceName).replace('"', '\''))
             .arg(QString::fromLatin1(deviceTypeStr))
             .arg(QString::fromLatin1(sourceStr))
             .arg(m_reportLen)
-            .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+            .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
+            .arg(capture_uuid)
+            .arg(host_hash);
         rf.write(meta.toUtf8());
         for (const auto& report : m_idleRaw) {
             QString line = QStringLiteral("{\"step\":\"_idle_baseline\",\"bytes\":[");

@@ -84,12 +84,40 @@ std::string DeriveKitToml(const KitProbeData& data) {
         }
         return out;
     };
+    // Some SDL gamepad mappings co-fire two buttons when the user only
+    // pressed one — the Xbox 360 GH guitar and the CRKD in PC mode 8
+    // both report byte 1 = 0x11 (Start | R3) on a single Start press. The
+    // strict single-bit candidate search above rejects 0x11 entirely; this
+    // multi-bit fallback isolates the lowest set bit so we at least
+    // capture Start as bit 0. The higher bit (R3) stays unmapped, which
+    // is what you want — guitars don't use stick clicks.
+    auto detectMultiBitFallback =
+        [&](const std::string& key) -> std::vector<std::pair<int, uint8_t>> {
+        std::vector<std::pair<int, uint8_t>> out;
+        for (const auto& r : results) {
+            if (r.key != key || !r.captured) continue;
+            for (int i = 0; i < report_len; ++i) {
+                if (motion_bytes.count(i)) continue;
+                const auto& b = r.bytes[i];
+                if (b.samples == 0) continue;
+                const int baseline = baseline_max[i];
+                if (b.max <= baseline) continue;
+                const int diff = b.max & ~baseline;
+                if (diff == 0) continue;
+                // Lowest set bit only.
+                out.push_back({i, static_cast<uint8_t>(diff & -diff)});
+            }
+            break;
+        }
+        return out;
+    };
     // Single-button steps (Start, Select, etc.) pick the cleanest candidate:
     // the source byte with the lowest baseline value. Avoids latching onto a
     // byte that already has unrelated flags set (e.g. HAT low nibble).
     auto detectFlagByteAndBit =
         [&](const std::string& key) -> std::pair<int, uint8_t> {
         auto cands = detectAllFlagCandidates(key);
+        if (cands.empty()) cands = detectMultiBitFallback(key);
         if (cands.empty()) return {-1, 0};
         auto best = cands.front();
         int best_baseline = baseline_max[best.first];
@@ -481,30 +509,60 @@ std::string DeriveKitToml(const KitProbeData& data) {
         }
     }
     if (IsGuitarType(data.device_type) && !motion_bytes.empty()) {
-        const int tilt = *motion_bytes.begin();
-        os << "tilt_byte      = " << tilt << "\n";
-        const bool has_high = motion_bytes.count(tilt + 1) > 0;
-        const int baseline = (baseline_min[tilt] + baseline_max[tilt]) / 2;
-        int up_min = baseline, up_max = baseline;
-        for (const auto& r : results) {
-            if (r.key != "tilt_up" || !r.captured) continue;
-            if (tilt < 0 || tilt >= report_len) break;
-            up_min = r.bytes[tilt].min;
-            up_max = r.bytes[tilt].max;
-            break;
+        // Pick the motion byte whose tilt_up range pushes furthest OUTSIDE
+        // its idle baseline range — that's the tilt sensor. The old code
+        // picked *motion_bytes.begin() (lowest index) which, on the PS5
+        // Riffmaster, is byte 12 (a noisy sequence-ish counter that already
+        // sweeps 0..255 during idle); the real tilt flag is byte 42 but
+        // it was passed over. Same problem hit the CRKD in PC mode 8 where
+        // the wizard's first-motion-byte pick required a manual remap to
+        // get tilt working in-game.
+        auto tiltUpStats = [&](int byte_idx) -> std::pair<int, int> {
+            for (const auto& r : results) {
+                if (r.key != "tilt_up" || !r.captured) continue;
+                if (byte_idx < 0 || byte_idx >= report_len) break;
+                return {r.bytes[byte_idx].min, r.bytes[byte_idx].max};
+            }
+            return {-1, -1};
+        };
+        int tilt = -1;
+        int tilt_shift = -1;
+        int tilt_up_min = 0, tilt_up_max = 0;
+        for (int candidate : motion_bytes) {
+            if (candidate < 0 || candidate >= report_len) continue;
+            auto [up_min, up_max] = tiltUpStats(candidate);
+            if (up_min < 0) continue;
+            const int excess_high = std::max(0, up_max - baseline_max[candidate]);
+            const int excess_low = std::max(0, baseline_min[candidate] - up_min);
+            const int shift = excess_high + excess_low;
+            if (shift > tilt_shift) {
+                tilt_shift = shift;
+                tilt = candidate;
+                tilt_up_min = up_min;
+                tilt_up_max = up_max;
+            }
         }
-        const int up_delta_high = up_max - baseline;
-        const int up_delta_low = baseline - up_min;
-        const bool invert = up_delta_high > up_delta_low;
-        if (has_high) {
-            os << "tilt_byte_high = " << (tilt + 1) << "\n";
-            os << "tilt_baseline  = 512\n";
-            os << "tilt_scale     = 128\n";
-        } else {
-            os << "tilt_baseline  = " << baseline << "\n";
-            os << "tilt_scale     = 80\n";
+        // Require a meaningful shift (≥ 32 raw units) before claiming a
+        // tilt sensor exists. Many XInput synth captures and counter-only
+        // devices have NO real tilt and would otherwise get a phantom
+        // tilt_byte that constantly fires in-game.
+        if (tilt >= 0 && tilt_shift >= 32) {
+            os << "tilt_byte      = " << tilt << "\n";
+            const bool has_high = motion_bytes.count(tilt + 1) > 0;
+            const int baseline = (baseline_min[tilt] + baseline_max[tilt]) / 2;
+            const int up_delta_high = tilt_up_max - baseline;
+            const int up_delta_low = baseline - tilt_up_min;
+            const bool invert = up_delta_high > up_delta_low;
+            if (has_high) {
+                os << "tilt_byte_high = " << (tilt + 1) << "\n";
+                os << "tilt_baseline  = 512\n";
+                os << "tilt_scale     = 128\n";
+            } else {
+                os << "tilt_baseline  = " << baseline << "\n";
+                os << "tilt_scale     = 80\n";
+            }
+            os << "tilt_invert    = " << (invert ? "true" : "false") << "\n";
         }
-        os << "tilt_invert    = " << (invert ? "true" : "false") << "\n";
     }
     if (!motion_bytes.empty()) {
         os << "motion_bytes = [";
@@ -633,10 +691,22 @@ void DeriveBaselineAndMotion(KitProbeData& data) {
         for (const auto& r : data.results) {
             if (r.key == "_motion_baseline" && r.captured && !r.bytes.empty()) {
                 for (int i = 0; i < data.report_length; ++i) {
-                    if (r.bytes[i].samples == 0) continue;
-                    if ((r.bytes[i].max - r.bytes[i].min) > 3) {
-                        data.motion_bytes.insert(i);
-                    }
+                    const auto& bo = r.bytes[i];
+                    if (bo.samples == 0) continue;
+                    if ((bo.max - bo.min) <= 3) continue;
+                    // Mirrors the wizard's detectCrossTalkAndWarn fix:
+                    // single-bit flips during the motion-baseline step
+                    // are tilt FLAGS or button bits that happened to fire
+                    // while the user was tilting — not accelerometer
+                    // sweeps. Falsely flagging them as motion permanently
+                    // excludes them from fret detection (the CRKD in PS3
+                    // mode parks its tilt flag on bit 5 of byte 0, the
+                    // same byte that holds the fret bitmap, so the kit
+                    // ends up with NO fret_byte).
+                    const int diff = (bo.max ^ bo.min) & 0xFF;
+                    const int pop = __builtin_popcount(static_cast<unsigned>(diff));
+                    if (pop <= 2) continue;
+                    data.motion_bytes.insert(i);
                 }
             }
         }

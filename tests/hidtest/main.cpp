@@ -440,6 +440,99 @@ bool SoloFretComboStep(const StepResultData& step, std::string& detail) {
     return false;
 }
 
+// Tilt-activation regression. For any kit whose derived TOML declares a
+// tilt_byte, replay the captured tilt_up frames through PackDeviceUniqueData
+// and require at least one frame to push dud[2] above a meaningful
+// threshold (>= 0x40) — that's the byte the PS4 RB Guitar wire format
+// uses to deliver tilt to the game. Catches the failure mode where the
+// wizard picks a wrong tilt_byte (PS5 Riffmaster used to pick byte 12,
+// a counter, instead of byte 42, the real tilt flag) so the kit looks
+// valid but tilt never fires.
+//
+// Skipped for kits without a tilt_byte (XInput synth captures with no
+// real tilt sensor — those correctly produce NO tilt_byte after the
+// tilt_shift heuristic, and there's nothing to verify).
+bool TiltActivationStep(const StepResultData& step, const std::string& toml,
+                        std::string& detail) {
+    if (toml.find("\ntilt_byte ") == std::string::npos) return true;
+    if (step.raw.empty()) {
+        detail = "tilt_activation: no tilt_up frames";
+        return false;
+    }
+    u8 max_dud2 = 0;
+    for (const auto& frame : step.raw) {
+        u8 dud[HID::kMaxDeviceUniqueData] = {};
+        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                                  Libraries::Pad::OrbisPadDeviceClass::Guitar,
+                                  dud);
+        if (dud[2] > max_dud2) max_dud2 = dud[2];
+    }
+    if (max_dud2 < 0x40) {
+        char hex[8];
+        std::snprintf(hex, sizeof(hex), "%02X", max_dud2);
+        detail = "tilt_activation: tilt_up never pushed dud[2] above 0x40 "
+                 "(max = 0x" + std::string(hex) +
+                 "). tilt_byte may be a counter / wrong byte.";
+        return false;
+    }
+    return true;
+}
+
+// Santroller HID and similar kits that pack frets + Start on the same byte
+// MUST suppress the fret face buttons from PackButtons output when
+// Start/Select is held (clear_dud0_when_raw1_bits triggers). Otherwise a
+// "Start + green" chord goes through as Cross|Options simultaneously and
+// RB4's menu interprets it as both "accept" and "exit" → the kit "freaks
+// out" mid-navigation. This synthesises the chord from the captured
+// button_start frame OR'd with green_fret's byte 1, replays through
+// PackButtons, and asserts no fret face button bit fires.
+bool StartFretSuppressionStep(const StepResultData& start_step,
+                              const StepResultData& green_step,
+                              const std::string& toml, std::string& detail) {
+    if (toml.find("clear_dud0_when_raw1_bits") == std::string::npos) return true;
+    if (start_step.raw.empty() || green_step.raw.empty()) {
+        detail = "start_fret_suppression: missing button_start or green_fret frames";
+        return false;
+    }
+    using B = Libraries::Pad::OrbisPadButtonDataOffset;
+    const u32 face_mask =
+        static_cast<u32>(B::Cross) | static_cast<u32>(B::Circle) |
+        static_cast<u32>(B::Square) | static_cast<u32>(B::Triangle) |
+        static_cast<u32>(B::L1);
+    // Pick the brightest pressed frame from each step.
+    auto brightest = [](const StepResultData& s) {
+        std::vector<uint8_t> best = s.raw.front();
+        int best_score = -1;
+        for (const auto& fr : s.raw) {
+            int score = 0;
+            for (uint8_t b : fr) score += b;
+            if (score > best_score) { best_score = score; best = fr; }
+        }
+        return best;
+    };
+    const std::vector<uint8_t> start_fr = brightest(start_step);
+    const std::vector<uint8_t> green_fr = brightest(green_step);
+    if (start_fr.size() != green_fr.size()) {
+        detail = "start_fret_suppression: frame sizes differ";
+        return false;
+    }
+    std::vector<uint8_t> chord = start_fr;
+    for (std::size_t i = 0; i < chord.size(); ++i) chord[i] |= green_fr[i];
+    const u32 buttons = HID::PackButtons(
+        1, chord.data(), chord.size(),
+        Libraries::Pad::OrbisPadDeviceClass::Guitar);
+    if (buttons & face_mask) {
+        char hex[8];
+        std::snprintf(hex, sizeof(hex), "%02X", chord[1]);
+        detail = "start_fret_suppression: Start+green chord (raw[1]=0x" +
+                 std::string(hex) +
+                 ") fired a fret face button; clear_dud0_when_raw1_bits "
+                 "must mask fret bits in PackButtons too";
+        return false;
+    }
+    return true;
+}
+
 CaseResult RunCase(const fs::path& path) {
     CaseResult r{};
     r.name = path.filename().string();
@@ -527,16 +620,16 @@ CaseResult RunCase(const fs::path& path) {
     }
     // Steps the round-trip can't reliably verify through PackButtons /
     // PackDeviceUniqueData:
-    //   tilt_up      — PS3 GH tilt is delivered via OrbisPadData::acceleration,
-    //                  not the dud-byte pipeline. The accel path reads from
-    //                  the slot's last_report which this harness doesn't fill.
     //   button_ps    — not all guitars expose Guide/Home on their HID report;
     //                  on some kits the wizard correctly omits it.
+    //   kick_pedal_2 — captured by the wizard but the current derivation
+    //                  only maps the primary kick into the TOML; packing
+    //                  the 2nd kick frame produces no output. Optional step.
+    // tilt_up has its own per-step check (TiltActivationStep) below; it
+    // exits the round-trip path via the explicit step.key == "tilt_up"
+    // branch and doesn't need to be on this skip list.
     static const std::vector<std::string> kSkipSteps = {
-        "tilt_up", "button_ps",
-        // 2nd kick pedal is captured separately by the wizard but the
-        // current derivation maps only the primary kick into the TOML —
-        // packing the 2nd kick frame produces no output. Optional step.
+        "button_ps",
         "kick_pedal_2",
     };
     const bool check_solo_buttons =
@@ -593,7 +686,29 @@ CaseResult RunCase(const fs::path& path) {
             }
             continue;
         }
+        if (step.key == "tilt_up") {
+            if (!TiltActivationStep(step, toml, detail)) {
+                r.detail = detail;
+                return r;
+            }
+            continue;
+        }
         if (!RoundTripStep(step, detail)) {
+            r.detail = detail;
+            return r;
+        }
+    }
+    // Cross-step synthesis: Start + green chord, applies when the kit
+    // declares clear_dud0_when_raw1_bits (frets + menu on same byte).
+    const StepResultData* start_step = nullptr;
+    const StepResultData* green_step = nullptr;
+    for (const auto& s : data.results) {
+        if (s.key == "button_start" && s.captured) start_step = &s;
+        if (s.key == "green_fret" && s.captured) green_step = &s;
+    }
+    if (start_step && green_step) {
+        std::string detail;
+        if (!StartFretSuppressionStep(*start_step, *green_step, toml, detail)) {
             r.detail = detail;
             return r;
         }

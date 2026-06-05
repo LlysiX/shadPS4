@@ -454,10 +454,24 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
     const KitDef* kit = nullptr;
     if (slot >= 1 && slot <= 4) kit = g_slots[slot - 1].kit;
     if (!kit) return 0;
+    // PackDeviceUniqueData clears dud[0] (the fret slot) whenever a menu
+    // bit is held in raw[1] — so the game's fret state goes to 0 while
+    // Start/Select is down. But PackButtons reads the same byte the frets
+    // live in and fires their face-button bits too, which means in-game
+    // a Start+green chord goes through as Cross|Options simultaneously
+    // (the "Santroller HID freak-out" report). Mask the fret bits on
+    // the fret_byte when the suppression is active, so PackButtons agrees
+    // with PackDeviceUniqueData about which inputs are live.
+    const bool suppress_frets =
+        kit->clear_dud0_when_raw1_bits && raw_len > 1 &&
+        (raw[1] & kit->clear_dud0_when_raw1_bits);
     u32 out = 0;
     for (const auto& [byte_idx, table] : kit->button_bytes) {
         if (byte_idx < 0 || static_cast<std::size_t>(byte_idx) >= raw_len) continue;
-        const u8 b = raw[byte_idx];
+        u8 b = raw[byte_idx];
+        if (suppress_frets && byte_idx == kit->fret_byte) {
+            b &= ~kit->fret_mask;
+        }
         for (int bit = 0; bit < 8; ++bit) {
             if (b & (1u << bit)) out |= table[bit];
         }

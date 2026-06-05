@@ -346,18 +346,37 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
     controllers[handle - 1]->ReadState(&state, &isConnected, &connectedCount);
     const u32 sdl_buttons = static_cast<u32>(state.buttonsState);
 
-    // Non-instrument fields: sticks centred, no motion/touch for a kit.
-    // Sticks forced to centered: SDL's gamepad mapping can put whammy on
-    // rightStick.x for guitars (PS3 GH/RB on Windows, all X360 guitars
-    // via XInput), and RB4 reads rightStick.x as a tilt sensor on some
-    // code paths — that turns whammy into Star Power. Kit input reaches
-    // RB4 through deviceUniqueData; sticks should stay neutral.
-    pData->leftStick.x = 0x80;
-    pData->leftStick.y = 0x80;
-    pData->rightStick.x = 0x80;
-    pData->rightStick.y = 0x80;
-    pData->analogButtons.l2 = 0;
-    pData->analogButtons.r2 = 0;
+    // Sticks / triggers default to "no nav controller bound to this slot":
+    // centred sticks, no triggers. For HID-source kits the user can bind
+    // a separate gamepad to the same slot (per-player-device-assignment)
+    // to navigate menus — in that case let the gamepad's sticks and
+    // triggers pass through. For XInput-source kits the SAME physical
+    // device is opened twice (once by us, once by hid_instrument's poll
+    // loop), so passing SDL sticks would double-count and we keep the
+    // safe centred default.
+    const std::string kit_source = Input::HidInstrument::GetActiveKitSource(handle);
+    const bool nav_passthrough = (kit_source == "hid" || kit_source.empty());
+    if (nav_passthrough) {
+        pData->leftStick.x =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftX)]);
+        pData->leftStick.y =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftY)]);
+        pData->rightStick.x =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightX)]);
+        pData->rightStick.y =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightY)]);
+        pData->analogButtons.l2 =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::TriggerLeft)]);
+        pData->analogButtons.r2 =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::TriggerRight)]);
+    } else {
+        pData->leftStick.x = 0x80;
+        pData->leftStick.y = 0x80;
+        pData->rightStick.x = 0x80;
+        pData->rightStick.y = 0x80;
+        pData->analogButtons.l2 = 0;
+        pData->analogButtons.r2 = 0;
+    }
     float acc_x = 0.0f, acc_y = 0.0f, acc_z = 0.0f;
     if (Input::HidInstrument::GetLatestAcceleration(handle, acc_x, acc_y, acc_z)) {
         pData->acceleration = {acc_x, acc_y, acc_z};
@@ -382,10 +401,21 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
             Config::getUseSpecialPad(handle)
                 ? (OrbisPadDeviceClass)Config::getSpecialPadClass(handle)
                 : OrbisPadDeviceClass::Standard;
-        // Mask out face / shoulder / D-pad bits from SDL — the kit provides
-        // those via PackButtons in the PS3→PS4 mapping, and the OR would
-        // conflict (e.g. SDL says Yellow=Square, we say Yellow=Triangle).
-        // Options/Touchpad stay through for keyboard menu fallbacks.
+        // For XInput-source kits the SDL gamepad in this slot IS the kit
+        // (hid_instrument's poll thread opens the same physical device),
+        // so its face / shoulder / D-pad bits would conflict with the
+        // kit's PackButtons output (e.g. SDL says Yellow=Square, we say
+        // Yellow=Triangle). Mask those.
+        // For HID-source kits the SDL gamepad — if any — is a SEPARATE
+        // navigation controller bound to the slot via the per-player
+        // device assignment (e.g. an Xbox controller next to a MIDI drum
+        // module). We don't want a Yellow drum hit to compete with a
+        // Triangle press on the gamepad, but we DO want the gamepad's
+        // dpad/face buttons to navigate menus. Keep the conservative
+        // mask: instrument bits routed only through the kit, navigation
+        // bits (Options, Touchpad, Share, PS) through SDL. The dpad
+        // stays masked because RB4 treats the kit's HAT decoding as
+        // authoritative for the player.
         constexpr u32 kInstrumentBtnMask = static_cast<u32>(
             OrbisPadButtonDataOffset::Square   | OrbisPadButtonDataOffset::Cross    |
             OrbisPadButtonDataOffset::Circle   | OrbisPadButtonDataOffset::Triangle |

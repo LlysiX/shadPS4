@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <unordered_set>
 #include <SDL3/SDL.h>
 #include <common/singleton.h>
@@ -262,6 +263,88 @@ int GameController::GetPadClassFromSDL() {
 
 bool is_first_check = true;
 
+namespace {
+std::string GuidHexForJoystick(SDL_JoystickID id) {
+    char buf[33];
+    SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), buf, sizeof(buf));
+    return std::string(buf);
+}
+
+// Find the player slot a joystick GUID is explicitly bound to, or -1 if
+// it's unbound. Walks Config's per-slot device lists looking for a
+// PlayerDeviceKind::Gamepad entry whose stored GUID matches.
+int FindBoundSlotForGuid(const std::string& guid) {
+    for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
+        for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
+            if (dev.kind == Config::PlayerDeviceKind::Gamepad &&
+                dev.guid == guid) {
+                return slot;
+            }
+        }
+    }
+    return -1;
+}
+
+// True if slot 1..N has at least one gamepad binding configured. Used to
+// mark a slot as "reserved" during pass 2 — even if no bound gamepad has
+// connected yet, we don't want a random gamepad squatting in a slot the
+// user explicitly carved out for a specific device.
+bool SlotHasGamepadBinding(int slot) {
+    for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
+        if (dev.kind == Config::PlayerDeviceKind::Gamepad) return true;
+    }
+    return false;
+}
+
+void EnableSensorsAndLog(GameController* gc, SDL_Gamepad* pad, int slot) {
+    if (SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_GYRO, true)) {
+        gc->gyro_poll_rate = SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_GYRO);
+        LOG_INFO(Input, "Gyro initialized for slot {} pad {}: poll rate {}",
+                 slot, SDL_GetGamepadID(pad), gc->gyro_poll_rate);
+    } else {
+        LOG_ERROR(Input, "Failed to enable gyro for slot {} pad {}",
+                  slot, SDL_GetGamepadID(pad));
+    }
+    if (SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, true)) {
+        gc->accel_poll_rate = SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_ACCEL);
+        LOG_INFO(Input, "Accel initialized for slot {} pad {}: poll rate {}",
+                 slot, SDL_GetGamepadID(pad), gc->accel_poll_rate);
+    } else {
+        LOG_ERROR(Input, "Failed to enable accel for slot {} pad {}",
+                  slot, SDL_GetGamepadID(pad));
+    }
+}
+
+} // namespace
+
+void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot,
+                                         SDL_Gamepad* pad, bool& slot_taken,
+                                         bool fire_login) {
+    using namespace Libraries::UserService;
+    auto* gc = controllers[slot];
+    if (!slot_taken) {
+        // First device for this slot — becomes the primary.
+        gc->m_sdl_gamepad = pad;
+        gc->user_id = slot + 1;
+        gc->player_index = static_cast<u8>(slot);
+        slot_taken = true;
+        if (fire_login) {
+            AddUserServiceEvent({OrbisUserServiceEventType::Login, slot + 1});
+        }
+        LOG_INFO(Input, "Gamepad registered for slot {} (primary). Handle: {}",
+                 slot, SDL_GetGamepadID(pad));
+    } else {
+        // Slot already has a primary — add this one as a secondary. SDL
+        // events for it route to the same GameController via player_index,
+        // so its inputs OR with the primary's at the m_last_state level.
+        gc->m_additional_gamepads.push_back(pad);
+        LOG_INFO(Input, "Gamepad added to slot {} (secondary). Handle: {}",
+                 slot, SDL_GetGamepadID(pad));
+    }
+    SDL_SetGamepadPlayerIndex(pad, slot);
+    EnableSensorsAndLog(gc, pad, slot);
+}
+
 void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
     using namespace Libraries::UserService;
     int controller_count;
@@ -269,74 +352,110 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
 
     std::unordered_set<SDL_JoystickID> assigned_ids;
     std::array<bool, 4> slot_taken{false, false, false, false};
-
-    for (int i = 0; i < 4; i++) {
-        SDL_Gamepad* pad = controllers[i]->m_sdl_gamepad;
-        if (pad) {
-            SDL_JoystickID id = SDL_GetGamepadID(pad);
-            bool still_connected = false;
-            for (int j = 0; j < controller_count; j++) {
-                if (new_joysticks[j] == id) {
-                    still_connected = true;
-                    assigned_ids.insert(id);
-                    slot_taken[i] = true;
-                    break;
-                }
-            }
-            if (!still_connected) {
-                AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
-                SDL_CloseGamepad(pad);
-                controllers[i]->m_sdl_gamepad = nullptr;
-                controllers[i]->user_id = -1;
-                slot_taken[i] = false;
-            } else {
-                controllers[i]->player_index = i;
-            }
-        }
+    std::unordered_set<SDL_JoystickID> connected_set;
+    for (int j = 0; j < controller_count; ++j) {
+        connected_set.insert(new_joysticks[j]);
     }
 
-    for (int j = 0; j < controller_count; j++) {
-        SDL_JoystickID id = new_joysticks[j];
-        if (assigned_ids.contains(id))
-            continue;
-
-        SDL_Gamepad* pad = SDL_OpenGamepad(id);
-        if (!pad)
-            continue;
-
-        for (int i = 0; i < 4; i++) {
-            if (!slot_taken[i]) {
-                controllers[i]->m_sdl_gamepad = pad;
-                LOG_INFO(Input, "Gamepad registered for slot {}! Handle: {}", i,
-                         SDL_GetGamepadID(pad));
-                controllers[i]->user_id = i + 1;
+    // Disconnect pass — primaries AND secondaries.
+    for (int i = 0; i < 4; i++) {
+        auto* gc = controllers[i];
+        // Primary first.
+        if (gc->m_sdl_gamepad) {
+            const SDL_JoystickID id = SDL_GetGamepadID(gc->m_sdl_gamepad);
+            if (connected_set.count(id)) {
+                assigned_ids.insert(id);
                 slot_taken[i] = true;
-                controllers[i]->player_index = i;
-                AddUserServiceEvent({OrbisUserServiceEventType::Login, i + 1});
-
-                if (SDL_SetGamepadSensorEnabled(controllers[i]->m_sdl_gamepad, SDL_SENSOR_GYRO,
-                                                true)) {
-                    controllers[i]->gyro_poll_rate = SDL_GetGamepadSensorDataRate(
-                        controllers[i]->m_sdl_gamepad, SDL_SENSOR_GYRO);
-                    LOG_INFO(Input, "Gyro initialized, poll rate: {}",
-                             controllers[i]->gyro_poll_rate);
+                gc->player_index = static_cast<u8>(i);
+            } else {
+                SDL_CloseGamepad(gc->m_sdl_gamepad);
+                gc->m_sdl_gamepad = nullptr;
+                // Promote a secondary to primary if any are still here.
+                if (!gc->m_additional_gamepads.empty()) {
+                    gc->m_sdl_gamepad = gc->m_additional_gamepads.front();
+                    gc->m_additional_gamepads.erase(
+                        gc->m_additional_gamepads.begin());
+                    slot_taken[i] = true;
+                    LOG_INFO(Input, "Slot {} primary disconnected; promoted "
+                                    "secondary to primary.", i);
                 } else {
-                    LOG_ERROR(Input, "Failed to initialize gyro controls for gamepad {}",
-                              controllers[i]->user_id);
+                    slot_taken[i] = false;
+                    AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
+                    gc->user_id = -1;
                 }
-                if (SDL_SetGamepadSensorEnabled(controllers[i]->m_sdl_gamepad, SDL_SENSOR_ACCEL,
-                                                true)) {
-                    controllers[i]->accel_poll_rate = SDL_GetGamepadSensorDataRate(
-                        controllers[i]->m_sdl_gamepad, SDL_SENSOR_ACCEL);
-                    LOG_INFO(Input, "Accel initialized, poll rate: {}",
-                             controllers[i]->accel_poll_rate);
-                } else {
-                    LOG_ERROR(Input, "Failed to initialize accel controls for gamepad {}",
-                              controllers[i]->user_id);
-                }
-                break;
             }
         }
+        // Secondaries — drop any that are gone.
+        auto& secs = gc->m_additional_gamepads;
+        secs.erase(std::remove_if(secs.begin(), secs.end(),
+                                  [&](SDL_Gamepad* p) {
+                                      const SDL_JoystickID sid =
+                                          SDL_GetGamepadID(p);
+                                      if (connected_set.count(sid)) {
+                                          assigned_ids.insert(sid);
+                                          return false;
+                                      }
+                                      LOG_INFO(Input,
+                                               "Slot {} secondary disconnected. Handle: {}",
+                                               i, sid);
+                                      SDL_CloseGamepad(p);
+                                      return true;
+                                  }),
+                   secs.end());
+    }
+
+    // Pass 1: route gamepads that have an explicit GUID binding to their
+    // bound slot. Pass 2 only places UNBOUND gamepads, so this loop is
+    // what makes "I want my Xbox controller on slot 3" actually stick
+    // regardless of plug-in order.
+    for (int j = 0; j < controller_count; j++) {
+        const SDL_JoystickID id = new_joysticks[j];
+        if (assigned_ids.contains(id)) continue;
+        const std::string guid = GuidHexForJoystick(id);
+        const int bound = FindBoundSlotForGuid(guid);
+        if (bound < 1 || bound > 4) continue;
+        SDL_Gamepad* pad = SDL_OpenGamepad(id);
+        if (!pad) continue;
+        PlaceGamepadInSlot(controllers, bound - 1, pad, slot_taken[bound - 1],
+                           true);
+        assigned_ids.insert(id);
+    }
+
+    // Pass 2: unbound gamepads land in the first slot that's free AND has
+    // no gamepad binding configured (so an unrelated controller can't
+    // hijack a slot the user explicitly reserved for a specific device
+    // that just hasn't connected yet).
+    std::array<bool, 4> reserved{};
+    for (int i = 0; i < 4; ++i) reserved[i] = SlotHasGamepadBinding(i + 1);
+    for (int j = 0; j < controller_count; j++) {
+        const SDL_JoystickID id = new_joysticks[j];
+        if (assigned_ids.contains(id)) continue;
+        SDL_Gamepad* pad = SDL_OpenGamepad(id);
+        if (!pad) continue;
+
+        int target = -1;
+        for (int i = 0; i < 4; i++) {
+            if (slot_taken[i]) continue;
+            if (reserved[i]) continue;
+            target = i;
+            break;
+        }
+        if (target < 0) {
+            // Every free slot is reserved for a bound device that hasn't
+            // shown up. Fall back to the lowest free slot anyway — the
+            // user's bound gamepad can kick us later by reconnecting,
+            // but leaving them with no input at all is worse.
+            for (int i = 0; i < 4; i++) {
+                if (!slot_taken[i]) { target = i; break; }
+            }
+        }
+        if (target < 0) {
+            // All four slots full — close and ignore.
+            SDL_CloseGamepad(pad);
+            continue;
+        }
+        PlaceGamepadInSlot(controllers, target, pad, slot_taken[target], true);
+        assigned_ids.insert(id);
     }
     if (is_first_check) [[unlikely]] {
         is_first_check = false;

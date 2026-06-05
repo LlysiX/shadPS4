@@ -139,6 +139,22 @@ bool GamepadMatchesKit(const KitDef& kd, SDL_JoystickID gpid) {
     return false;
 }
 
+// True if `slot` (1..4) has at least one Kit binding in Config::getPlayerSlotDevices.
+// When this returns true we restrict the slot to its bound kits only —
+// other kits get rejected here so they can land in the slot they were
+// actually intended for. Slots with no Kit binding accept any kit (back-
+// compat with the pre-per-player behaviour).
+bool SlotAcceptsKit(int slot, u16 vid, u16 pid) {
+    const auto devices = Config::getPlayerSlotDevices(slot);
+    bool any_kit_binding = false;
+    for (const auto& dev : devices) {
+        if (dev.kind != Config::PlayerDeviceKind::Kit) continue;
+        any_kit_binding = true;
+        if (dev.vid == vid && dev.pid == pid) return true;
+    }
+    return !any_kit_binding;
+}
+
 void PollLoop() {
     while (g_thread_running.load(std::memory_order_acquire)) {
         for (int i = 0; i < kNumSlots; ++i) {
@@ -162,6 +178,12 @@ void PollLoop() {
                     snapshot = g_kits;
                 }
                 for (const auto& kd : snapshot) {
+                    // Per-player kit binding: if this slot's device list
+                    // declares specific kits, restrict matching to those.
+                    // Other kits are skipped here so they can land in
+                    // whichever (other) slot they were bound to in a
+                    // later iteration.
+                    if (!SlotAcceptsKit(slot, kd.vid, kd.pid)) continue;
                     if (kd.source == "xinput") {
                         int gpcount = 0;
                         SDL_JoystickID* gps = SDL_GetGamepads(&gpcount);

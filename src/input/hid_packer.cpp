@@ -552,6 +552,12 @@ std::string GetActiveKitName(int slot) {
     return k ? k->name : std::string{};
 }
 
+std::string GetActiveKitSource(int slot) {
+    if (slot < 1 || slot > kNumSlots) return {};
+    const auto* k = g_slots[slot - 1].kit;
+    return k ? k->source : std::string{};
+}
+
 std::size_t GetLoadedKitCount() {
     std::lock_guard<std::mutex> lk(g_kits_mu);
     return g_kits.size();

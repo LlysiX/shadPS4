@@ -74,7 +74,8 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
                     Libraries::Pad::OrbisPadDeviceClassData* out);
 
 // Inspection helpers for the Qt UI.
-std::string GetActiveKitName(int slot);  // empty if no kit open
+std::string GetActiveKitName(int slot);    // empty if no kit open
+std::string GetActiveKitSource(int slot);  // "hid" / "xinput" / "", empty if no kit
 std::size_t GetLoadedKitCount();         // for "N kits loaded" status
 
 // True if any player slot has legacy raw-HID enabled AND we have a kit

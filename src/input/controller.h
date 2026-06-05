@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <array>
 #include <mutex>
+#include <vector>
 #include "SDL3/SDL_joystick.h"
 #include "common/assert.h"
 #include "common/types.h"
@@ -90,7 +92,18 @@ private:
     std::array<State, MAX_STATES> m_states;
     std::array<StateInternal, MAX_STATES> m_private;
 
+    // m_sdl_gamepad is the "primary" SDL gamepad bound to this slot —
+    // queried directly by vibration / lightbar / sensor-poll code.
+    // m_additional_gamepads are secondary devices co-bound to the same
+    // slot (Config::getPlayerSlotDevices). All of them have player_index
+    // set to this slot, so SDL events from any of them route to this
+    // GameController via GetGamepadIndexFromJoystickId — their button /
+    // axis / sensor updates land in the SAME m_last_state, which gives
+    // a free OR-on-digital / last-write-wins-on-analog merge without
+    // any explicit aggregation code. The vector is only consulted at
+    // open / close time for hot-plug bookkeeping.
     SDL_Gamepad* m_sdl_gamepad = nullptr;
+    std::vector<SDL_Gamepad*> m_additional_gamepads;
     u8 player_index = -1;
 };
 
@@ -110,6 +123,16 @@ public:
     }
     static void TryOpenSDLControllers(GameControllers& controllers);
     static u8 GetGamepadIndexFromJoystickId(SDL_JoystickID id);
+
+private:
+    // Attach `pad` to slot `slot` as primary (if the slot is empty) or as
+    // a secondary (otherwise). Sets SDL's player_index, enables sensors,
+    // and fires a Login event when fire_login=true and the slot was
+    // previously empty. Touches GameController's private members, hence
+    // a member function rather than a free helper.
+    static void PlaceGamepadInSlot(GameControllers& controllers, int slot,
+                                   SDL_Gamepad* pad, bool& slot_taken,
+                                   bool fire_login);
 };
 
 } // namespace Input

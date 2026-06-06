@@ -250,12 +250,12 @@ int GameController::GetPadClassFromSDL() {
         auto joystick_type = SDL_GetJoystickType(joystick);
         auto joystick_name = SDL_GetJoystickName(joystick);
         switch (joystick_type) {
-            case SDL_JOYSTICK_TYPE_GUITAR:
-                return 1;
-            case SDL_JOYSTICK_TYPE_DRUM_KIT:
-                return 2;
-            default:
-                return 0;
+        case SDL_JOYSTICK_TYPE_GUITAR:
+            return 1;
+        case SDL_JOYSTICK_TYPE_DRUM_KIT:
+            return 2;
+        default:
+            return 0;
         }
     }
     return 0;
@@ -286,17 +286,22 @@ int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
     // Pass 1: path-aware match wins.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
-            if (dev.kind != Config::PlayerDeviceKind::Gamepad) continue;
-            if (!dev.path.empty() && dev.path == path) return slot;
+            if (dev.kind != Config::PlayerDeviceKind::Gamepad)
+                continue;
+            if (!dev.path.empty() && dev.path == path)
+                return slot;
         }
     }
     // Pass 2: GUID-only fallback.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
-            if (dev.kind != Config::PlayerDeviceKind::Gamepad) continue;
+            if (dev.kind != Config::PlayerDeviceKind::Gamepad)
+                continue;
             // Skip bindings that pin a path — those only match in pass 1.
-            if (!dev.path.empty()) continue;
-            if (dev.guid == guid) return slot;
+            if (!dev.path.empty())
+                continue;
+            if (dev.guid == guid)
+                return slot;
         }
     }
     return -1;
@@ -314,7 +319,8 @@ int FindBoundSlotForGuid(const std::string& guid) {
 // user explicitly carved out for a specific device.
 bool SlotHasGamepadBinding(int slot) {
     for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
-        if (dev.kind == Config::PlayerDeviceKind::Gamepad) return true;
+        if (dev.kind == Config::PlayerDeviceKind::Gamepad)
+            return true;
     }
     return false;
 }
@@ -322,19 +328,17 @@ bool SlotHasGamepadBinding(int slot) {
 void EnableSensorsAndLog(GameController* gc, SDL_Gamepad* pad, int slot) {
     if (SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_GYRO, true)) {
         gc->gyro_poll_rate = SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_GYRO);
-        LOG_INFO(Input, "Gyro initialized for slot {} pad {}: poll rate {}",
-                 slot, SDL_GetGamepadID(pad), gc->gyro_poll_rate);
+        LOG_INFO(Input, "Gyro initialized for slot {} pad {}: poll rate {}", slot,
+                 SDL_GetGamepadID(pad), gc->gyro_poll_rate);
     } else {
-        LOG_ERROR(Input, "Failed to enable gyro for slot {} pad {}",
-                  slot, SDL_GetGamepadID(pad));
+        LOG_ERROR(Input, "Failed to enable gyro for slot {} pad {}", slot, SDL_GetGamepadID(pad));
     }
     if (SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_ACCEL, true)) {
         gc->accel_poll_rate = SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_ACCEL);
-        LOG_INFO(Input, "Accel initialized for slot {} pad {}: poll rate {}",
-                 slot, SDL_GetGamepadID(pad), gc->accel_poll_rate);
+        LOG_INFO(Input, "Accel initialized for slot {} pad {}: poll rate {}", slot,
+                 SDL_GetGamepadID(pad), gc->accel_poll_rate);
     } else {
-        LOG_ERROR(Input, "Failed to enable accel for slot {} pad {}",
-                  slot, SDL_GetGamepadID(pad));
+        LOG_ERROR(Input, "Failed to enable accel for slot {} pad {}", slot, SDL_GetGamepadID(pad));
     }
 }
 
@@ -355,9 +359,8 @@ void GameControllers::ApplyAssignmentChanges() {
             const std::string path = PathForJoystick(id);
             const int bound = FindBoundSlotForGamepad(guid, path);
             if (bound > 0 && bound - 1 != i) {
-                LOG_INFO(Input,
-                         "Player Assignment changed: slot {} primary moves to slot {}",
-                         i, bound - 1);
+                LOG_INFO(Input, "Player Assignment changed: slot {} primary moves to slot {}", i,
+                         bound - 1);
                 SDL_CloseGamepad(gc->m_sdl_gamepad);
                 gc->m_sdl_gamepad = nullptr;
                 AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
@@ -368,14 +371,10 @@ void GameControllers::ApplyAssignmentChanges() {
         auto& secs = gc->m_additional_gamepads;
         secs.erase(std::remove_if(secs.begin(), secs.end(),
                                   [&, i](SDL_Gamepad* p) {
-                                      const SDL_JoystickID sid =
-                                          SDL_GetGamepadID(p);
-                                      const std::string guid =
-                                          GuidHexForJoystick(sid);
-                                      const std::string path =
-                                          PathForJoystick(sid);
-                                      const int bound =
-                                          FindBoundSlotForGamepad(guid, path);
+                                      const SDL_JoystickID sid = SDL_GetGamepadID(p);
+                                      const std::string guid = GuidHexForJoystick(sid);
+                                      const std::string path = PathForJoystick(sid);
+                                      const int bound = FindBoundSlotForGamepad(guid, path);
                                       if (bound > 0 && bound - 1 != i) {
                                           SDL_CloseGamepad(p);
                                           return true;
@@ -389,9 +388,8 @@ void GameControllers::ApplyAssignmentChanges() {
     TryOpenSDLControllers(controllers);
 }
 
-void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot,
-                                         SDL_Gamepad* pad, bool& slot_taken,
-                                         bool fire_login) {
+void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot, SDL_Gamepad* pad,
+                                         bool& slot_taken, bool fire_login) {
     using namespace Libraries::UserService;
     auto* gc = controllers[slot];
     if (!slot_taken) {
@@ -403,15 +401,15 @@ void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot,
         if (fire_login) {
             AddUserServiceEvent({OrbisUserServiceEventType::Login, slot + 1});
         }
-        LOG_INFO(Input, "Gamepad registered for slot {} (primary). Handle: {}",
-                 slot, SDL_GetGamepadID(pad));
+        LOG_INFO(Input, "Gamepad registered for slot {} (primary). Handle: {}", slot,
+                 SDL_GetGamepadID(pad));
     } else {
         // Slot already has a primary — add this one as a secondary. SDL
         // events for it route to the same GameController via player_index,
         // so its inputs OR with the primary's at the m_last_state level.
         gc->m_additional_gamepads.push_back(pad);
-        LOG_INFO(Input, "Gamepad added to slot {} (secondary). Handle: {}",
-                 slot, SDL_GetGamepadID(pad));
+        LOG_INFO(Input, "Gamepad added to slot {} (secondary). Handle: {}", slot,
+                 SDL_GetGamepadID(pad));
     }
     SDL_SetGamepadPlayerIndex(pad, slot);
     EnableSensorsAndLog(gc, pad, slot);
@@ -445,11 +443,12 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
                 // Promote a secondary to primary if any are still here.
                 if (!gc->m_additional_gamepads.empty()) {
                     gc->m_sdl_gamepad = gc->m_additional_gamepads.front();
-                    gc->m_additional_gamepads.erase(
-                        gc->m_additional_gamepads.begin());
+                    gc->m_additional_gamepads.erase(gc->m_additional_gamepads.begin());
                     slot_taken[i] = true;
-                    LOG_INFO(Input, "Slot {} primary disconnected; promoted "
-                                    "secondary to primary.", i);
+                    LOG_INFO(Input,
+                             "Slot {} primary disconnected; promoted "
+                             "secondary to primary.",
+                             i);
                 } else {
                     slot_taken[i] = false;
                     AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
@@ -461,14 +460,12 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
         auto& secs = gc->m_additional_gamepads;
         secs.erase(std::remove_if(secs.begin(), secs.end(),
                                   [&](SDL_Gamepad* p) {
-                                      const SDL_JoystickID sid =
-                                          SDL_GetGamepadID(p);
+                                      const SDL_JoystickID sid = SDL_GetGamepadID(p);
                                       if (connected_set.count(sid)) {
                                           assigned_ids.insert(sid);
                                           return false;
                                       }
-                                      LOG_INFO(Input,
-                                               "Slot {} secondary disconnected. Handle: {}",
+                                      LOG_INFO(Input, "Slot {} secondary disconnected. Handle: {}",
                                                i, sid);
                                       SDL_CloseGamepad(p);
                                       return true;
@@ -482,18 +479,20 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
     // regardless of plug-in order.
     for (int j = 0; j < controller_count; j++) {
         const SDL_JoystickID id = new_joysticks[j];
-        if (assigned_ids.contains(id)) continue;
+        if (assigned_ids.contains(id))
+            continue;
         const std::string guid = GuidHexForJoystick(id);
         const std::string path = PathForJoystick(id);
         // Path match wins when set; GUID falls back for two-identical-
         // controller setups whose bindings the user pinned to specific
         // USB ports via the picker dialog.
         const int bound = FindBoundSlotForGamepad(guid, path);
-        if (bound < 1 || bound > 4) continue;
+        if (bound < 1 || bound > 4)
+            continue;
         SDL_Gamepad* pad = SDL_OpenGamepad(id);
-        if (!pad) continue;
-        PlaceGamepadInSlot(controllers, bound - 1, pad, slot_taken[bound - 1],
-                           true);
+        if (!pad)
+            continue;
+        PlaceGamepadInSlot(controllers, bound - 1, pad, slot_taken[bound - 1], true);
         assigned_ids.insert(id);
     }
 
@@ -502,17 +501,22 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
     // hijack a slot the user explicitly reserved for a specific device
     // that just hasn't connected yet).
     std::array<bool, 4> reserved{};
-    for (int i = 0; i < 4; ++i) reserved[i] = SlotHasGamepadBinding(i + 1);
+    for (int i = 0; i < 4; ++i)
+        reserved[i] = SlotHasGamepadBinding(i + 1);
     for (int j = 0; j < controller_count; j++) {
         const SDL_JoystickID id = new_joysticks[j];
-        if (assigned_ids.contains(id)) continue;
+        if (assigned_ids.contains(id))
+            continue;
         SDL_Gamepad* pad = SDL_OpenGamepad(id);
-        if (!pad) continue;
+        if (!pad)
+            continue;
 
         int target = -1;
         for (int i = 0; i < 4; i++) {
-            if (slot_taken[i]) continue;
-            if (reserved[i]) continue;
+            if (slot_taken[i])
+                continue;
+            if (reserved[i])
+                continue;
             target = i;
             break;
         }
@@ -522,7 +526,10 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
             // user's bound gamepad can kick us later by reconnecting,
             // but leaving them with no input at all is worse.
             for (int i = 0; i < 4; i++) {
-                if (!slot_taken[i]) { target = i; break; }
+                if (!slot_taken[i]) {
+                    target = i;
+                    break;
+                }
             }
         }
         if (target < 0) {
@@ -564,7 +571,7 @@ u32 GameController::Poll() {
 
 u8 GameControllers::GetGamepadIndexFromJoystickId(SDL_JoystickID id) {
     s32 index = SDL_GetGamepadPlayerIndex(SDL_GetGamepadFromID(id));
-    //LOG_INFO(Input, "Gamepad index: {}", index);
+    // LOG_INFO(Input, "Gamepad index: {}", index);
     return index;
 }
 

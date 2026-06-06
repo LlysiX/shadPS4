@@ -137,9 +137,8 @@ private:
     // and fires a Login event when fire_login=true and the slot was
     // previously empty. Touches GameController's private members, hence
     // a member function rather than a free helper.
-    static void PlaceGamepadInSlot(GameControllers& controllers, int slot,
-                                   SDL_Gamepad* pad, bool& slot_taken,
-                                   bool fire_login);
+    static void PlaceGamepadInSlot(GameControllers& controllers, int slot, SDL_Gamepad* pad,
+                                   bool& slot_taken, bool fire_login);
 };
 
 } // namespace Input

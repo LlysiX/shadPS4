@@ -52,12 +52,15 @@ QString deviceDisplayLabel(const Config::PlayerDevice& dev) {
             SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[i]), buf, sizeof(buf));
             if (std::string(buf) == dev.guid) {
                 const char* nm = SDL_GetJoystickNameForID(ids[i]);
-                if (!nm || !*nm) nm = SDL_GetGamepadNameForID(ids[i]);
-                if (nm && *nm) name = QString::fromUtf8(nm);
+                if (!nm || !*nm)
+                    nm = SDL_GetGamepadNameForID(ids[i]);
+                if (nm && *nm)
+                    name = QString::fromUtf8(nm);
                 break;
             }
         }
-        if (ids) SDL_free(ids);
+        if (ids)
+            SDL_free(ids);
         const QString short_guid = QString::fromStdString(dev.guid).left(8);
         if (!name.isEmpty()) {
             return QStringLiteral("Gamepad: %1 (%2…)").arg(name, short_guid);
@@ -82,24 +85,22 @@ QListWidgetItem* makeDeviceItem(const Config::PlayerDevice& dev) {
     return item;
 }
 
-}  // namespace
+} // namespace
 
-PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent)
-    : QDialog(parent) {
+PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(tr("Player Assignment Overrides"));
     setModal(true);
     resize(640, 540);
 
     auto* root = new QVBoxLayout(this);
 
-    auto* help = new QLabel(
-        tr("Pin specific devices to PS4 player slots. Multiple devices on "
-           "the same slot merge their inputs — e.g. a navigation gamepad + "
-           "an RB instrument, or a keyboard + a friend's gamepad both "
-           "controlling Player 1.\n"
-           "Slots with no assignment fall back to the default first-come-"
-           "first-served behaviour."),
-        this);
+    auto* help = new QLabel(tr("Pin specific devices to PS4 player slots. Multiple devices on "
+                               "the same slot merge their inputs — e.g. a navigation gamepad + "
+                               "an RB instrument, or a keyboard + a friend's gamepad both "
+                               "controlling Player 1.\n"
+                               "Slots with no assignment fall back to the default first-come-"
+                               "first-served behaviour."),
+                            this);
     help->setWordWrap(true);
     help->setStyleSheet(QStringLiteral("color: #888;"));
     root->addWidget(help);
@@ -126,14 +127,10 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent)
         btnRow->addWidget(remove);
         g->addLayout(btnRow);
 
-        connect(addGp, &QPushButton::clicked, this,
-                [this, slot]() { addGamepadDevice(slot); });
-        connect(addKit, &QPushButton::clicked, this,
-                [this, slot]() { addKitDevice(slot); });
-        connect(addKbd, &QPushButton::clicked, this,
-                [this, slot]() { addKeyboardDevice(slot); });
-        connect(addMidi, &QPushButton::clicked, this,
-                [this, slot]() { addMidiDevice(slot); });
+        connect(addGp, &QPushButton::clicked, this, [this, slot]() { addGamepadDevice(slot); });
+        connect(addKit, &QPushButton::clicked, this, [this, slot]() { addKitDevice(slot); });
+        connect(addKbd, &QPushButton::clicked, this, [this, slot]() { addKeyboardDevice(slot); });
+        connect(addMidi, &QPushButton::clicked, this, [this, slot]() { addMidiDevice(slot); });
         connect(remove, &QPushButton::clicked, this,
                 [this, slot]() { removeSelectedDevice(slot); });
 
@@ -141,11 +138,10 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent)
         refreshSlotList(slot);
     }
 
-    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-                                    Qt::Horizontal, this);
+    auto* bb =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, this);
     root->addWidget(bb);
-    connect(bb, &QDialogButtonBox::accepted, this,
-            &PlayerAssignmentDialog::onAccept);
+    connect(bb, &QDialogButtonBox::accepted, this, &PlayerAssignmentDialog::onAccept);
     connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
 
@@ -162,43 +158,52 @@ void PlayerAssignmentDialog::addGamepadDevice(int slot) {
     int n = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&n);
     if (!ids || n == 0) {
-        if (ids) SDL_free(ids);
+        if (ids)
+            SDL_free(ids);
         QMessageBox::information(this, tr("No gamepads detected"),
                                  tr("Plug in a controller and try again."));
         return;
     }
     DevicePickerDialog dlg(tr("Add Gamepad"),
-        tr("Choose a gamepad to bind to Player %1. Two physically "
-           "identical controllers are told apart by their USB port "
-           "(device path) — bindings stay tied to the port until you "
-           "move the cable.").arg(slot), this);
+                           tr("Choose a gamepad to bind to Player %1. Tap any button on "
+                              "the controller you want to identify — the matching row "
+                              "lights up green. Two physically identical controllers are "
+                              "told apart by their USB port (device path) — bindings stay "
+                              "tied to the port until you move the cable.")
+                               .arg(slot),
+                           this);
     for (int i = 0; i < n; ++i) {
         char buf[33];
         SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[i]), buf, sizeof(buf));
         const char* nm = SDL_GetJoystickNameForID(ids[i]);
-        if (!nm || !*nm) nm = SDL_GetGamepadNameForID(ids[i]);
+        if (!nm || !*nm)
+            nm = SDL_GetGamepadNameForID(ids[i]);
         const QString name = nm ? QString::fromUtf8(nm) : QStringLiteral("?");
         const QString guid = QString::fromLatin1(buf);
         const char* path = SDL_GetJoystickPathForID(ids[i]);
         Config::PlayerDevice dev;
         dev.kind = Config::PlayerDeviceKind::Gamepad;
         dev.guid = guid.toStdString();
-        if (path) dev.path = path;
+        if (path)
+            dev.path = path;
         const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
         // Show the path suffix so the user can distinguish identical
         // controllers at a glance.
         QString label = QStringLiteral("%1 — %2…").arg(name, guid.left(12));
         if (path && *path) {
             QString p = QString::fromUtf8(path);
-            if (p.size() > 28) p = QStringLiteral("…%1").arg(p.right(28));
+            if (p.size() > 28)
+                p = QStringLiteral("…%1").arg(p.right(28));
             label += QStringLiteral("  [%1]").arg(p);
         }
-        dlg.addRow(label, enc, true);
+        dlg.addRow(label, enc, true, QString(), ids[i]);
     }
     SDL_free(ids);
-    if (dlg.exec() != QDialog::Accepted) return;
+    if (dlg.exec() != QDialog::Accepted)
+        return;
     Config::PlayerDevice dev;
-    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev))
+        return;
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
@@ -227,7 +232,8 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
     if (auto* head = SDL_hid_enumerate(0, 0)) {
         for (auto* d = head; d; d = d->next) {
             const std::pair<u16, u16> key{d->vendor_id, d->product_id};
-            if (seen.count(key)) continue;
+            if (seen.count(key))
+                continue;
             seen.insert(key);
             const std::string mfr =
                 d->manufacturer_string
@@ -238,10 +244,8 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
                     ? QString::fromWCharArray(d->product_string).trimmed().toStdString()
                     : "";
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "%04x:%04x  %s %s",
-                          d->vendor_id, d->product_id,
-                          mfr.empty() ? "?" : mfr.c_str(),
-                          prod.c_str());
+            std::snprintf(buf, sizeof(buf), "%04x:%04x  %s %s", d->vendor_id, d->product_id,
+                          mfr.empty() ? "?" : mfr.c_str(), prod.c_str());
             Row r;
             r.label = buf;
             r.vid = d->vendor_id;
@@ -253,29 +257,32 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
     }
     if (rows.empty()) {
         QMessageBox::information(this, tr("No HID devices detected"),
-            tr("Plug in your instrument, then open this dialog again."));
+                                 tr("Plug in your instrument, then open this dialog again."));
         return;
     }
     DevicePickerDialog dlg(tr("Add Kit"),
-        tr("Choose a detected HID device to bind to Player %1. "
-           "Greyed-out devices haven't been probed yet — open "
-           "Special Devices → probe wizard first.").arg(slot), this);
+                           tr("Choose a detected HID device to bind to Player %1. "
+                              "Greyed-out devices haven't been probed yet — open "
+                              "Special Devices → probe wizard first.")
+                               .arg(slot),
+                           this);
     for (const auto& r : rows) {
         Config::PlayerDevice dev;
         dev.kind = Config::PlayerDeviceKind::Kit;
         dev.vid = r.vid;
         dev.pid = r.pid;
         const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
-        const QString suffix =
-            r.probed ? tr("  [probed]") : tr("  [needs probing]");
+        const QString suffix = r.probed ? tr("  [probed]") : tr("  [needs probing]");
         dlg.addRow(QString::fromStdString(r.label) + suffix, enc, r.probed,
                    r.probed ? QString()
                             : tr("Open Settings → Configure Special Devices "
                                  "→ Probe wizard to register this kit."));
     }
-    if (dlg.exec() != QDialog::Accepted) return;
+    if (dlg.exec() != QDialog::Accepted)
+        return;
     Config::PlayerDevice dev;
-    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev))
+        return;
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
@@ -299,12 +306,12 @@ void PlayerAssignmentDialog::addMidiDevice(int slot) {
     const auto ports = Input::MidiInput::EnumerateInputPorts();
     if (ports.empty()) {
         QMessageBox::information(this, tr("No MIDI ports detected"),
-            tr("No MIDI input ports were found on this host. Plug in your "
-               "module (or a USB-MIDI adapter), open this dialog again."));
+                                 tr("No MIDI input ports were found on this host. Plug in your "
+                                    "module (or a USB-MIDI adapter), open this dialog again."));
         return;
     }
     DevicePickerDialog dlg(tr("Add MIDI"),
-        tr("Choose a MIDI input port to bind to Player %1.").arg(slot), this);
+                           tr("Choose a MIDI input port to bind to Player %1.").arg(slot), this);
     for (const auto& p : ports) {
         const QString name = QString::fromStdString(p.name);
         const QString port_id = QString::fromStdString(p.id);
@@ -314,16 +321,19 @@ void PlayerAssignmentDialog::addMidiDevice(int slot) {
         const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
         dlg.addRow(QStringLiteral("%1  [port %2]").arg(name, port_id), enc, true);
     }
-    if (dlg.exec() != QDialog::Accepted) return;
+    if (dlg.exec() != QDialog::Accepted)
+        return;
     Config::PlayerDevice dev;
-    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev))
+        return;
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
 void PlayerAssignmentDialog::removeSelectedDevice(int slot) {
     auto* list = m_lists[slot - 1];
     auto items = list->selectedItems();
-    for (auto* it : items) delete list->takeItem(list->row(it));
+    for (auto* it : items)
+        delete list->takeItem(list->row(it));
 }
 
 void PlayerAssignmentDialog::onAccept() {

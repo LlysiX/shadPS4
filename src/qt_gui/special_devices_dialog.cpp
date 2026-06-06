@@ -26,14 +26,13 @@ constexpr struct {
     int value;
     const char* label;
 } kSpecialPadClasses[] = {
-    {0, "Standard"},   {1, "Guitar"},     {2, "Drum"},        {3, "DJ Turntable"},
-    {4, "Dancemat"},   {5, "Navigation"}, {6, "SteeringWheel"}, {7, "Stick"},
-    {8, "FightStick"}, {9, "Gun"},
+    {0, "Standard"},   {1, "Guitar"},        {2, "Drum"},  {3, "DJ Turntable"}, {4, "Dancemat"},
+    {5, "Navigation"}, {6, "SteeringWheel"}, {7, "Stick"}, {8, "FightStick"},   {9, "Gun"},
 };
 
 constexpr const char* kUdevRulesPath = "/etc/udev/rules.d/99-shadps4-instruments.rules";
 
-}  // namespace
+} // namespace
 
 SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
     : QDialog(parent), ui(new Ui::SpecialDevicesDialog) {
@@ -46,32 +45,28 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
             cls->addItem(QString::fromUtf8(item.label), item.value);
         }
         // Per-slot probe button: opens the wizard.
-        connect(probeBtn(slot), &QPushButton::clicked, this,
-                [this, slot]() { onProbeKit(slot); });
+        connect(probeBtn(slot), &QPushButton::clicked, this, [this, slot]() { onProbeKit(slot); });
         // Per-slot legacy toggle drives the per-row probe/warning visibility.
         connect(legacyCb(slot), &QCheckBox::toggled, this,
                 [this, slot](bool checked) { onLegacyToggled(slot, checked); });
     }
 
-    connect(ui->installUdevBtn, &QPushButton::clicked, this,
-            &SpecialDevicesDialog::onInstallUdev);
+    connect(ui->installUdevBtn, &QPushButton::clicked, this, &SpecialDevicesDialog::onInstallUdev);
 #ifndef __linux__
     // Other platforms grant HID access by default (macOS) or use a different
     // mechanism (Windows). The Linux-flavoured udev installer is meaningless
     // there, so hide it.
     ui->installUdevBtn->setVisible(false);
 #endif
-    connect(ui->refreshBtn, &QPushButton::clicked, this,
-            &SpecialDevicesDialog::onRefresh);
-    connect(ui->buttonBox, &QDialogButtonBox::clicked, this,
-            [this](QAbstractButton* b) {
-                const auto role = ui->buttonBox->standardButton(b);
-                if (role == QDialogButtonBox::Apply) {
-                    onApply();
-                } else if (role == QDialogButtonBox::Save) {
-                    onAccept();
-                }
-            });
+    connect(ui->refreshBtn, &QPushButton::clicked, this, &SpecialDevicesDialog::onRefresh);
+    connect(ui->buttonBox, &QDialogButtonBox::clicked, this, [this](QAbstractButton* b) {
+        const auto role = ui->buttonBox->standardButton(b);
+        if (role == QDialogButtonBox::Apply) {
+            onApply();
+        } else if (role == QDialogButtonBox::Save) {
+            onAccept();
+        }
+    });
     connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     loadFromConfig();
@@ -83,34 +78,88 @@ SpecialDevicesDialog::~SpecialDevicesDialog() = default;
 
 // ----- widget accessors -------------------------------------------------------
 QCheckBox* SpecialDevicesDialog::useSpecialPadCb(int slot) const {
-    switch (slot) { case 1: return ui->useSpecial1; case 2: return ui->useSpecial2;
-                    case 3: return ui->useSpecial3; case 4: return ui->useSpecial4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->useSpecial1;
+    case 2:
+        return ui->useSpecial2;
+    case 3:
+        return ui->useSpecial3;
+    case 4:
+        return ui->useSpecial4;
+    default:
+        return nullptr;
+    }
 }
 QComboBox* SpecialDevicesDialog::specialPadClassCb(int slot) const {
-    switch (slot) { case 1: return ui->class1; case 2: return ui->class2;
-                    case 3: return ui->class3; case 4: return ui->class4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->class1;
+    case 2:
+        return ui->class2;
+    case 3:
+        return ui->class3;
+    case 4:
+        return ui->class4;
+    default:
+        return nullptr;
+    }
 }
 QCheckBox* SpecialDevicesDialog::legacyCb(int slot) const {
-    switch (slot) { case 1: return ui->legacy1; case 2: return ui->legacy2;
-                    case 3: return ui->legacy3; case 4: return ui->legacy4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->legacy1;
+    case 2:
+        return ui->legacy2;
+    case 3:
+        return ui->legacy3;
+    case 4:
+        return ui->legacy4;
+    default:
+        return nullptr;
+    }
 }
 QLabel* SpecialDevicesDialog::statusLbl(int slot) const {
-    switch (slot) { case 1: return ui->status1; case 2: return ui->status2;
-                    case 3: return ui->status3; case 4: return ui->status4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->status1;
+    case 2:
+        return ui->status2;
+    case 3:
+        return ui->status3;
+    case 4:
+        return ui->status4;
+    default:
+        return nullptr;
+    }
 }
 QPushButton* SpecialDevicesDialog::probeBtn(int slot) const {
-    switch (slot) { case 1: return ui->probe1; case 2: return ui->probe2;
-                    case 3: return ui->probe3; case 4: return ui->probe4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->probe1;
+    case 2:
+        return ui->probe2;
+    case 3:
+        return ui->probe3;
+    case 4:
+        return ui->probe4;
+    default:
+        return nullptr;
+    }
 }
 QLabel* SpecialDevicesDialog::udevWarn(int slot) const {
-    switch (slot) { case 1: return ui->warn1; case 2: return ui->warn2;
-                    case 3: return ui->warn3; case 4: return ui->warn4;
-                    default: return nullptr; }
+    switch (slot) {
+    case 1:
+        return ui->warn1;
+    case 2:
+        return ui->warn2;
+    case 3:
+        return ui->warn3;
+    case 4:
+        return ui->warn4;
+    default:
+        return nullptr;
+    }
 }
 
 // ----- load / write config ----------------------------------------------------
@@ -131,10 +180,8 @@ void SpecialDevicesDialog::loadFromConfig() {
 void SpecialDevicesDialog::writeConfig() {
     for (int slot = 1; slot <= 4; ++slot) {
         Config::setUseSpecialPad(slot, useSpecialPadCb(slot)->isChecked());
-        Config::setSpecialPadClass(slot,
-            specialPadClassCb(slot)->currentData().toInt());
-        Config::setSpecialPadLegacyPassUSBRawHID(slot,
-            legacyCb(slot)->isChecked());
+        Config::setSpecialPadClass(slot, specialPadClassCb(slot)->currentData().toInt());
+        Config::setSpecialPadLegacyPassUSBRawHID(slot, legacyCb(slot)->isChecked());
     }
     // Persist immediately so the next launch picks the values up.
     Config::save(Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "config.toml");
@@ -172,8 +219,8 @@ void SpecialDevicesDialog::refreshUdevState() {
     }
     ui->installUdevBtn->setEnabled(!installed);
     ui->installUdevBtn->setText(installed
-        ? tr("✓ udev rules already installed")
-        : tr("Install Linux udev rules (one-time, requires password)"));
+                                    ? tr("✓ udev rules already installed")
+                                    : tr("Install Linux udev rules (one-time, requires password)"));
     for (int slot = 1; slot <= 4; ++slot) {
         updateLegacyRowVisuals(slot);
     }
@@ -199,22 +246,22 @@ void SpecialDevicesDialog::onInstallUdev() {
     QProcess proc;
     proc.setProgram("pkexec");
     proc.setArguments({"sh", "-c",
-        QStringLiteral("cat > %1 <<'EOF'\n%2EOF\n"
-                       "chmod 0644 %1 && "
-                       "udevadm control --reload-rules && udevadm trigger")
-            .arg(kUdevRulesPath).arg(QString::fromUtf8(kRulesText))});
+                       QStringLiteral("cat > %1 <<'EOF'\n%2EOF\n"
+                                      "chmod 0644 %1 && "
+                                      "udevadm control --reload-rules && udevadm trigger")
+                           .arg(kUdevRulesPath)
+                           .arg(QString::fromUtf8(kRulesText))});
     if (!proc.startDetached()) {
         QMessageBox::warning(this, tr("Install udev rules"),
                              tr("Could not launch pkexec. Is polkit installed?"));
         return;
     }
     QMessageBox::information(this, tr("Install udev rules"),
-        tr("A password prompt should appear. After it completes, unplug and "
-           "replug your instrument."));
+                             tr("A password prompt should appear. After it completes, unplug and "
+                                "replug your instrument."));
     QTimer::singleShot(2000, this, [this]() { refreshUdevState(); });
 #else
-    QMessageBox::information(this, tr("Install udev rules"),
-                             tr("Linux-only feature."));
+    QMessageBox::information(this, tr("Install udev rules"), tr("Linux-only feature."));
 #endif
 }
 
@@ -249,8 +296,7 @@ void SpecialDevicesDialog::onRefresh() {
     Input::HidInstrument::EnsureInit();
     refreshKitStatus();
     ui->kitsLoadedLabel->setText(
-        tr("Loaded kit definitions: %1")
-            .arg(Input::HidInstrument::GetLoadedKitCount()));
+        tr("Loaded kit definitions: %1").arg(Input::HidInstrument::GetLoadedKitCount()));
 }
 
 void SpecialDevicesDialog::onProbeKit(int slot) {
@@ -281,8 +327,7 @@ void SpecialDevicesDialog::refreshKitStatus() {
                 text = QStringLiteral("—");
             } else {
                 const std::string k = Input::HidInstrument::GetActiveKitName(slot);
-                text = k.empty() ? tr("(no matching kit plugged in)")
-                                 : QString::fromStdString(k);
+                text = k.empty() ? tr("(no matching kit plugged in)") : QString::fromStdString(k);
             }
             statusLbl(slot)->setText(text);
         }

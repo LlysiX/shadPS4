@@ -26,6 +26,17 @@ if (NOT TARGET fmt::fmt)
     add_subdirectory(fmt)
 endif()
 
+# RtMidi — cross-platform MIDI input. Linux: ALSA, macOS: CoreMIDI,
+# Windows: WinMM. Built as a static library; JACK / Android backends
+# stay disabled.
+if (NOT TARGET rtmidi)
+    set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(RTMIDI_API_JACK   OFF CACHE BOOL "" FORCE)
+    set(RTMIDI_API_AMIDI  OFF CACHE BOOL "" FORCE)
+    add_subdirectory(rtmidi)
+endif()
+
 # FFmpeg
 if (NOT TARGET FFmpeg::ffmpeg)
     add_subdirectory(ffmpeg-core)

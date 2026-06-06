@@ -6,10 +6,18 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <thread>
 
 #include "common/logging/log.h"
+
+#include <RtMidi.h>
+
+// One backend for all three platforms: RtMidi compiles in ALSA on Linux,
+// CoreMIDI on macOS, and WinMM on Windows. The public Input::MidiInput
+// surface stays unchanged — the wizard and the runtime poll loop don't
+// care which transport is below.
 
 namespace Input::MidiInput {
 
@@ -26,222 +34,171 @@ struct PadDefault {
 };
 
 const PadDefault kPadDefaults[] = {
-    {kSnapByteKick,       0x10, {35, 36}},                  // kick / bass drum
-    {kSnapByteSnareRed,   0x02, {38, 40}},                  // snare 1/2
-    {kSnapByteTomHighYel, 0x08, {48, 50}},                  // hi tom 1/2
-    {kSnapByteTomMidBlue, 0x04, {45, 47}},                  // mid tom 1/2
-    {kSnapByteTomLowGrn,  0x01, {41, 43}},                  // floor tom 1/2
-    {kSnapByteCymYellow,  0x08, {42, 44, 46, 51, 53}},      // hi-hat (closed/open/pedal), ride bell, ride
-    {kSnapByteCymBlue,    0x04, {49, 57, 55, 52}},          // crash 1/2, splash, chinese
-    {kSnapByteCymGreen,   0x01, {49, 51, 57}},              // overlap with cym1/yellow — wizard disambiguates
+    {kSnapByteKick,       0x10, {35, 36}},
+    {kSnapByteSnareRed,   0x02, {38, 40}},
+    {kSnapByteTomHighYel, 0x08, {48, 50}},
+    {kSnapByteTomMidBlue, 0x04, {45, 47}},
+    {kSnapByteTomLowGrn,  0x01, {41, 43}},
+    {kSnapByteCymYellow,  0x08, {42, 44, 46, 51, 53}},
+    {kSnapByteCymBlue,    0x04, {49, 57, 55, 52}},
+    {kSnapByteCymGreen,   0x01, {49, 51, 57}},
 };
 
 constexpr auto kVelocityHoldMs = std::chrono::milliseconds(80);
 
-// Per-pad live state held inside an open MIDI port handle. velocity is
-// the most recent Note On's value (8-bit, expanded from the 7-bit MIDI
-// value at snapshot time so the existing drum_*_byte velocity packer
-// applies the same scaling logic as for HID kits). last_active is the
-// time of the most recent Note On; once now - last_active exceeds
-// kVelocityHoldMs, the pad's velocity falls back to 0 even without a
-// Note Off — Roland TDs and most kits send Note Off promptly, but a
-// handful of cheaper modules don't.
 struct PadState {
     std::uint8_t velocity = 0;
     std::chrono::steady_clock::time_point last_active{};
 };
 
-}  // namespace
-
-// =============================================================================
-// Linux ALSA-seq backend
-// =============================================================================
-#if defined(__linux__)
-#include <alsa/asoundlib.h>
-
-namespace {
-
-struct LinuxState {
-    snd_seq_t* seq = nullptr;
-    int client_id = -1;
-    int local_port = -1;
-};
-
-std::mutex g_state_mu;
-LinuxState g_state;
-
-bool EnsureInitInternal() {
-    std::lock_guard lk(g_state_mu);
-    if (g_state.seq) return true;
-    snd_seq_t* seq = nullptr;
-    if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
-        LOG_WARNING(Input, "MIDI: snd_seq_open failed");
-        return false;
-    }
-    snd_seq_set_client_name(seq, "shadPS4");
-    const int port = snd_seq_create_simple_port(
-        seq, "shadPS4 MIDI in",
-        SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
-        SND_SEQ_PORT_TYPE_APPLICATION);
-    if (port < 0) {
-        LOG_WARNING(Input, "MIDI: snd_seq_create_simple_port failed");
-        snd_seq_close(seq);
-        return false;
-    }
-    g_state.seq = seq;
-    g_state.client_id = snd_seq_client_id(seq);
-    g_state.local_port = port;
-    LOG_INFO(Input, "MIDI: ALSA seq client={} local_port={}",
-             g_state.client_id, g_state.local_port);
-    return true;
-}
-
-struct LinuxPortHandle {
-    int subscribed_client = -1;
-    int subscribed_port = -1;
-    PadState pads[12]{};  // indexed by kPadDefaults order
+// One open MIDI port handle. Holds the RtMidiIn instance bound to a
+// specific port plus the per-pad state machine and (optionally) a
+// kit-specific note → byte override map.
+struct PortHandle {
+    std::unique_ptr<RtMidiIn> midi;
     std::chrono::steady_clock::time_point opened_at{};
-    // Per-kit note → snapshot byte index override. When non-empty, the
-    // drain loop consults this directly instead of the GM-style
-    // kPadDefaults fallback. velocity is decayed into pads_by_byte[idx]
-    // rather than per-default-pad indices.
-    std::map<std::uint8_t, int> custom_map;
+    PadState pads[12]{};
     PadState pads_by_byte[16]{};  // kSnapshotBytes
+    std::map<std::uint8_t, int> custom_map;
 };
+
+std::mutex g_global_mu;
+
+// Build a friendly client name for RtMidi enumeration. RtMidi exposes
+// its internal client to the OS; this name is what shows up in e.g.
+// QjackCtl / `aplaymidi -l` so users can tell the emulator's MIDI
+// subscriber apart from anything else they're running.
+constexpr const char* kClientName = "shadPS4";
 
 }  // namespace
 
 bool EnsureInit() {
-    return EnsureInitInternal();
+    // RtMidi creates its OS client on RtMidiIn construction; no global
+    // init step needed. The function is still kept on the public API
+    // so callers don't have to know the difference between transports.
+    return true;
 }
 
 std::vector<PortInfo> EnumerateInputPorts() {
     std::vector<PortInfo> out;
-    if (!EnsureInitInternal()) return out;
-    std::lock_guard lk(g_state_mu);
-    snd_seq_t* seq = g_state.seq;
-    snd_seq_client_info_t* cinfo;
-    snd_seq_port_info_t* pinfo;
-    snd_seq_client_info_alloca(&cinfo);
-    snd_seq_port_info_alloca(&pinfo);
-    snd_seq_client_info_set_client(cinfo, -1);
-    while (snd_seq_query_next_client(seq, cinfo) >= 0) {
-        const int client = snd_seq_client_info_get_client(cinfo);
-        if (client == g_state.client_id) continue;  // skip our own
-        snd_seq_port_info_set_client(pinfo, client);
-        snd_seq_port_info_set_port(pinfo, -1);
-        while (snd_seq_query_next_port(seq, pinfo) >= 0) {
-            const unsigned cap = snd_seq_port_info_get_capability(pinfo);
-            constexpr unsigned needed =
-                SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ;
-            if ((cap & needed) != needed) continue;
-            const int port = snd_seq_port_info_get_port(pinfo);
+    try {
+        RtMidiIn probe(RtMidi::UNSPECIFIED, kClientName);
+        const unsigned int n = probe.getPortCount();
+        for (unsigned int i = 0; i < n; ++i) {
             PortInfo info;
-            info.id = std::to_string(client) + ":" + std::to_string(port);
-            const char* client_name = snd_seq_client_info_get_name(cinfo);
-            const char* port_name = snd_seq_port_info_get_name(pinfo);
-            info.name = std::string(client_name ? client_name : "?") + " — " +
-                        std::string(port_name ? port_name : "?");
+            // Use the index as the id — RtMidi addresses ports by
+            // numeric index, which can drift if the user plugs / unplugs
+            // devices. For our use case (wizard captures + per-launch
+            // runtime open) this is acceptable; users who hot-plug
+            // during play would notice anyway because the kit would
+            // disappear. A future revision could embed the port name
+            // into the id for a more stable handle.
+            info.id = std::to_string(i);
+            info.name = probe.getPortName(i);
             out.push_back(std::move(info));
         }
+    } catch (const RtMidiError& e) {
+        LOG_WARNING(Input, "MIDI: enumeration failed: {}", e.getMessage());
     }
     return out;
 }
 
 void* OpenInputPort(const std::string& id) {
-    if (!EnsureInitInternal()) return nullptr;
-    int client = 0, port = 0;
-    if (std::sscanf(id.c_str(), "%d:%d", &client, &port) != 2) {
+    int idx = -1;
+    try { idx = std::stoi(id); } catch (...) { idx = -1; }
+    if (idx < 0) {
         LOG_WARNING(Input, "MIDI: malformed port id {}", id);
         return nullptr;
     }
-    std::lock_guard lk(g_state_mu);
-    snd_seq_addr_t sender{(unsigned char)client, (unsigned char)port};
-    snd_seq_addr_t dest{(unsigned char)g_state.client_id,
-                        (unsigned char)g_state.local_port};
-    snd_seq_port_subscribe_t* sub;
-    snd_seq_port_subscribe_alloca(&sub);
-    snd_seq_port_subscribe_set_sender(sub, &sender);
-    snd_seq_port_subscribe_set_dest(sub, &dest);
-    if (snd_seq_subscribe_port(g_state.seq, sub) < 0) {
-        LOG_WARNING(Input, "MIDI: subscribe to {}:{} failed", client, port);
+    try {
+        auto handle = std::make_unique<PortHandle>();
+        handle->midi = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kClientName);
+        if (idx >= (int)handle->midi->getPortCount()) {
+            LOG_WARNING(Input, "MIDI: port index {} out of range ({} available)",
+                        idx, handle->midi->getPortCount());
+            return nullptr;
+        }
+        handle->midi->openPort(static_cast<unsigned int>(idx),
+                                "shadPS4 MIDI in");
+        // Ignore SysEx, timing, and active-sensing — we only care about
+        // Note On / Off.
+        handle->midi->ignoreTypes(true, true, true);
+        handle->opened_at = std::chrono::steady_clock::now();
+        LOG_INFO(Input, "MIDI: opened port {} ({})",
+                 idx, handle->midi->getPortName(idx));
+        return handle.release();
+    } catch (const RtMidiError& e) {
+        LOG_WARNING(Input, "MIDI: open failed for port {}: {}",
+                    id, e.getMessage());
         return nullptr;
     }
-    auto* h = new LinuxPortHandle();
-    h->subscribed_client = client;
-    h->subscribed_port = port;
-    h->opened_at = std::chrono::steady_clock::now();
-    LOG_INFO(Input, "MIDI: opened port {}:{}", client, port);
-    return h;
 }
 
 void CloseInputPort(void* handle) {
     if (!handle) return;
-    auto* h = static_cast<LinuxPortHandle*>(handle);
-    std::lock_guard lk(g_state_mu);
-    if (g_state.seq && h->subscribed_client >= 0) {
-        snd_seq_addr_t sender{(unsigned char)h->subscribed_client,
-                              (unsigned char)h->subscribed_port};
-        snd_seq_addr_t dest{(unsigned char)g_state.client_id,
-                            (unsigned char)g_state.local_port};
-        snd_seq_port_subscribe_t* sub;
-        snd_seq_port_subscribe_alloca(&sub);
-        snd_seq_port_subscribe_set_sender(sub, &sender);
-        snd_seq_port_subscribe_set_dest(sub, &dest);
-        snd_seq_unsubscribe_port(g_state.seq, sub);
+    auto* h = static_cast<PortHandle*>(handle);
+    try {
+        if (h->midi && h->midi->isPortOpen()) h->midi->closePort();
+    } catch (...) {
     }
     delete h;
 }
 
 namespace {
 
-// Internal: drain ALSA seq events into a vector for the caller, AND
-// also update the handle's per-pad state machine + apply velocity
-// decay. Both the public DrainEvents (wizard capture path) and
-// SnapshotDrumBuffer (runtime path) funnel through here so the
-// underlying ALSA event queue is only consumed once per call.
-std::vector<NoteEvent> DrainAndUpdate(LinuxPortHandle* h) {
+// Drain RtMidi's queue of pending messages into both the caller's event
+// vector AND the per-pad / per-byte state arrays on the handle. RtMidi's
+// getMessage returns one message at a time and returns the delta time
+// since the previous message, in seconds — we ignore that and use
+// our own wall-clock for the t_ms field, which keeps the API consistent
+// with the wizard's per-step convention.
+std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     std::vector<NoteEvent> out;
-    if (!g_state.seq) return out;
+    if (!h->midi || !h->midi->isPortOpen()) return out;
     const auto now = std::chrono::steady_clock::now();
-    snd_seq_event_t* ev = nullptr;
-    while (snd_seq_event_input(g_state.seq, &ev) >= 0 && ev) {
-        const int note = ev->data.note.note;
-        const int vel = ev->data.note.velocity;
+    std::vector<unsigned char> msg;
+    while (true) {
+        try {
+            (void)h->midi->getMessage(&msg);
+        } catch (const RtMidiError& e) {
+            LOG_WARNING(Input, "MIDI: getMessage failed: {}", e.getMessage());
+            break;
+        }
+        if (msg.empty()) break;
+        // Channel messages are 2 or 3 bytes. We care about 0x80 (Note
+        // Off) and 0x90 (Note On) on any channel; lower nibble is the
+        // channel number, ignored.
+        const unsigned char status = msg[0] & 0xF0;
         bool note_on = false;
         bool note_off = false;
-        switch (ev->type) {
-        case SND_SEQ_EVENT_NOTEON:
+        int note = 0;
+        int vel = 0;
+        if (status == 0x90 && msg.size() >= 3) {
+            note = msg[1] & 0x7F;
+            vel = msg[2] & 0x7F;
             if (vel > 0) note_on = true; else note_off = true;
-            break;
-        case SND_SEQ_EVENT_NOTEOFF:
+        } else if (status == 0x80 && msg.size() >= 3) {
+            note = msg[1] & 0x7F;
+            vel = msg[2] & 0x7F;
             note_off = true;
-            break;
-        default:
-            // ignore controllers / pitchbend / aftertouch / sysex etc.
-            snd_seq_free_event(ev);
+        } else {
             continue;
         }
-        // Append to the caller-visible event stream.
+
         NoteEvent record;
         record.on = note_on;
-        record.note = static_cast<std::uint8_t>(note & 0x7F);
-        record.velocity = static_cast<std::uint8_t>(vel & 0x7F);
+        record.note = static_cast<std::uint8_t>(note);
+        record.velocity = static_cast<std::uint8_t>(vel);
         record.t_ms = static_cast<std::uint32_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - h->opened_at)
-                .count());
+                now - h->opened_at).count());
         out.push_back(record);
-        // Update the state machine. Two paths: kit-specific custom map
-        // (preferred — written by ConfigurePadMap from the kit's TOML)
-        // or the GM-style default. Both end up routing the velocity to
-        // a snapshot byte index.
+
         if (!h->custom_map.empty()) {
             auto it = h->custom_map.find(record.note);
             if (it != h->custom_map.end()) {
                 const int byte_idx = it->second;
-                if (byte_idx >= 0 && byte_idx < (int)(sizeof(h->pads_by_byte) /
-                                                       sizeof(h->pads_by_byte[0]))) {
+                if (byte_idx >= 0 && byte_idx < (int)kSnapshotBytes) {
                     if (note_on) {
                         h->pads_by_byte[byte_idx].velocity =
                             static_cast<std::uint8_t>((vel * 255 + 63) / 127);
@@ -268,10 +225,8 @@ std::vector<NoteEvent> DrainAndUpdate(LinuxPortHandle* h) {
                 break;
             }
         }
-        snd_seq_free_event(ev);
     }
-    // Decay any pads whose Note On is older than the hold window — covers
-    // modules that never send Note Off (or send it on a different chan).
+    // Decay pads whose last activity is older than the hold window.
     for (auto& p : h->pads) {
         if (p.velocity == 0) continue;
         if (now - p.last_active > kVelocityHoldMs) p.velocity = 0;
@@ -287,18 +242,16 @@ std::vector<NoteEvent> DrainAndUpdate(LinuxPortHandle* h) {
 
 std::vector<NoteEvent> DrainEvents(void* handle) {
     if (!handle) return {};
-    auto* h = static_cast<LinuxPortHandle*>(handle);
-    std::lock_guard lk(g_state_mu);
+    auto* h = static_cast<PortHandle*>(handle);
+    std::lock_guard lk(g_global_mu);
     return DrainAndUpdate(h);
 }
 
 void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_byte) {
     if (!handle) return;
-    auto* h = static_cast<LinuxPortHandle*>(handle);
-    std::lock_guard lk(g_state_mu);
+    auto* h = static_cast<PortHandle*>(handle);
+    std::lock_guard lk(g_global_mu);
     h->custom_map = note_to_byte;
-    // Reset state when the map changes so a stale velocity from the old
-    // mapping can't bleed into the new one.
     for (auto& p : h->pads) p.velocity = 0;
     for (auto& p : h->pads_by_byte) p.velocity = 0;
 }
@@ -306,23 +259,17 @@ void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_by
 std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
                                std::size_t out_len) {
     if (!handle || !out || out_len < kSnapshotBytes) return 0;
-    auto* h = static_cast<LinuxPortHandle*>(handle);
+    auto* h = static_cast<PortHandle*>(handle);
     {
-        std::lock_guard lk(g_state_mu);
-        (void)DrainAndUpdate(h);  // runtime path: events drained into state, return value ignored
+        std::lock_guard lk(g_global_mu);
+        (void)DrainAndUpdate(h);
     }
     std::memset(out, 0, kSnapshotBytes);
     std::uint8_t flags = 0;
     if (!h->custom_map.empty()) {
-        // Per-kit map populated pads_by_byte directly. Walk those.
-        for (int b = 0; b < (int)(sizeof(h->pads_by_byte) /
-                                  sizeof(h->pads_by_byte[0])); ++b) {
+        for (int b = 0; b < (int)kSnapshotBytes; ++b) {
             if (h->pads_by_byte[b].velocity == 0) continue;
-            if (b >= (int)kSnapshotBytes) continue;
             out[b] = h->pads_by_byte[b].velocity;
-            // Set a face-flag bit so PackButtons can tell something
-            // fired; bit is the byte index modulo 8 for a coarse hash —
-            // games look at deviceUniqueData velocity primarily.
             flags |= static_cast<std::uint8_t>(1u << (b & 7));
         }
     } else {
@@ -338,27 +285,8 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
 }
 
 void Shutdown() {
-    std::lock_guard lk(g_state_mu);
-    if (g_state.seq) {
-        snd_seq_close(g_state.seq);
-        g_state.seq = nullptr;
-        g_state.client_id = -1;
-        g_state.local_port = -1;
-    }
+    // Per-port handles are owned by callers; nothing global to release —
+    // RtMidiIn destructors close their OS clients automatically.
 }
-
-// =============================================================================
-// Stubs for macOS / Windows — proper backends to follow.
-// =============================================================================
-#else
-bool EnsureInit() { return false; }
-std::vector<PortInfo> EnumerateInputPorts() { return {}; }
-void* OpenInputPort(const std::string&) { return nullptr; }
-void CloseInputPort(void*) {}
-std::vector<NoteEvent> DrainEvents(void*) { return {}; }
-void ConfigurePadMap(void*, const std::map<std::uint8_t, int>&) {}
-std::size_t SnapshotDrumBuffer(void*, std::uint8_t*, std::size_t) { return 0; }
-void Shutdown() {}
-#endif
 
 }  // namespace Input::MidiInput

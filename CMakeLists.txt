@@ -1212,20 +1212,12 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     endif()
 
     target_link_libraries(shadps4 PRIVATE uuid)
-
-    # ALSA — required for MIDI input on Linux. Without it the
-    # MidiInput backend stubs out and EnumerateInputPorts returns empty.
-    find_package(PkgConfig QUIET)
-    if (PkgConfig_FOUND)
-        pkg_check_modules(ALSA QUIET alsa)
-        if (ALSA_FOUND)
-            target_include_directories(shadps4 PRIVATE ${ALSA_INCLUDE_DIRS})
-            target_link_libraries(shadps4 PRIVATE ${ALSA_LIBRARIES})
-        else()
-            message(STATUS "ALSA dev headers not found — MIDI input disabled")
-        endif()
-    endif()
 endif()
+
+# RtMidi — pulls in ALSA on Linux, CoreMIDI on macOS, WinMM on
+# Windows. The MidiInput backend translates between RtMidi and our
+# polling-snapshot API.
+target_link_libraries(shadps4 PRIVATE rtmidi)
 
 if (APPLE)
     # Include MoltenVK, along with an ICD file so it can be found by the system Vulkan loader if used for loading layers.

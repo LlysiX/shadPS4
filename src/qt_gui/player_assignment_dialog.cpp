@@ -22,6 +22,7 @@
 #include <SDL3/SDL_joystick.h>
 
 #include "common/config.h"
+#include "input/midi_input.h"
 
 namespace {
 
@@ -226,15 +227,32 @@ void PlayerAssignmentDialog::addKeyboardDevice(int slot) {
 }
 
 void PlayerAssignmentDialog::addMidiDevice(int slot) {
+    const auto ports = Input::MidiInput::EnumerateInputPorts();
+    if (ports.empty()) {
+        QMessageBox::information(this, tr("No MIDI ports detected"),
+            tr("No MIDI input ports were found on this host. Plug in your "
+               "module (or a USB-MIDI adapter), open this dialog again."));
+        return;
+    }
+    QStringList labels;
+    QStringList ids;
+    for (const auto& p : ports) {
+        const QString name = QString::fromStdString(p.name);
+        const QString port_id = QString::fromStdString(p.id);
+        labels << QStringLiteral("%1  [port %2]").arg(name, port_id);
+        ids << port_id;
+    }
     bool ok = false;
-    const QString s = QInputDialog::getText(
+    const QString choice = QInputDialog::getItem(
         this, tr("Add MIDI"),
-        tr("Enter the MIDI port name (case-sensitive, must match exactly):"),
-        QLineEdit::Normal, QString(), &ok);
-    if (!ok || s.isEmpty()) return;
+        tr("Choose a MIDI input port to bind to Player %1:").arg(slot),
+        labels, 0, /*editable=*/false, &ok);
+    if (!ok) return;
+    const int idx = labels.indexOf(choice);
+    if (idx < 0) return;
     Config::PlayerDevice dev;
     dev.kind = Config::PlayerDeviceKind::Midi;
-    dev.guid = s.toStdString();
+    dev.guid = ids[idx].toStdString();
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 

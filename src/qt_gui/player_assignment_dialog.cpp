@@ -102,9 +102,6 @@ QString deviceDisplayLabel(const Config::PlayerDevice& dev) {
     case Kind::Keyboard:
         return QStringLiteral("Keyboard");
     case Kind::Midi: {
-        // dev.guid is the OS-specific port id (RtMidi index on ALSA, hex
-        // UID on CoreMIDI). Resolve to a human-readable port name via
-        // RtMidi enumeration if the device is currently visible.
         const auto ports = Input::MidiInput::EnumerateInputPorts();
         for (const auto& p : ports) {
             if (p.id == dev.guid)
@@ -1257,9 +1254,34 @@ void PlayerAssignmentDialog::openMicPreview(int slot) {
     if (dev_data == "None" || dev_data.isEmpty()) return;
     SDL_AudioDeviceID dev_id = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
     if (dev_data != "Default Device") {
-        bool ok = false;
-        const uint dev = dev_data.toUInt(&ok);
-        if (ok) dev_id = static_cast<SDL_AudioDeviceID>(dev);
+        // Same name-lookup path as sdl_in.cpp's runtime AudioInOpen.
+        // Falls back to legacy numeric parsing for configs saved before
+        // the name-keyed storage migration.
+        SDL_InitSubSystem(SDL_INIT_AUDIO);
+        int count = 0;
+        SDL_AudioDeviceID* devs = SDL_GetAudioRecordingDevices(&count);
+        const std::string want = dev_data.toStdString();
+        bool resolved = false;
+        if (devs) {
+            for (int i = 0; i < count; ++i) {
+                const char* nm = SDL_GetAudioDeviceName(devs[i]);
+                if (nm && want == nm) {
+                    dev_id = devs[i];
+                    resolved = true;
+                    break;
+                }
+            }
+            SDL_free(devs);
+        }
+        if (!resolved) {
+            bool ok = false;
+            const uint legacy_id = dev_data.toUInt(&ok);
+            if (ok) {
+                dev_id = static_cast<SDL_AudioDeviceID>(legacy_id);
+                resolved = true;
+            }
+        }
+        if (!resolved) return;
     }
     SDL_AudioSpec spec;
     SDL_zero(spec);

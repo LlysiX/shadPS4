@@ -8,6 +8,7 @@
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad.h"
+#include "input/hid_instrument.h"
 
 namespace Libraries::AudioIn {
 
@@ -27,15 +28,32 @@ float GetMicPeakDbfs(int slot) {
 // Standard (0), Mic (no enum — exposed via audio detection), Navigation,
 // SteeringWheel, Stick, FightStick, and Gun all still get mics — only the
 // vocal-conflicting instrument classes lock the audio path out.
+// Considers BOTH Config::useSpecialPad and the legacy raw-HID kit
+// TOML. Without the kit-TOML check, a slot on "Automatic" mode
+// (useSpecialPad=false but the bound kit's TOML declares
+// device_class = "drum") would return false and RB4 would open a
+// mic on the drummer.
 static bool SlotIsInstrument(int userId) {
     if (userId < 1 || userId > 4) return false;
-    if (!Config::getUseSpecialPad(userId)) return false;
-    const int cls = Config::getSpecialPadClass(userId);
     using Libraries::Pad::OrbisPadDeviceClass;
-    return cls == static_cast<int>(OrbisPadDeviceClass::Guitar) ||
-           cls == static_cast<int>(OrbisPadDeviceClass::Drum) ||
-           cls == static_cast<int>(OrbisPadDeviceClass::DjTurntable) ||
-           cls == static_cast<int>(OrbisPadDeviceClass::Dancemat);
+    auto is_instrument = [](int cls) {
+        return cls == static_cast<int>(OrbisPadDeviceClass::Guitar) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::Drum) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::DjTurntable) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::Dancemat);
+    };
+    if (Config::getSpecialPadLegacyPassUSBRawHID(userId)) {
+        const std::string kit_cls =
+            Input::HidInstrument::GetActiveKitDeviceClass(userId);
+        if (kit_cls == "guitar") return true;
+        if (kit_cls == "drum") return true;
+        if (kit_cls == "dj_turntable" || kit_cls == "turntable") return true;
+        if (kit_cls == "dance_mat" || kit_cls == "dancemat") return true;
+    }
+    if (Config::getUseSpecialPad(userId)) {
+        return is_instrument(Config::getSpecialPadClass(userId));
+    }
+    return false;
 }
 
 int PS4_SYSV_ABI sceAudioInChangeAppModuleState() {

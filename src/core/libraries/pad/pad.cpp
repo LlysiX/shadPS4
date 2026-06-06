@@ -37,37 +37,25 @@ static OrbisPadDeviceClass KitClassFromString(const std::string& s) {
 //   3. Otherwise → SDL's detected class (Guitar / Drum / Standard).
 static OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
     OrbisPadDeviceClass result;
-    const char* via;
     if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
         const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);
         if (!kit_cls.empty()) {
             result = KitClassFromString(kit_cls);
-            via = "kit-toml";
-            LOG_INFO(Lib_Pad,
-                     "ResolveDeviceClass handle={} -> {} (via {}, kit_cls='{}')",
-                     handle, static_cast<int>(result), via, kit_cls);
+            LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (kit-toml, cls='{}')",
+                      handle, static_cast<int>(result), kit_cls);
             return result;
         }
     }
     if (Config::getUseSpecialPad(handle)) {
         result = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-        via = "Config::useSpecialPad";
-        LOG_INFO(Lib_Pad,
-                 "ResolveDeviceClass handle={} -> {} (via {}, legacy={}, "
-                 "kit_cls='{}')",
-                 handle, static_cast<int>(result), via,
-                 Config::getSpecialPadLegacyPassUSBRawHID(handle),
-                 Input::HidInstrument::GetActiveKitDeviceClass(handle));
+        LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (Config::useSpecialPad)",
+                  handle, static_cast<int>(result));
         return result;
     }
     auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
     result = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
-    via = "SDL";
-    LOG_INFO(Lib_Pad,
-             "ResolveDeviceClass handle={} -> {} (via {}, useSpecialPad=false, "
-             "legacy={})",
-             handle, static_cast<int>(result), via,
-             Config::getSpecialPadLegacyPassUSBRawHID(handle));
+    LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (SDL)", handle,
+              static_cast<int>(result));
     return result;
 }
 
@@ -158,7 +146,7 @@ int PS4_SYSV_ABI scePadGetCapability() {
 }
 
 int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerInformation* pInfo) {
-    LOG_INFO(Lib_Pad, "scePadGetControllerInformation called handle={}", handle);
+    LOG_DEBUG(Lib_Pad, "scePadGetControllerInformation called handle={}", handle);
     if (handle < 0) {
         pInfo->touchPadInfo.pixelDensity = 1;
         pInfo->touchPadInfo.resolution.x = 1920;
@@ -183,10 +171,10 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     if (pInfo->deviceClass != OrbisPadDeviceClass::Standard) {
         pInfo->connectionType = ORBIS_PAD_PORT_TYPE_SPECIAL;
     }
-    LOG_INFO(Lib_Pad,
-             "scePadGetControllerInformation returning handle={} class={} connType={}",
-             handle, static_cast<int>(pInfo->deviceClass),
-             static_cast<int>(pInfo->connectionType));
+    LOG_DEBUG(Lib_Pad,
+              "scePadGetControllerInformation returning handle={} class={} connType={}",
+              handle, static_cast<int>(pInfo->deviceClass),
+              static_cast<int>(pInfo->connectionType));
     return 0;
 }
 
@@ -321,23 +309,12 @@ int PS4_SYSV_ABI scePadMbusTerm() {
 }
 
 int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenParam* pParam) {
-    LOG_INFO(Lib_Pad,
-             "scePadOpen ENTRY user_id={} type={} index={} (useSpecialPad={} "
-             "class={} legacy={})",
-             userId, type, index,
-             (userId >= 1 && userId <= 4) ? Config::getUseSpecialPad(userId) : false,
-             (userId >= 1 && userId <= 4) ? Config::getSpecialPadClass(userId) : 0,
-             (userId >= 1 && userId <= 4)
-                 ? Config::getSpecialPadLegacyPassUSBRawHID(userId)
-                 : false);
+    LOG_INFO(Lib_Pad, "scePadOpen user_id={} type={} index={}", userId, type, index);
     if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
     const OrbisPadDeviceClass resolved = ResolveDeviceClass(userId);
     const bool special = resolved != OrbisPadDeviceClass::Standard;
-    LOG_INFO(Lib_Pad,
-             "scePadOpen user_id={} resolved class={} → special={} requestedType={}",
-             userId, static_cast<int>(resolved), special, type);
     if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
@@ -345,7 +322,8 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
         if (type != ORBIS_PAD_PORT_TYPE_STANDARD && type != ORBIS_PAD_PORT_TYPE_REMOTE_CONTROL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
     }
-    LOG_INFO(Lib_Pad, "scePadOpen success user_id={} type={} (legacy)", userId, type);
+    LOG_INFO(Lib_Pad, "scePadOpen -> user_id={} class={} special={}", userId,
+             static_cast<int>(resolved), special);
     scePadResetLightBar(1);
     return userId;
     // todo: using userId as handle works and simplifies some logic,
@@ -450,10 +428,12 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
     std::size_t raw_len = 0;
     const bool have_kit = Input::HidInstrument::GetLatestReport(handle, raw, &raw_len);
     if (have_kit) {
-        const OrbisPadDeviceClass cls =
-            Config::getUseSpecialPad(handle)
-                ? (OrbisPadDeviceClass)Config::getSpecialPadClass(handle)
-                : OrbisPadDeviceClass::Standard;
+        // Use the same resolver scePadGetControllerInformation reports
+        // through — otherwise a slot on "Automatic" (useSpecialPad=false,
+        // kit TOML says drum) hits this branch with cls=Standard and
+        // ParseTypedData silently no-ops, leaving the game without
+        // velocity bytes.
+        const OrbisPadDeviceClass cls = ResolveDeviceClass(handle);
         // For XInput-source kits the SDL gamepad in this slot IS the kit
         // (hid_instrument's poll thread opens the same physical device),
         // so its face / shoulder / D-pad bits would conflict with the

@@ -1070,6 +1070,10 @@ set(INPUT src/input/controller.cpp
           src/input/hid_packer.cpp
           src/input/hid_kit_probe_data.h
           src/input/hid_kit_probe_derive.cpp
+          src/input/midi_input.cpp
+          src/input/midi_input.h
+          src/input/midi_kit_probe_data.h
+          src/input/midi_kit_probe_derive.cpp
 )
 
 set(EMULATOR src/emulator.cpp
@@ -1208,6 +1212,19 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     endif()
 
     target_link_libraries(shadps4 PRIVATE uuid)
+
+    # ALSA — required for MIDI input on Linux. Without it the
+    # MidiInput backend stubs out and EnumerateInputPorts returns empty.
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(ALSA QUIET alsa)
+        if (ALSA_FOUND)
+            target_include_directories(shadps4 PRIVATE ${ALSA_INCLUDE_DIRS})
+            target_link_libraries(shadps4 PRIVATE ${ALSA_LIBRARIES})
+        else()
+            message(STATUS "ALSA dev headers not found — MIDI input disabled")
+        endif()
+    endif()
 endif()
 
 if (APPLE)

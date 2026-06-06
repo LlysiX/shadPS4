@@ -43,3 +43,24 @@ set_tests_properties(hid_kit_synthetic PROPERTIES
     LABELS "hid"
     TIMEOUT 60
 )
+
+# MIDI capture / derive regression harness. Reads native MIDI event
+# captures (.midi.jsonl) from tests/midi/ and runs them through the
+# same DeriveMidiKitToml the wizard uses to produce a runtime TOML.
+# Mirrors the hidtest pipeline but on MIDI's event-stream capture
+# format instead of byte-grid snapshots.
+add_executable(miditest
+    miditest/main.cpp
+    ${CMAKE_SOURCE_DIR}/src/input/midi_kit_probe_derive.cpp
+)
+target_include_directories(miditest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(miditest PRIVATE cxx_std_23)
+
+add_test(
+    NAME midi_kit_synthesised
+    COMMAND miditest ${CMAKE_CURRENT_SOURCE_DIR}/midi/synthesised
+)
+set_tests_properties(midi_kit_synthesised PROPERTIES
+    LABELS "midi"
+    TIMEOUT 60
+)

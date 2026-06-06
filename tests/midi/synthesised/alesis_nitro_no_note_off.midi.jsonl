@@ -1,0 +1,7 @@
+{"type":"meta","schema":"shadps4-midi-instrument/v1","version":1,"device_name":"Alesis Nitro Mesh","port_id":"20:0","source":"midi","device_type":"drum","timestamp":"2026-06-06T12:00:00Z","capture_uuid":"5c96dba9-9bf5-af6c-479b-ca76eba43b6b","host_hash":"0000000000000000"}
+{"step":"_idle_baseline","events":[]}
+{"step":"red_pad","events":[{"on":true,"note":38,"vel":80,"t_ms":21},{"on":true,"note":38,"vel":58,"t_ms":369},{"on":true,"note":38,"vel":95,"t_ms":698},{"on":true,"note":38,"vel":72,"t_ms":930},{"on":true,"note":38,"vel":118,"t_ms":1136},{"on":true,"note":38,"vel":91,"t_ms":1327},{"on":true,"note":38,"vel":61,"t_ms":1532}]}
+{"step":"blue_pad","events":[{"on":true,"note":45,"vel":116,"t_ms":12},{"on":true,"note":45,"vel":68,"t_ms":302},{"on":true,"note":45,"vel":74,"t_ms":641},{"on":true,"note":45,"vel":84,"t_ms":853},{"on":true,"note":45,"vel":84,"t_ms":1111},{"on":true,"note":45,"vel":83,"t_ms":1300}]}
+{"step":"yellow_pad","events":[{"on":true,"note":48,"vel":54,"t_ms":39},{"on":true,"note":48,"vel":109,"t_ms":425},{"on":true,"note":48,"vel":102,"t_ms":715},{"on":true,"note":48,"vel":70,"t_ms":1082}]}
+{"step":"green_pad","events":[{"on":true,"note":43,"vel":50,"t_ms":19},{"on":true,"note":43,"vel":110,"t_ms":326},{"on":true,"note":43,"vel":88,"t_ms":623},{"on":true,"note":43,"vel":71,"t_ms":886}]}
+{"step":"kick_pedal","events":[{"on":true,"note":36,"vel":91,"t_ms":10},{"on":true,"note":36,"vel":103,"t_ms":273},{"on":true,"note":36,"vel":113,"t_ms":550},{"on":true,"note":36,"vel":60,"t_ms":751}]}

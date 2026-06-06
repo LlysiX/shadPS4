@@ -410,13 +410,7 @@ void ParseInputConfig(const std::string game_id = "") {
                     break;
                 }
             }
-            LOG_INFO(Input,
-                     "Keyboard-route: line='{}' -> slot {} (P1devs={}, P2devs={}, "
-                     "P3devs={}, P4devs={})",
-                     line, output_gamepad_id, Config::getPlayerSlotDevices(1).size(),
-                     Config::getPlayerSlotDevices(2).size(),
-                     Config::getPlayerSlotDevices(3).size(),
-                     Config::getPlayerSlotDevices(4).size());
+            LOG_DEBUG(Input, "Keyboard-route: line='{}' -> slot {}", line, output_gamepad_id);
         }
         if (button_it != string_to_cbutton_map.end()) {
             // todo add new shit here

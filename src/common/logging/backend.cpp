@@ -139,7 +139,12 @@ public:
         const auto& log_dir = GetUserPath(PathType::LogDir);
         std::filesystem::create_directory(log_dir);
         Filter filter;
-        filter.ParseFilterString(Config::getLogFilter());
+        // 0.7 beta: default to *:Debug so any user-submitted shad_log.txt
+        // carries the full diagnostic stream we need to triage the new
+        // per-player input + MIDI drum paths. Users who set logFilter
+        // explicitly in config.toml keep their choice.
+        const std::string user_filter = Config::getLogFilter();
+        filter.ParseFilterString(user_filter.empty() ? "*:Debug" : user_filter);
         const auto& log_file_path = log_file.empty() ? LOG_FILE : log_file;
         instance = std::unique_ptr<Impl, decltype(&Deleter)>(
             new Impl(log_dir / log_file_path, filter), Deleter);

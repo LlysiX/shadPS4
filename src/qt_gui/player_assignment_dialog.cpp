@@ -10,8 +10,6 @@
 #include <QEvent>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QInputDialog>
-#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -19,7 +17,6 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPen>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QSlider>
 #include <QTabBar>
@@ -76,10 +73,6 @@ QString deviceDisplayLabel(const Config::PlayerDevice& dev) {
         }
         if (ids)
             SDL_free(ids);
-        // Tag XInput-source probed kits in the device list too — the
-        // user might add a "Generic XInput Guitar" and want to see at a
-        // glance that it's being driven via a probed kit rather than as
-        // a plain DS4-shaped gamepad.
         QString probedSuffix;
         if (vid != 0 || pid != 0) {
             std::lock_guard<std::mutex> lk(Input::HidInstrument::g_kits_mu);
@@ -120,10 +113,6 @@ QListWidgetItem* makeDeviceItem(const Config::PlayerDevice& dev) {
     return item;
 }
 
-// Item label → enum int. Same list as the kSpecialPadClasses table in
-// special_devices_dialog.cpp (mirrors OrbisPadDeviceClass in
-// core/libraries/pad/pad.h) so power users keep all the same picks the
-// old per-slot grid had.
 struct ClassChoice {
     int value;
     const char* label;
@@ -141,11 +130,6 @@ constexpr std::array<ClassChoice, 10> kClassChoices = {{
     {9, QT_TR_NOOP("Gun")},
 }};
 
-// Per-tab live VU widget: grey background, fill colour reflects the
-// gate state (green when level >= threshold = gate open, dark grey
-// when below = gate closed/muted), plus a yellow vertical line at the
-// gate threshold position. The dialog updates level / threshold every
-// tick.
 class MicVuBar : public QWidget {
 public:
     explicit MicVuBar(QWidget* parent = nullptr) : QWidget(parent) {
@@ -166,10 +150,6 @@ public:
             update();
         }
     }
-    // When true the bar uses the gate-open colour (green) for the
-    // active fill; when false (gate disabled or below threshold) it
-    // falls back to grey so the user immediately sees their voice
-    // isn't passing through.
     void setGateOpen(bool open) {
         if (m_gate_open != open) {
             m_gate_open = open;
@@ -199,11 +179,9 @@ private:
     bool m_gate_open = false;
 };
 
-// Walk the slot's PlayerDevices + g_kits to find the matching kit's
-// device_class. Mirrors HidInstrument::GetActiveKitDeviceClass(slot),
-// but works in the launcher where PollLoop hasn't run yet — we look
-// up by the slot's configured vid/pid (HID kits) or port_id (MIDI).
-// Returns "" when no kit covers the slot's devices.
+// Mirrors HidInstrument::GetActiveKitDeviceClass(slot) but works in the
+// launcher where PollLoop hasn't run yet — looks up by vid/pid (HID) or
+// port_id (MIDI). Returns "" when no kit covers the slot.
 std::string DeriveKitClassFromSlotDevices(int slot) {
     std::lock_guard<std::mutex> lk(Input::HidInstrument::g_kits_mu);
     for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
@@ -246,11 +224,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
     setModal(true);
     resize(720, 620);
 
-    // Force-load every kit TOML in ~/.local/share/shadPS4/kits before
-    // any UI code reads g_kits. The runtime normally triggers this
-    // lazily on first scePadRead / libusb enumeration, but the launcher
-    // never hits those paths — without this call, every previously
-    // probed device would appear as "not yet probed" in the picker.
+    // The runtime loads kits lazily on first scePadRead, but the launcher
+    // never hits that path — force-load now so probed devices appear correctly.
     Input::HidInstrument::EnsureKitsLoaded();
 
     auto* root = new QVBoxLayout(this);
@@ -278,9 +253,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
     connect(bb, &QDialogButtonBox::accepted, this, &PlayerAssignmentDialog::onAccept);
     connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    // Open every currently-attached SDL gamepad so we can poll their
-    // button state from the dialog tick. The runtime FinalizeUpdate path
-    // doesn't fire while the launcher is on top — we need our own pump.
+    // FinalizeUpdate doesn't fire while the launcher is on top — open
+    // gamepads so the dialog can poll them directly.
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
     int pad_count = 0;
     if (SDL_JoystickID* ids = SDL_GetGamepads(&pad_count)) {
@@ -290,22 +264,12 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
         }
         SDL_free(ids);
     }
-    // For each slot, open whatever MIDI port the slot's current device
-    // list points at so the tab indicator + row glow react to incoming
-    // MIDI events while no game window is up.
     for (int slot = 1; slot <= 4; ++slot) refreshPolledMidi(slot);
-    // Keyboard event filter — dialog-level Tab/Enter/etc. presses bump
-    // whichever slot has a Keyboard PlayerDevice configured.
     installEventFilter(this);
 
-    // Drive the tab indicator + the VU meter at ~20 ms (50 Hz). Higher
-    // refresh keeps the VU level visually in sync with what the user
-    // hears in the room.
     auto* timer = new QTimer(this);
     timer->setInterval(20);
     connect(timer, &QTimer::timeout, this, [this]() {
-        // 1. Sample SDL gamepad state so the tab indicator works without
-        //    a running game window.
         SDL_UpdateGamepads();
         static constexpr SDL_GamepadButton kButtons[] = {
             SDL_GAMEPAD_BUTTON_SOUTH,          SDL_GAMEPAD_BUTTON_EAST,
@@ -343,9 +307,6 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                     Input::NoteInputOnSlot(slot);
             }
         }
-        // Drain MIDI events from each opened slot port. Any event
-        // bumps the slot's input timestamp, lighting the tab + the
-        // MIDI row regardless of whether a kit has been probed yet.
         for (int slot = 0; slot < 4; ++slot) {
             if (!m_polled_midi[slot]) continue;
             auto evs = Input::MidiInput::DrainEvents(m_polled_midi[slot]);
@@ -355,14 +316,10 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
             }
         }
 
-        // 2. Update tab text colour using a stylesheet so the change is
-        //    actually visible. Plain "●" prefix is easy to miss.
         const auto now = std::chrono::steady_clock::now().time_since_epoch();
         const u64 now_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         constexpr u64 kFadeNs = 300'000'000ull; // 300 ms
-        // Pre-compute "which gamepad GUIDs are pressed right now" so the
-        // device-row sweep below can stop at the first GUID match.
         std::set<std::string> pressed_pad_guids;
         for (auto& [id, gp] : m_polled_pads) {
             if (!gp) continue;
@@ -444,13 +401,6 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                 }
             }
 
-            // Per-row glow inside the slot's device list. Gamepad rows
-            // light when the SDL pad with their GUID currently has any
-            // standard button held; Keyboard rows light while any key
-            // is held in the dialog; Kit / MIDI rows fall back to the
-            // slot-level activity timestamp (we don't have per-device
-            // tracking for those yet, but the user already sees the
-            // tab glow when those bump).
             auto* list = m_slots[slot].list;
             if (!list) continue;
             for (int i = 0; i < list->count(); ++i) {
@@ -468,11 +418,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                     glow = m_keyboard_held;
                     break;
                 case Kind::Midi: {
-                    // MIDI row uses its own per-slot timestamp so the
-                    // row glow only fires when *this slot's* MIDI port
-                    // produced an event — slot-level activity might be
-                    // a gamepad pressed on the same slot, which would
-                    // be confusing as a MIDI row glow.
+                    // Use per-slot MIDI timestamp so gamepad presses on the
+                    // same slot don't falsely light the MIDI row.
                     const auto since = std::chrono::duration_cast<
                         std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - m_last_midi_ns[slot])
@@ -481,10 +428,6 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                     break;
                 }
                 case Kind::Kit:
-                    // No per-device tracking — fall back to slot-level
-                    // activity. Tab glow already shows this; this just
-                    // makes the row reflect the same "something here
-                    // fired" signal.
                     glow = active;
                     break;
                 }
@@ -512,10 +455,6 @@ PlayerAssignmentDialog::~PlayerAssignmentDialog() {
 bool PlayerAssignmentDialog::eventFilter(QObject* obj, QEvent* event) {
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
         m_keyboard_held = (event->type() == QEvent::KeyPress);
-        // Find the slot whose PlayerDevices currently contain a Keyboard
-        // entry and bump its input timestamp. We re-query Config rather
-        // than caching because the user might add/remove the keyboard
-        // device inside this same dialog session.
         for (int slot = 1; slot <= 4; ++slot) {
             for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
                 if (dev.kind == Config::PlayerDeviceKind::Keyboard) {
@@ -534,7 +473,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     auto* tab = new QWidget(m_tabs);
     auto* root = new QVBoxLayout(tab);
 
-    // --- Devices section -----------------------------------------------------
     auto* devicesBox = new QGroupBox(tr("Devices pinned to Player %1").arg(slot), tab);
     auto* devicesLayout = new QVBoxLayout(devicesBox);
     w.list = new QListWidget(devicesBox);
@@ -562,7 +500,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
             [this, slot]() { removeSelectedDevice(slot); });
     root->addWidget(devicesBox);
 
-    // --- Reports as + Legacy raw-HID -----------------------------------------
     auto* sysBox = new QGroupBox(tr("Game-visible device class"), tab);
     auto* sysLayout = new QVBoxLayout(sysBox);
 
@@ -581,11 +518,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     classRow->addWidget(w.classCombo, 1);
     sysLayout->addLayout(classRow);
 
-    // Legacy raw-HID pass-through is no longer a user-toggleable
-    // checkbox — it auto-turns-on whenever a Kit / MIDI / XInput entry
-    // sits in this slot's device list, since those paths only make
-    // sense via the legacy path. The label below shows whichever state
-    // we derived so the user still sees what's running.
     auto* legacyRow = new QHBoxLayout();
     w.legacyCb = new QCheckBox(QStringLiteral(""), sysBox);
     w.legacyCb->setVisible(false); // kept as backing storage only
@@ -622,13 +554,8 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
             const char* nm = SDL_GetAudioDeviceName(id);
             if (nm) {
                 const QString qname = QString::fromUtf8(nm);
-                // Persist the device NAME as the item's data. SDL audio
-                // device IDs are runtime handles that re-enumerate to
-                // different values between sessions (and sometimes
-                // between dialog opens), so a saved id wouldn't match
-                // the next time the dialog loads — the combo would
-                // silently revert to "None" and a subsequent Save
-                // would persist that reset.
+                // SDL audio device IDs aren't stable across enumerations —
+                // persist the device NAME so the saved value survives restarts.
                 w.micCombo->addItem(qname, qname);
             }
         }
@@ -666,10 +593,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     gateRow->addWidget(w.micGateDbLabel);
     micLayout->addLayout(gateRow);
 
-    // Hold time — how long the gate stays open after the voice drops
-    // below threshold. Same unit (ms) the runtime uses via
-    // Config::getMicGateHoldMs. 0..2000ms is the practical band: shorter
-    // chops the tail of words, longer leaks background between phrases.
     auto* holdRow = new QHBoxLayout();
     auto* holdLabel = new QLabel(tr("Hold:"), micBox);
     w.micGateHoldMs = new QSlider(Qt::Horizontal, micBox);
@@ -686,11 +609,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     holdRow->addWidget(w.micGateHoldLabel);
     micLayout->addLayout(holdRow);
 
-    // VU meter — green level fill (live mic peak) + yellow gate
-    // threshold line. Driven by Libraries::AudioIn::GetMicPeakDbfs in
-    // the same tick that updates the tab indicator; threshold tracks
-    // the slider above. Stays parked at silence until a game opens
-    // sceAudioIn for this user_id.
     auto* vuRow = new QHBoxLayout();
     auto* vuLabel = new QLabel(tr("Level:"), micBox);
     auto* vu = new MicVuBar(micBox);
@@ -725,8 +643,6 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
             break;
         }
     }
-    // Reopen the dialog-local recording stream whenever the user picks
-    // a different mic so the VU previews against the new device.
     connect(w.micCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this, slot](int) {
                 closeMicPreview(slot);
@@ -770,8 +686,6 @@ void PlayerAssignmentDialog::refreshClassRow(int slot) {
         kitClass = DeriveKitClassFromSlotDevices(slot);
     const bool automatic = legacyOn && !kitClass.empty();
 
-    // Insert / remove a sentinel "Automatic" entry at index 0 so the
-    // combo's currentText reflects what's actually driving the class.
     const bool hasSentinel =
         w.classCombo->count() > 0 && w.classCombo->itemData(0).toInt() == -1;
     if (automatic) {
@@ -784,8 +698,6 @@ void PlayerAssignmentDialog::refreshClassRow(int slot) {
                 tr("Automatic — %1 (from kit TOML)").arg(QString::fromStdString(kitClass));
             w.classCombo->setItemText(0, label);
         }
-        // Remember the user's pre-Automatic choice before we hijack
-        // the selection, so toggling legacy off can restore it.
         if (w.classCombo->currentData().toInt() != -1)
             w.lastUserClass = w.classCombo->currentData().toInt();
         w.classCombo->setCurrentIndex(0);
@@ -805,11 +717,7 @@ void PlayerAssignmentDialog::refreshClassRow(int slot) {
 
 void PlayerAssignmentDialog::refreshLegacyVisuals(int slot) {
     auto& w = m_slots[slot - 1];
-    // Legacy raw-HID pass-through should auto-engage whenever the slot
-    // has at least one device that can't go through the standard SDL
-    // gamepad path — i.e. a Kit (raw HID / XInput) or MIDI entry. We
-    // read from the dialog's live list (m_slots[].list) rather than
-    // Config because the user's just-made edits aren't persisted yet.
+    // Read from the live list, not Config — the user's edits aren't persisted yet.
     bool legacyOn = false;
     for (int i = 0; i < w.list->count(); ++i) {
         const QString enc = w.list->item(i)->data(Qt::UserRole).toString();
@@ -917,17 +825,11 @@ void PlayerAssignmentDialog::addGamepadDevice(int slot) {
     refreshClassRow(slot);
 }
 
-// Custom two-section picker for kit / MIDI devices. Top section lists
-// probed devices (a kit TOML exists, the user can pick them); bottom
-// section lists detected-but-unprobed devices each with an inline
-// "Probe…" button that launches KitProbeDialog. After a probe finishes
-// we rescan g_kits and re-render so the just-probed device jumps from
-// the unprobed list to the probed list without closing the picker.
 namespace {
 
 struct PickRow {
-    QString label;     // shown to user
-    QString encoded;   // Config::encodePlayerDevice() output
+    QString label;
+    QString encoded;
     bool probed;
 };
 
@@ -969,11 +871,8 @@ QDialog* makeTwoSectionPicker(QWidget* parent, const QString& title, const QStri
             item->setData(Qt::UserRole, r.encoded);
             ++probedCount;
         } else {
-            // Inline "Probe…" row: a horizontal widget with a label + button.
             auto* item = new QListWidgetItem(probedList /*sentinel*/);
-            // ^ unused — we use setItemWidget on a fresh row instead so the
-            // row gets a real button. The item above prevents an empty list.
-            delete item;
+            delete item; // sentinel discarded; real widget goes on unprobedList
             auto* rowItem = new QListWidgetItem(unprobedList);
             auto* rowWidget = new QWidget();
             auto* rowLayout = new QHBoxLayout(rowWidget);
@@ -1023,10 +922,6 @@ QDialog* makeTwoSectionPicker(QWidget* parent, const QString& title, const QStri
 } // namespace
 
 void PlayerAssignmentDialog::addKitDevice(int slot) {
-    // Helper: enumerate every detected HID VID:PID and mark it
-    // probed/unprobed against the current g_kits snapshot. Returns the
-    // PickRow vector ready for the picker, and lets the inline Probe
-    // button re-call the same function after a probe completes.
     auto buildRows = []() {
         std::set<std::pair<u16, u16>> loaded;
         {
@@ -1075,11 +970,7 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
     }
     QString chosen;
     QDialog* dlgPtr = nullptr;
-    // Probing through the inline button rebuilds the row list and
-    // re-opens the picker so the just-probed device shows up in the
-    // probed section without the user having to close + re-open the
-    // whole Player Assignment menu. Custom done() code distinguishes
-    // "probe-done, please re-loop" from "user cancelled".
+    // kProbeDone distinguishes "probe finished, rebuild rows" from Accept/Reject.
     constexpr int kProbeDone = 100;
     auto on_probe = [this, &dlgPtr]() {
         KitProbeDialog wiz(this);
@@ -1128,7 +1019,6 @@ void PlayerAssignmentDialog::addKeyboardDevice(int slot) {
 }
 
 void PlayerAssignmentDialog::addMidiDevice(int slot) {
-    // Probed = the port's id appears in a loaded kit's midi_port_id.
     auto buildRows = []() {
         std::set<std::string> probed_port_ids;
         {
@@ -1212,9 +1102,7 @@ void PlayerAssignmentDialog::refreshPolledMidi(int slot) {
         Input::MidiInput::CloseInputPort(port);
         port = nullptr;
     }
-    // Prefer the live list (m_slots[].list) when it's been built;
-    // otherwise fall back to Config (used at constructor time before
-    // tabs exist).
+    // At constructor time tabs aren't built yet — fall back to Config.
     std::string port_id;
     auto* list = m_slots[slot - 1].list;
     if (list) {
@@ -1289,9 +1177,7 @@ void PlayerAssignmentDialog::openMicPreview(int slot) {
     spec.channels = 1;
     spec.freq = 44100;
     SDL_InitSubSystem(SDL_INIT_AUDIO);
-    // Hint a short capture window so the VU reflects what just landed
-    // in the mic, not what landed 100+ ms ago. SDL reads this hint at
-    // device-open time, so set it immediately before the open call.
+    // SDL reads this hint at device-open time; set it immediately before.
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "256");
     w.previewStream = SDL_OpenAudioDeviceStream(dev_id, &spec, nullptr, nullptr);
     if (w.previewStream)
@@ -1309,9 +1195,6 @@ void PlayerAssignmentDialog::closeMicPreview(int slot) {
 void PlayerAssignmentDialog::launchProbeWizard(int slot) {
     KitProbeDialog wiz(this);
     wiz.exec();
-    // Picked-up state for the slot might have changed (a kit just landed
-    // in g_kits). Refresh the class row so the "Automatic" mode lights
-    // up immediately without forcing the user to flip the legacy toggle.
     refreshClassRow(slot);
 }
 
@@ -1329,11 +1212,6 @@ void PlayerAssignmentDialog::onAccept() {
         }
         Config::setPlayerSlotDevices(slot, devs);
 
-        // Class: prefer the combo's live selection. When the combo is
-        // showing the "Automatic" sentinel (-1) we persist the kit's
-        // own device_class so the game's scePadGetControllerInformation
-        // returns the right class even before the runtime kit binding
-        // takes effect (and as a fallback if the binding ever fails).
         int cls = w.classCombo->currentData().toInt();
         if (cls == -1) {
             const std::string kit_cls = DeriveKitClassFromSlotDevices(slot);
@@ -1348,19 +1226,11 @@ void PlayerAssignmentDialog::onAccept() {
         Config::setMicDevice(slot - 1, w.micCombo->currentData().toString().toStdString());
         Config::setMicGateEnabled(slot - 1, w.micGateCb->isChecked());
         Config::setMicGateThresholdDb(slot - 1, w.micGateDb->value());
-        // Hold time is global, not per-slot — only write once from
-        // whichever slot the user happens to have configured last.
+        // Hold time is global — write only once.
         if (slot == 4)
             Config::setMicGateHoldMs(w.micGateHoldMs->value());
     }
-    // Persist to disk — without this the per-slot mic device, gate
-    // settings, and legacy / class state vanish on the next launch
-    // because the global Config::save only fires from a handful of
-    // top-level dialogs.
     Config::save(Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "config.toml");
-    // Apply changes live: relocate connected gamepads whose GUID is now
-    // bound to a different slot, then re-parse keybindings so keyboard
-    // routing picks up any new Keyboard-slot mapping.
     Input::GameControllers::ApplyAssignmentChanges();
     Input::ParseInputConfig(Config::GetUseUnifiedInputConfig() ? std::string("default")
                                                                : std::string());

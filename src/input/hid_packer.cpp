@@ -435,6 +435,12 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
                                  u8 out[kMaxDeviceUniqueData]) {
     (void)dev_class;
     if (!raw || !out || raw_len == 0) return 0;
+    // Hold g_kits_mu for the duration of the pack. The runtime's
+    // LoadKitFile path can null s.kit and overwrite the underlying
+    // KitDef via *it = std::move(k); without this lock a torn read
+    // mid-pack would deref dangling fields. See bug-hunt report from
+    // 2026-06-07.
+    std::lock_guard<std::mutex> kits_lk(g_kits_mu);
     const KitDef* kit = nullptr;
     if (slot >= 1 && slot <= 4) kit = g_slots[slot - 1].kit;
     if (!kit) {
@@ -480,10 +486,10 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         pack_vel(5, kit->drum_blue_cymbal_byte);
         pack_vel(6, kit->drum_green_cymbal_byte);
         if (out[0] || out[1] || out[2] || out[3] || out[4] || out[5] || out[6]) {
-            LOG_INFO(Input,
-                     "PackDeviceUniqueData drum slot {}: dud=[r={:02x} b={:02x} "
-                     "y={:02x} g={:02x} yC={:02x} bC={:02x} gC={:02x}]",
-                     slot, out[0], out[1], out[2], out[3], out[4], out[5], out[6]);
+            LOG_DEBUG(Input,
+                      "PackDeviceUniqueData drum slot {}: dud=[r={:02x} b={:02x} "
+                      "y={:02x} g={:02x} yC={:02x} bC={:02x} gC={:02x}]",
+                      slot, out[0], out[1], out[2], out[3], out[4], out[5], out[6]);
         }
         return kMaxDeviceUniqueData;
     }
@@ -603,6 +609,8 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
     using B = OPB::OrbisPadButtonDataOffset;
     (void)dev_class;
     if (!raw || raw_len == 0) return 0;
+    // See PackDeviceUniqueData — same race avoidance.
+    std::lock_guard<std::mutex> kits_lk(g_kits_mu);
     const KitDef* kit = nullptr;
     if (slot >= 1 && slot <= 4) kit = g_slots[slot - 1].kit;
     if (!kit) return 0;
@@ -627,9 +635,6 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
         for (int bit = 0; bit < 8; ++bit) {
             if (b & (1u << bit)) out |= table[bit];
         }
-    }
-    if (out) {
-        LOG_INFO(Input, "PackButtons slot {}: face bits 0x{:08x}", slot, out);
     }
     if (kit->hat_byte >= 0 && static_cast<std::size_t>(kit->hat_byte) < raw_len) {
         const u8 hat = raw[kit->hat_byte];

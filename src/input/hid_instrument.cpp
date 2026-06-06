@@ -40,6 +40,11 @@ std::thread g_thread;
 std::once_flag g_init_once;
 
 void CloseSlot(SlotState& s) {
+    // s.mu must be held while s.kit is mutated — the packer (PackButtons
+    // / PackDeviceUniqueData) holds g_kits_mu when reading s.kit, but
+    // ReadStates and the snapshot path read it under s.mu, so this is
+    // the lock we must take here to serialise against them.
+    std::lock_guard<std::mutex> lk(s.mu);
     if (s.dev) {
         SDL_hid_close(static_cast<SDL_hid_device*>(s.dev));
         s.dev = nullptr;
@@ -55,7 +60,6 @@ void CloseSlot(SlotState& s) {
     s.vid = s.pid = 0;
     s.device_path.clear();
     s.kit = nullptr;
-    std::lock_guard<std::mutex> lk(s.mu);
     s.has_data = false;
     s.last_report_len = 0;
 }
@@ -327,18 +331,6 @@ void PollLoop() {
                     if (changed) {
                         Input::NoteInputOnSlot(slot - 1);
                         Input::GameControllers::EnsureLoggedIn(slot - 1);
-                        // Log non-zero snapshot bytes so we can see
-                        // which pads are firing on the wire.
-                        bool any_nonzero = false;
-                        for (std::size_t k = 0; k < n; ++k)
-                            if (buf[k]) { any_nonzero = true; break; }
-                        if (any_nonzero) {
-                            LOG_INFO(Input,
-                                     "MIDI snapshot slot {}: [r={} b={} y={} g={} "
-                                     "kick={} yC={} bC={} gC={}] face_flags=0x{:02x}",
-                                     slot, buf[3], buf[5], buf[4], buf[6], buf[1],
-                                     buf[8], buf[9], buf[10], buf[15]);
-                        }
                     }
                 }
             } else if (s.gamepad) {

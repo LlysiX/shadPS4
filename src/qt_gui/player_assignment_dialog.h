@@ -13,7 +13,6 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QListWidget;
-class QProgressBar;
 class QPushButton;
 class QSlider;
 class QTabWidget;
@@ -40,9 +39,6 @@ private:
 
     void openMicPreview(int slot);
     void closeMicPreview(int slot);
-    // Re-open the MIDI port for a slot whenever its device list mutates —
-    // otherwise adding/removing MIDI rows after dialog open doesn't drive
-    // the tab indicator.
     void refreshPolledMidi(int slot);
 
     void onAccept();
@@ -61,24 +57,17 @@ private:
         QLabel* micGateHoldLabel = nullptr;
         std::chrono::steady_clock::time_point lastAboveThreshold{};
         bool gateOpen = false;
-        // Declared as QWidget* so the header doesn't need the inline MicVuBar
-        // definition; the .cpp casts it back to MicVuBar to set level/threshold.
-        QWidget* micVu = nullptr;
+        QWidget* micVu = nullptr; // cast to MicVuBar in .cpp; avoids pulling the class def here
         SDL_AudioStream* previewStream = nullptr;
-        // Cached user-picked class so the combo can restore it when the
-        // "Automatic" sentinel is removed (legacy off).
         int lastUserClass = 0;
     };
     std::array<SlotWidgets, 4> m_slots{};
     QTabWidget* m_tabs = nullptr;
 
-    // One SDL_Gamepad per attached pad — polled at 50 Hz so the tab
-    // indicator works even without a running game (FinalizeUpdate only
-    // fires in-game).
+    // Polled at 50 Hz; FinalizeUpdate doesn't fire while the launcher is on top.
     std::unordered_map<SDL_JoystickID, SDL_Gamepad*> m_polled_pads;
     bool m_keyboard_held = false;
-    // void* is the opaque type MidiInput hands back — avoids pulling its
-    // header into the dialog header.
+    // void* = opaque MidiInput port handle; avoids pulling midi_input.h here.
     std::array<void*, 4> m_polled_midi{};
     std::array<std::chrono::steady_clock::time_point, 4> m_last_midi_ns{};
 

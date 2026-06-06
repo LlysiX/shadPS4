@@ -38,6 +38,8 @@
 
 #include "common/path_util.h"
 #include "input/hid_instrument.h"
+#include "input/midi_input.h"
+#include "input/midi_kit_probe_data.h"
 #include "input/hid_kit_probe_data.h"
 
 namespace {
@@ -296,6 +298,21 @@ void KitProbeDialog::enumerateHidrawDevices() {
         item->setData(Qt::UserRole + 3, QString::fromStdString(xi.name));
         item->setData(Qt::UserRole + 4, true);  // marks as XInput source
     }
+    // MIDI input ports — e-drum kits (Roland TD-series, Alesis, Yamaha
+    // DTX, ...) show up here. Path uses a "midi:<id>" prefix so the
+    // openDevice dispatcher can route to the MidiInput backend.
+    for (const auto& port : Input::MidiInput::EnumerateInputPorts()) {
+        const QString port_id = QString::fromStdString(port.id);
+        const QString port_name = QString::fromStdString(port.name);
+        const QString label = QStringLiteral("[MIDI] %1  %2").arg(port_id, port_name);
+        auto* item = new QListWidgetItem(label, ui->deviceList);
+        item->setData(Qt::UserRole + 0, QStringLiteral("midi:%1").arg(port_id));
+        item->setData(Qt::UserRole + 1, QStringLiteral("0000"));
+        item->setData(Qt::UserRole + 2, QStringLiteral("0000"));
+        item->setData(Qt::UserRole + 3, port_name);
+        item->setData(Qt::UserRole + 4, false);
+        item->setData(Qt::UserRole + 5, QStringLiteral("midi"));  // source kind marker
+    }
     if (ui->deviceList->count() == 0) {
         auto* item = new QListWidgetItem(
             tr("(no devices found — plug your instrument in and click Refresh)"),
@@ -312,6 +329,25 @@ bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
                                 const QString& name, bool is_xinput) {
     closeDevice();
     m_isXInput = is_xinput;
+    m_isMidi = path.startsWith(QStringLiteral("midi:"));
+    // MIDI ports: path is "midi:<port_id>" (e.g. "midi:24:0" on ALSA).
+    // Skip both the SDL_hid and SDL_gamepad paths and open through the
+    // MidiInput backend instead. Event capture happens in onTickTimer.
+    if (m_isMidi) {
+        const QString port_id = path.mid(static_cast<int>(std::string_view("midi:").size()));
+        m_midiDev = Input::MidiInput::OpenInputPort(port_id.toStdString());
+        if (!m_midiDev) {
+            QMessageBox::warning(this, tr("Open failed"),
+                tr("Could not open MIDI port %1.").arg(port_id));
+            return false;
+        }
+        m_devicePath = path;
+        m_deviceName = name;
+        m_vid = 0;
+        m_pid = 0;
+        m_midiPortId = port_id;
+        return true;
+    }
     // XInput-source devices: path is "xinput:<instance_id>". Skip the SDL_hid
     // dance and open via the gamepad API.
     if (m_isXInput) {
@@ -415,10 +451,16 @@ void KitProbeDialog::closeDevice() {
         Input::HidInstrument::CloseXInputGamepad(m_xinputDev);
         m_xinputDev = nullptr;
     }
+    if (m_midiDev) {
+        Input::MidiInput::CloseInputPort(m_midiDev);
+        m_midiDev = nullptr;
+    }
     m_devicePath.clear();
     m_deviceName.clear();
     m_vid = m_pid = 0;
     m_isXInput = false;
+    m_isMidi = false;
+    m_midiPortId.clear();
 }
 
 // ============================================================================
@@ -480,6 +522,9 @@ void KitProbeDialog::onStartProbe() {
             return;
     }
     for (const auto& s : Steps(m_deviceType)) m_results.push_back({s, {}, {}, false});
+    // Parallel MIDI event buffer — same length as m_results so indices
+    // line up. Stays unused for HID/XInput captures.
+    m_midi_results.assign(m_results.size(), MidiStepBuf{});
     m_currentStep = -1;
     m_idleRaw.clear();
     std::fill(m_baselineMax.begin(), m_baselineMax.end(), 0);
@@ -514,6 +559,12 @@ void KitProbeDialog::startStep(int idx) {
     r.bytes = {};
     r.raw.clear();
     r.captured = false;
+    // Reset the parallel MIDI buffer too; harmless when not in MIDI mode.
+    if (idx < (int)m_midi_results.size()) {
+        m_midi_results[idx].events.clear();
+        m_midi_results[idx].captured = false;
+        m_midi_results[idx].step_started = std::chrono::steady_clock::now();
+    }
     ui->stepHeader->setText(tr("Step %1/%2 — %3")
                                 .arg(idx + 2)
                                 .arg(Steps(m_deviceType).size() + 1)
@@ -557,13 +608,17 @@ void KitProbeDialog::finishStep() {
     if (m_currentStep < 0 || m_currentStep >= (int)m_results.size()) return;
     auto& r = m_results[m_currentStep];
     r.captured = true;
+    if (m_currentStep < (int)m_midi_results.size()) {
+        m_midi_results[m_currentStep].captured = true;
+    }
     m_sampling = false;
     ui->stepProgress->setValue(ui->stepProgress->maximum());
     ui->beginBtn->setText(tr("Redo this step"));
     ui->beginBtn->setEnabled(true);
     ui->nextBtn->setEnabled(true);
     ui->skipBtn->setEnabled(false);
-    detectCrossTalkAndWarn();
+    // Cross-talk detection is byte-grid based, irrelevant to MIDI captures.
+    if (!m_isMidi) detectCrossTalkAndWarn();
 }
 
 void KitProbeDialog::detectCrossTalkAndWarn() {
@@ -652,6 +707,34 @@ void KitProbeDialog::onNextStep() {
 // ============================================================================
 
 void KitProbeDialog::onHidReadable() {
+    // MIDI path: drain events from the port. Events that arrive while
+    // the wizard is in Step state are appended to the current step's
+    // event list with timestamps relative to the step start; outside
+    // Step (Idle baseline, Review, etc.) events are discarded.
+    if (m_midiDev) {
+        auto events = Input::MidiInput::DrainEvents(m_midiDev);
+        if (m_state == State::Step && m_sampling &&
+            m_currentStep >= 0 && m_currentStep < (int)m_midi_results.size()) {
+            auto& buf = m_midi_results[m_currentStep];
+            const auto step_start = buf.step_started;
+            for (const auto& ev : events) {
+                MidiStepEvent rec;
+                rec.on = ev.on;
+                rec.note = ev.note;
+                rec.velocity = ev.velocity;
+                // Recompute the timestamp relative to the step (not the
+                // port open) so the capture file's t_ms is monotonic
+                // from 0 within each step — same convention HID
+                // captures use implicitly via their per-step framing.
+                rec.t_ms = static_cast<std::uint32_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - step_start)
+                        .count());
+                buf.events.push_back(rec);
+            }
+        }
+        return;
+    }
     // XInput path: poll the gamepad once per tick and treat the synthetic
     // 9-byte report exactly like an HID read.
     if (m_xinputDev) {
@@ -821,6 +904,37 @@ void KitProbeDialog::onTickTimer() {
 // ============================================================================
 
 QString KitProbeDialog::deriveKitToml() const {
+    // MIDI captures use a completely different derive path: native event
+    // stream → midi_pad_map keyed by MIDI note number. The miditest
+    // binary exercises the same DeriveMidiKitToml against synthesised
+    // event fixtures, so any TOML-shape bug shows up before shipping.
+    if (m_isMidi) {
+        using namespace Input::MidiInstrument;
+        MidiKitProbeData md;
+        md.device_name = m_deviceName.toStdString();
+        md.port_id = m_midiPortId.toStdString();
+        md.device_type = (m_deviceType == DeviceType::ProDrum)
+                             ? MidiDeviceType::ProDrum
+                             : MidiDeviceType::Drum;
+        md.results.reserve(m_midi_results.size());
+        for (std::size_t i = 0; i < m_midi_results.size(); ++i) {
+            const auto& src = m_midi_results[i];
+            MidiStepResult dst;
+            dst.key = m_results[i].def.key.toStdString();
+            dst.captured = src.captured;
+            dst.events.reserve(src.events.size());
+            for (const auto& ev : src.events) {
+                MidiEvent e;
+                e.on = ev.on;
+                e.note = ev.note;
+                e.velocity = ev.velocity;
+                e.t_ms = ev.t_ms;
+                dst.events.push_back(e);
+            }
+            md.results.push_back(std::move(dst));
+        }
+        return QString::fromStdString(DeriveMidiKitToml(md));
+    }
     // Convert wizard state into the Qt-free KitProbeData snapshot and call
     // the shared deriver. The same function runs in tests against
     // .raw.jsonl captures, so any TOML-shape bug shows up before shipping.
@@ -894,6 +1008,85 @@ void KitProbeDialog::onSaveResults() {
         QMessageBox::warning(this, tr("Save failed"),
                              tr("Could not access user kits directory: %1")
                                  .arg(QString::fromUtf8(e.what())));
+        return;
+    }
+
+    // MIDI captures use a completely different on-disk format — event
+    // stream JSONL with a midi.jsonl extension, and a TOML that opens
+    // by port name rather than VID:PID. Handle that branch separately
+    // and return early so the rest of this function stays HID-shaped.
+    if (m_isMidi) {
+        const QByteArray name_hash = QCryptographicHash::hash(
+            (m_deviceName + m_midiPortId).toUtf8(),
+            QCryptographicHash::Sha1).toHex().left(8);
+        const QString base = QStringLiteral("midi_%1").arg(
+            QString::fromLatin1(name_hash));
+        const QString tomlPath = QString::fromStdString(
+            (dir / (base.toStdString() + ".toml")).string());
+        const QString rawPath = QString::fromStdString(
+            (dir / (base.toStdString() + ".midi.jsonl")).string());
+
+        QFile f(tomlPath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, tr("Save failed"), f.errorString());
+            return;
+        }
+        const QString tomlStr = deriveKitToml();
+        f.write(tomlStr.toUtf8());
+        f.close();
+
+        QFile rf(rawPath);
+        if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            const QString capture_uuid =
+                QUuid::createUuid().toString(QUuid::WithoutBraces);
+            QByteArray host_seed("shadps4-kit-probe-v6:");
+            host_seed += QSysInfo::machineUniqueId();
+            const QString host_hash = QString::fromLatin1(
+                QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256)
+                    .toHex().left(16));
+            const char* dtStr =
+                (m_deviceType == DeviceType::ProDrum) ? "pro_drum" : "drum";
+            QString meta = QStringLiteral(
+                "{\"type\":\"meta\",\"schema\":\"shadps4-midi-instrument/v1\","
+                "\"version\":1,"
+                "\"device_name\":\"%1\",\"port_id\":\"%2\","
+                "\"source\":\"midi\",\"device_type\":\"%3\","
+                "\"timestamp\":\"%4\","
+                "\"capture_uuid\":\"%5\",\"host_hash\":\"%6\"}\n")
+                .arg(QString(m_deviceName).replace('"', '\''))
+                .arg(QString(m_midiPortId).replace('"', '\''))
+                .arg(QString::fromLatin1(dtStr))
+                .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
+                .arg(capture_uuid)
+                .arg(host_hash);
+            rf.write(meta.toUtf8());
+            rf.write("{\"step\":\"_idle_baseline\",\"events\":[]}\n");
+            for (std::size_t i = 0; i < m_midi_results.size(); ++i) {
+                const auto& buf = m_midi_results[i];
+                if (!buf.captured) continue;
+                QString line = QStringLiteral("{\"step\":\"%1\",\"events\":[")
+                                   .arg(m_results[i].def.key);
+                for (std::size_t j = 0; j < buf.events.size(); ++j) {
+                    if (j) line += ',';
+                    line += QStringLiteral(
+                                "{\"on\":%1,\"note\":%2,\"vel\":%3,\"t_ms\":%4}")
+                                .arg(buf.events[j].on ? "true" : "false")
+                                .arg(buf.events[j].note)
+                                .arg(buf.events[j].velocity)
+                                .arg(buf.events[j].t_ms);
+                }
+                line += "]}\n";
+                rf.write(line.toUtf8());
+            }
+            rf.close();
+        }
+
+        QMessageBox::information(this, tr("Saved"),
+            tr("Saved into your shadPS4 user folder:\n\n"
+               "  %1   (runtime kit definition)\n"
+               "  %2   (raw MIDI event capture, for re-deriving later)")
+                .arg(tomlPath).arg(rawPath));
+        accept();
         return;
     }
 

@@ -12,6 +12,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -96,16 +97,23 @@ private:
 
     std::unique_ptr<Ui::KitProbeDialog> ui;
 
-    // Device. Exactly one of m_hidDev (SDL_hid_device*) or m_xinputDev
-    // (SDL_Gamepad*) is set while a kit is open. Both kept as void* so the
-    // header doesn't have to pull in SDL3 headers.
+    // Device. Exactly one of m_hidDev (SDL_hid_device*), m_xinputDev
+    // (SDL_Gamepad*), or m_midiDev (Input::MidiInput opaque handle) is
+    // set while a kit is open. All kept as void* so the header doesn't
+    // have to pull in SDL3 / midi_input.h.
     void* m_hidDev = nullptr;
     void* m_xinputDev = nullptr;
+    void* m_midiDev = nullptr;
     QString m_devicePath;
     QString m_deviceName;
     uint16_t m_vid = 0;
     uint16_t m_pid = 0;
     bool m_isXInput = false;
+    bool m_isMidi = false;
+    // For MIDI: the port id string ("client:port" on ALSA) the runtime
+    // needs to reopen the same device. Travels through the meta record
+    // verbatim. Empty for HID/XInput captures.
+    QString m_midiPortId;
 
     // Sampling state
     State m_state = State::SelectDevice;
@@ -115,7 +123,11 @@ private:
     static constexpr int kStepDurationMs = 5000;
     static constexpr int kBaselineDurationMs = 1500;
 
-    // Per-step results
+    // Per-step results. m_results is populated for HID / XInput probes
+    // (byte-grid stats + frame buffer). m_midi_results is populated for
+    // MIDI probes (raw Note On / Off events per step). Exactly one is
+    // populated for any given capture session — the other stays empty.
+    // The save path picks which to write based on m_isMidi.
     std::vector<StepResult> m_results;
     std::vector<std::vector<uint8_t>> m_idleRaw;
     std::array<uint8_t, 64> m_lastReport{};
@@ -123,6 +135,21 @@ private:
     std::array<int, 64> m_baselineMax{};   // per-byte max observed at idle
     std::array<int, 64> m_baselineMin{};   // per-byte min observed at idle
     std::set<int> m_motionBytes;           // bytes flagged as motion sensors
+    // Parallel to m_results: MIDI captures store raw events (note,
+    // velocity, on/off, ms since step start) instead of per-byte
+    // statistics. Encoded as 4-tuples to dodge a heavier include here.
+    struct MidiStepEvent {
+        bool on;
+        std::uint8_t note;
+        std::uint8_t velocity;
+        std::uint32_t t_ms;
+    };
+    struct MidiStepBuf {
+        bool captured = false;
+        std::vector<MidiStepEvent> events;
+        std::chrono::steady_clock::time_point step_started{};
+    };
+    std::vector<MidiStepBuf> m_midi_results;
     DeviceType m_deviceType = DeviceType::Drum;
     int m_reportLen = 27;
 

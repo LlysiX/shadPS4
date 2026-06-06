@@ -346,6 +346,11 @@ bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
         m_vid = 0;
         m_pid = 0;
         m_midiPortId = port_id;
+        // Set up the note grid right away so the user gets visual
+        // feedback the moment they hit a pad — without this they're
+        // staring at an empty / HID-shaped grid wondering whether the
+        // wizard is even listening.
+        resetByteGrid(0);
         return true;
     }
     // XInput-source devices: path is "xinput:<instance_id>". Skip the SDL_hid
@@ -521,7 +526,18 @@ void KitProbeDialog::onStartProbe() {
             setState(State::SelectDevice);
             return;
     }
-    for (const auto& s : Steps(m_deviceType)) m_results.push_back({s, {}, {}, false});
+    for (const auto& s : Steps(m_deviceType)) {
+        // MIDI drum kits / Python senders / electronic kits don't have
+        // dpad/face-button hardware — every channel message is a
+        // note-on/off, mapped to a pad. Force-walking the user through
+        // 11 button steps that can't possibly fire is pointless and
+        // makes the wizard feel broken on MIDI. Skip every digital /
+        // combo step for MIDI captures; the velocity (pad) and tilt
+        // motion steps are still kept because some e-drum modules
+        // emit those as continuous controllers.
+        if (m_isMidi && (s.kind == "digital" || s.kind == "combo")) continue;
+        m_results.push_back({s, {}, {}, false});
+    }
     // Parallel MIDI event buffer — same length as m_results so indices
     // line up. Stays unused for HID/XInput captures.
     m_midi_results.assign(m_results.size(), MidiStepBuf{});
@@ -709,10 +725,43 @@ void KitProbeDialog::onNextStep() {
 void KitProbeDialog::onHidReadable() {
     // MIDI path: drain events from the port. Events that arrive while
     // the wizard is in Step state are appended to the current step's
-    // event list with timestamps relative to the step start; outside
-    // Step (Idle baseline, Review, etc.) events are discarded.
+    // event list with timestamps relative to the step start. Events
+    // arriving during the Idle baseline phase wake the wizard up early
+    // — the user tapping a drum to verify the kit is on shouldn't have
+    // to wait the full 1.5 s baseline window.
     if (m_midiDev) {
         auto events = Input::MidiInput::DrainEvents(m_midiDev);
+        // Reflect note activity in the note grid regardless of wizard
+        // state so the user can see at a glance which pad they just hit.
+        constexpr int kFirstNote = 30;
+        constexpr int kNoteCount = 64;
+        for (const auto& ev : events) {
+            const int col = static_cast<int>(ev.note) - kFirstNote;
+            if (col < 0 || col >= kNoteCount) continue;
+            auto* cell = ui->byteGrid->item(1, col);
+            if (!cell) continue;
+            if (ev.on) {
+                cell->setText(QString::number(ev.velocity));
+                cell->setForeground(QBrush(QColor("#fff")));
+                cell->setBackground(QBrush(QColor("#5a7a3a")));
+            } else {
+                // Dim the cell on note-off but keep the velocity text
+                // so the user can still see what landed there.
+                cell->setBackground(QBrush(QColor("#3a4a2a")));
+            }
+        }
+        if (m_state == State::Idle && !events.empty()) {
+            // Skip the rest of the baseline window — we've seen real
+            // input from the device, that's enough to know it's alive.
+            ui->stepPrompt->setText(
+                tr("MIDI input detected (%1 event%2). Click Next to begin "
+                   "the walk-through.")
+                    .arg(events.size())
+                    .arg(events.size() == 1 ? "" : "s"));
+            ui->nextBtn->setEnabled(true);
+            ui->stepProgress->setValue(ui->stepProgress->maximum());
+            return;
+        }
         if (m_state == State::Step && m_sampling &&
             m_currentStep >= 0 && m_currentStep < (int)m_midi_results.size()) {
             auto& buf = m_midi_results[m_currentStep];
@@ -819,6 +868,31 @@ void KitProbeDialog::appendReportToCurrentStep(const uint8_t* data, std::size_t 
 
 void KitProbeDialog::resetByteGrid(int reportLen) {
     auto* g = ui->byteGrid;
+    // MIDI repurposes the byte grid as a note grid: 64 columns covering
+    // notes 30..93 (covers the entire General-MIDI percussion range and
+    // most melodic range). The header row shows the MIDI note number,
+    // the value row shows the most recent velocity for that note, and
+    // cells turn green on note-on so the user can see which pads they've
+    // hit during the probe.
+    if (m_isMidi) {
+        constexpr int kFirstNote = 30;
+        constexpr int kNoteCount = 64;
+        g->setColumnCount(kNoteCount);
+        g->setRowCount(2);
+        for (int i = 0; i < kNoteCount; ++i) {
+            auto* hdr = new QTableWidgetItem(QString::number(kFirstNote + i));
+            hdr->setFlags(Qt::ItemIsEnabled);
+            hdr->setForeground(QBrush(QColor("#888")));
+            g->setItem(0, i, hdr);
+            auto* cell = new QTableWidgetItem("--");
+            cell->setFlags(Qt::ItemIsEnabled);
+            cell->setForeground(QBrush(QColor("#666")));
+            g->setItem(1, i, cell);
+            g->setColumnWidth(i, 28);
+        }
+        g->resizeRowsToContents();
+        return;
+    }
     g->setColumnCount(reportLen);
     g->setRowCount(2);
     for (int i = 0; i < reportLen; ++i) {
@@ -863,27 +937,37 @@ void KitProbeDialog::onTickTimer() {
     if (m_state == State::Idle) {
         ui->stepProgress->setValue(std::min(elapsed, kBaselineDurationMs));
         if (elapsed >= kBaselineDurationMs) {
-            // A "silent" device (Santroller-style firmware, some wireless
-            // kits) only sends a report on state change. If we got nothing
-            // through the 1.5 s baseline, every byte still holds the
-            // initial baseline_min=0xFF / baseline_max=0 sentinels. Warn
-            // the user instead of silently continuing with all-zeros
-            // baseline data — the wizard's per-step transition detection
-            // misfires when baseline is wrong.
-            const bool received_anything = std::any_of(
-                m_baselineMin.begin(),
-                m_baselineMin.begin() + m_reportLen,
-                [](int v) { return v != 0xFF; });
-            if (!received_anything) {
+            if (m_isMidi) {
+                // MIDI is event-based — an idle drum kit / Python sender
+                // produces zero events during baseline, which is the
+                // normal case (not an error). Skip the HID byte-grid
+                // sentinel check and just let the user click Next.
                 ui->stepPrompt->setText(
-                    tr("⚠ No data received during baseline. Hold any "
-                       "button now to wake the kit, then release. The "
-                       "wizard will continue once it sees its first "
-                       "report."));
-            } else {
-                ui->stepPrompt->setText(
-                    tr("Baseline captured. Click Next to begin the walk-through."));
+                    tr("Baseline captured (MIDI idle). Click Next to begin the walk-through."));
                 ui->nextBtn->setEnabled(true);
+            } else {
+                // A "silent" HID device (Santroller-style firmware, some
+                // wireless kits) only sends a report on state change. If
+                // we got nothing through the 1.5 s baseline, every byte
+                // still holds the initial baseline_min=0xFF / max=0
+                // sentinels. Warn instead of silently continuing with
+                // all-zeros baseline data — the wizard's per-step
+                // transition detection misfires when baseline is wrong.
+                const bool received_anything = std::any_of(
+                    m_baselineMin.begin(),
+                    m_baselineMin.begin() + m_reportLen,
+                    [](int v) { return v != 0xFF; });
+                if (!received_anything) {
+                    ui->stepPrompt->setText(
+                        tr("⚠ No data received during baseline. Hold any "
+                           "button now to wake the kit, then release. The "
+                           "wizard will continue once it sees its first "
+                           "report."));
+                } else {
+                    ui->stepPrompt->setText(
+                        tr("Baseline captured. Click Next to begin the walk-through."));
+                    ui->nextBtn->setEnabled(true);
+                }
             }
         }
     } else if (m_state == State::Step && m_sampling) {
@@ -1016,11 +1100,30 @@ void KitProbeDialog::onSaveResults() {
     // by port name rather than VID:PID. Handle that branch separately
     // and return early so the rest of this function stays HID-shaped.
     if (m_isMidi) {
+        // Mirror the HID filename pattern (kit_<vid>_<pid>_<hash>) so
+        // someone browsing ~/.local/share/shadPS4/kits can guess what
+        // each TOML belongs to. We don't have vid:pid for MIDI so a
+        // sanitised slug of the device name takes that slot — lowered,
+        // non-alnum collapsed to '_', truncated to 32 chars to keep the
+        // basename sane, then a short hash of (name + port_id) keeps
+        // collisions impossible.
+        QString slug = m_deviceName.toLower();
+        for (QChar& c : slug)
+            if (!c.isLetterOrNumber()) c = '_';
+        // Collapse runs of underscores so "client : python gh" doesn't
+        // become "client___python___gh".
+        while (slug.contains(QStringLiteral("__")))
+            slug.replace(QStringLiteral("__"), QStringLiteral("_"));
+        if (slug.startsWith('_')) slug.remove(0, 1);
+        if (slug.endsWith('_')) slug.chop(1);
+        if (slug.size() > 32) slug.truncate(32);
+        if (slug.isEmpty()) slug = QStringLiteral("midi");
         const QByteArray name_hash = QCryptographicHash::hash(
             (m_deviceName + m_midiPortId).toUtf8(),
             QCryptographicHash::Sha1).toHex().left(8);
-        const QString base = QStringLiteral("midi_%1").arg(
-            QString::fromLatin1(name_hash));
+        const QString base = QStringLiteral("midi_%1_%2")
+                                  .arg(slug)
+                                  .arg(QString::fromLatin1(name_hash));
         const QString tomlPath = QString::fromStdString(
             (dir / (base.toStdString() + ".toml")).string());
         const QString rawPath = QString::fromStdString(
@@ -1081,10 +1184,16 @@ void KitProbeDialog::onSaveResults() {
             rf.close();
         }
 
+        // Hot-reload: drop the kit into g_kits and close any open slot
+        // that was bound to this vid:pid so the runtime PollLoop rebinds
+        // against the just-written TOML on its next tick. Without this
+        // the user has to close + reopen the game to pick up changes.
+        Input::HidInstrument::LoadKitFile(tomlPath.toStdString());
         QMessageBox::information(this, tr("Saved"),
             tr("Saved into your shadPS4 user folder:\n\n"
                "  %1   (runtime kit definition)\n"
-               "  %2   (raw MIDI event capture, for re-deriving later)")
+               "  %2   (raw MIDI event capture, for re-deriving later)\n\n"
+               "Re-binding live — your kit's new note map is active immediately.")
                 .arg(tomlPath).arg(rawPath));
         accept();
         return;

@@ -257,10 +257,17 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     // are per-user-slot so harmony singers can tune their own gate;
     // hold is shared because the tail-decay feel rarely varies per mic.
     const int slot = port_ptr->user_id - 1;  // Config clamps OOB internally
-    if (Config::getMicGateEnabled(slot) && sample_size == 2 && bytesRead > 0) {
+    // Update the VU peak unconditionally for any S16 chunk so the
+    // Player Assignment dialog's meter reflects mic activity even
+    // when the gate is disabled.
+    float level_db = -120.0f;
+    if (sample_size == 2 && bytesRead > 0) {
         const auto* samples = static_cast<const int16_t*>(out_buffer);
         const int sample_count = bytesRead / 2;
-        const float level_db = RmsDbS16(samples, sample_count);
+        level_db = RmsDbS16(samples, sample_count);
+        port_ptr->peak_dbfs.store(level_db, std::memory_order_relaxed);
+    }
+    if (Config::getMicGateEnabled(slot) && sample_size == 2 && bytesRead > 0) {
         const float threshold_db = static_cast<float>(Config::getMicGateThresholdDb(slot));
         const auto hold = std::chrono::milliseconds(Config::getMicGateHoldMs());
         const auto now = std::chrono::steady_clock::now();
@@ -287,6 +294,19 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     }
 
     return bytesRead / frame_size;
+}
+
+float SDLAudioIn::GetPeakDbfs(int slot) {
+    // user_id is 1..4 in the controller-slot convention. Walk open
+    // ports to find the one bound to the requested slot. We don't index
+    // by handle here because the dialog cares about "Player N's mic"
+    // not "the Nth handle the game asked for".
+    std::scoped_lock lock{m_mutex};
+    for (auto& port : portsIn) {
+        if (port.isOpen && port.user_id == slot + 1)
+            return port.peak_dbfs.load(std::memory_order_relaxed);
+    }
+    return -120.0f;
 }
 
 bool SDLAudioIn::IsSilent(int handle) {

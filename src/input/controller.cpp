@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <unordered_set>
 #include <SDL3/SDL.h>
 #include <common/singleton.h>
@@ -275,6 +276,8 @@ std::string PathForJoystick(SDL_JoystickID id) {
     return p ? std::string(p) : std::string{};
 }
 
+} // namespace
+
 // Find the player slot a joystick is explicitly bound to, or -1 if
 // it's unbound. Walks Config's per-slot device lists. Prefers a path
 // match (uniquely identifies a specific USB port) when the binding
@@ -283,22 +286,27 @@ std::string PathForJoystick(SDL_JoystickID id) {
 // give us. Path-vs-GUID matters when the user has two physically
 // identical controllers — they share a GUID but have distinct paths.
 int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
-    // Pass 1: path-aware match wins.
+    // Pass 1: exact (guid, path) match wins. Used so two identical
+    // controllers (same VID:PID, same SDL GUID) can be told apart by
+    // which USB port they're plugged into.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
             if (dev.kind != Config::PlayerDeviceKind::Gamepad)
                 continue;
-            if (!dev.path.empty() && dev.path == path)
+            if (!dev.path.empty() && dev.path == path && dev.guid == guid)
                 return slot;
         }
     }
-    // Pass 2: GUID-only fallback.
+    // Pass 2: GUID-only fallback (path-pinned bindings included).
+    // The previous behaviour skipped path-pinned bindings entirely
+    // when paths drifted — kernel-assigned event node renumbering
+    // would silently disable the slot. Now a controller whose GUID
+    // is bound somewhere is at least placed there, even when its path
+    // changed since the user last saved. Identical-controller setups
+    // still get exact-path placement via pass 1 above.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
             if (dev.kind != Config::PlayerDeviceKind::Gamepad)
-                continue;
-            // Skip bindings that pin a path — those only match in pass 1.
-            if (!dev.path.empty())
                 continue;
             if (dev.guid == guid)
                 return slot;
@@ -306,6 +314,8 @@ int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
     }
     return -1;
 }
+
+namespace {
 
 // Convenience wrapper for code paths that don't have a path handy yet
 // (live disconnect detection etc.). Equivalent to passing path="".
@@ -389,18 +399,17 @@ void GameControllers::ApplyAssignmentChanges() {
 }
 
 void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot, SDL_Gamepad* pad,
-                                         bool& slot_taken, bool fire_login) {
-    using namespace Libraries::UserService;
+                                         bool& slot_taken, bool /*fire_login*/) {
     auto* gc = controllers[slot];
     if (!slot_taken) {
         // First device for this slot — becomes the primary.
         gc->m_sdl_gamepad = pad;
-        gc->user_id = slot + 1;
         gc->player_index = static_cast<u8>(slot);
         slot_taken = true;
-        if (fire_login) {
-            AddUserServiceEvent({OrbisUserServiceEventType::Login, slot + 1});
-        }
+        // No auto-Login. The slot stays un-logged-in (user_id == -1)
+        // until the user actually presses a button on this gamepad.
+        // EnsureLoggedIn (called from FinalizeUpdate) fires Login then,
+        // which is what triggers a game's "press OPTIONS to JOIN" flow.
         LOG_INFO(Input, "Gamepad registered for slot {} (primary). Handle: {}", slot,
                  SDL_GetGamepadID(pad));
     } else {
@@ -540,13 +549,11 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
         PlaceGamepadInSlot(controllers, target, pad, slot_taken[target], true);
         assigned_ids.insert(id);
     }
-    if (is_first_check) [[unlikely]] {
-        is_first_check = false;
-        if (controller_count == 0) {
-            controllers[0]->user_id = 1;
-            AddUserServiceEvent({OrbisUserServiceEventType::Login, 1});
-        }
-    }
+    // No auto-Login fallback. is_first_check used to grant Login(1) when
+    // no controllers were present at first attach; the new model is "fire
+    // Login on first real input", so we drop the fallback to keep
+    // behaviour symmetric across all four players.
+    is_first_check = false;
 }
 
 u32 GameController::Poll() {
@@ -569,9 +576,45 @@ u32 GameController::Poll() {
     return 100;
 }
 
+std::array<std::atomic<u64>, 4> g_last_input_ns{};
+
+void NoteInputOnSlot(int slot) {
+    if (slot < 0 || slot >= 4)
+        return;
+    // Steady clock so the dialog can diff "now - last" without
+    // worrying about wall-clock jumps.
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const u64 ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+    g_last_input_ns[slot].store(ns, std::memory_order_relaxed);
+}
+
+u64 GetLastInputNs(int slot) {
+    if (slot < 0 || slot >= 4)
+        return 0;
+    return g_last_input_ns[slot].load(std::memory_order_relaxed);
+}
+
+void GameControllers::EnsureLoggedIn(int slot) {
+    if (slot < 0 || slot >= 4)
+        return;
+    using namespace Libraries::UserService;
+    auto controllers = *Common::Singleton<GameControllers>::Instance();
+    auto* gc = controllers[slot];
+    if (gc->user_id != static_cast<u32>(-1)) {
+        return;
+    }
+    gc->user_id = slot + 1;
+    AddUserServiceEvent({OrbisUserServiceEventType::Login, slot + 1});
+    LOG_INFO(Input,
+             "Player {} JOIN on first input (slot={}, useSpecialPad={}, class={}, "
+             "legacy={})",
+             slot + 1, slot, Config::getUseSpecialPad(slot + 1),
+             Config::getSpecialPadClass(slot + 1),
+             Config::getSpecialPadLegacyPassUSBRawHID(slot + 1));
+}
+
 u8 GameControllers::GetGamepadIndexFromJoystickId(SDL_JoystickID id) {
     s32 index = SDL_GetGamepadPlayerIndex(SDL_GetGamepadFromID(id));
-    // LOG_INFO(Input, "Gamepad index: {}", index);
     return index;
 }
 

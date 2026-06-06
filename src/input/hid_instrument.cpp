@@ -26,6 +26,7 @@
 
 #include "common/config.h"
 #include "common/logging/log.h"
+#include "input/controller.h"
 
 namespace OPB = Libraries::Pad;
 
@@ -58,6 +59,42 @@ void CloseSlot(SlotState& s) {
     s.has_data = false;
     s.last_report_len = 0;
 }
+
+} // namespace
+
+bool LoadKitFile(const std::string& toml_path) {
+    if (!LoadKitFromToml(toml_path)) return false;
+    u16 new_vid = 0, new_pid = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_kits_mu);
+        for (const auto& kd : g_kits) {
+            if (kd.source_file == toml_path) {
+                new_vid = kd.vid;
+                new_pid = kd.pid;
+                break;
+            }
+        }
+    }
+    if (new_vid == 0 && new_pid == 0) return true;
+    // Close any open slot whose vid:pid matches the just-loaded kit so
+    // PollLoop re-binds against the fresh KitDef on its next tick. Both
+    // s.kit pointer and the SDL / MIDI handle get dropped — the kit
+    // pointer alone wouldn't trigger PollLoop's "if (!s.dev && !s.gamepad
+    // && !s.midi)" rebind branch.
+    for (int i = 0; i < kNumSlots; ++i) {
+        auto& s = g_slots[i];
+        if (s.vid == new_vid && s.pid == new_pid) {
+            CloseSlot(s);
+            LOG_INFO(Input,
+                     "LoadKitFile: closed slot {} so PollLoop rebinds with "
+                     "fresh kit ({:04x}:{:04x})",
+                     i + 1, new_vid, new_pid);
+        }
+    }
+    return true;
+}
+
+namespace {
 
 // 17-byte synthetic HID-style report we build from an SDL gamepad. Every
 // XInput-source TOML reads from these byte offsets:
@@ -144,20 +181,25 @@ bool GamepadMatchesKit(const KitDef& kd, SDL_JoystickID gpid) {
     return false;
 }
 
-// True if `slot` (1..4) has at least one Kit binding in Config::getPlayerSlotDevices.
-// When this returns true we restrict the slot to its bound kits only —
-// other kits get rejected here so they can land in the slot they were
-// actually intended for. Slots with no Kit binding accept any kit (back-
-// compat with the pre-per-player behaviour).
-bool SlotAcceptsKit(int slot, u16 vid, u16 pid) {
+// True when `slot` (1..4) accepts the given kit definition. Slots with at
+// least one Kit or MIDI binding in Config::getPlayerSlotDevices restrict
+// to *that* binding so an HID-source guitar kit can't accidentally
+// occupy the slot the user reserved for a MIDI drum (or vice versa).
+// Slots with no instrument binding accept any kit (back-compat with
+// pre-per-player behaviour).
+bool SlotAcceptsKit(int slot, const KitDef& kd) {
     const auto devices = Config::getPlayerSlotDevices(slot);
-    bool any_kit_binding = false;
+    bool any_binding = false;
     for (const auto& dev : devices) {
-        if (dev.kind != Config::PlayerDeviceKind::Kit) continue;
-        any_kit_binding = true;
-        if (dev.vid == vid && dev.pid == pid) return true;
+        if (dev.kind == Config::PlayerDeviceKind::Kit) {
+            any_binding = true;
+            if (dev.vid == kd.vid && dev.pid == kd.pid) return true;
+        } else if (dev.kind == Config::PlayerDeviceKind::Midi) {
+            any_binding = true;
+            if (kd.source == "midi" && dev.guid == kd.midi_port_id) return true;
+        }
     }
-    return !any_kit_binding;
+    return !any_binding;
 }
 
 void PollLoop() {
@@ -188,7 +230,7 @@ void PollLoop() {
                     // Other kits are skipped here so they can land in
                     // whichever (other) slot they were bound to in a
                     // later iteration.
-                    if (!SlotAcceptsKit(slot, kd.vid, kd.pid)) continue;
+                    if (!SlotAcceptsKit(slot, kd)) continue;
                     if (kd.source == "midi") {
                         // Resolve port_id → current handle. Subscribe via
                         // Input::MidiInput, install the kit's note→byte
@@ -197,6 +239,14 @@ void PollLoop() {
                         void* port = Input::MidiInput::OpenInputPort(kd.midi_port_id);
                         if (!port) continue;
                         Input::MidiInput::ConfigurePadMap(port, kd.midi_pad_map);
+                        LOG_INFO(Input,
+                                 "HID instrument slot {}: MIDI ConfigurePadMap "
+                                 "applied {} note->byte entries (drum_red_byte={} "
+                                 "drum_blue_byte={} drum_yellow_byte={} "
+                                 "drum_green_byte={})",
+                                 slot, kd.midi_pad_map.size(),
+                                 kd.drum_red_byte, kd.drum_blue_byte,
+                                 kd.drum_yellow_byte, kd.drum_green_byte);
                         s.midi = port;
                         s.vid = kd.vid;
                         s.pid = kd.pid;
@@ -269,27 +319,66 @@ void PollLoop() {
                     s.midi, buf, Input::MidiInput::kSnapshotBytes);
                 if (n > 0) {
                     std::lock_guard<std::mutex> lk(s.mu);
+                    const bool changed =
+                        s.last_report_len != n || std::memcmp(s.last_report, buf, n) != 0;
                     std::memcpy(s.last_report, buf, n);
                     s.last_report_len = n;
                     s.has_data = true;
+                    if (changed) {
+                        Input::NoteInputOnSlot(slot - 1);
+                        Input::GameControllers::EnsureLoggedIn(slot - 1);
+                        // Log non-zero snapshot bytes so we can see
+                        // which pads are firing on the wire.
+                        bool any_nonzero = false;
+                        for (std::size_t k = 0; k < n; ++k)
+                            if (buf[k]) { any_nonzero = true; break; }
+                        if (any_nonzero) {
+                            LOG_INFO(Input,
+                                     "MIDI snapshot slot {}: [r={} b={} y={} g={} "
+                                     "kick={} yC={} bC={} gC={}] face_flags=0x{:02x}",
+                                     slot, buf[3], buf[5], buf[4], buf[6], buf[1],
+                                     buf[8], buf[9], buf[10], buf[15]);
+                        }
+                    }
                 }
             } else if (s.gamepad) {
                 SDL_UpdateGamepads();
                 u8 buf[kXInputReportLen];
                 FillXInputReport(static_cast<SDL_Gamepad*>(s.gamepad), buf);
                 std::lock_guard<std::mutex> lk(s.mu);
+                const bool changed =
+                    s.last_report_len != kXInputReportLen ||
+                    std::memcmp(s.last_report, buf, kXInputReportLen) != 0;
                 std::memcpy(s.last_report, buf, kXInputReportLen);
                 s.last_report_len = kXInputReportLen;
                 s.has_data = true;
+                if (changed) {
+                    Input::NoteInputOnSlot(slot - 1);
+                    Input::GameControllers::EnsureLoggedIn(slot - 1);
+                }
             } else if (s.dev) {
                 u8 buf[kMaxRawReport];
                 int n = SDL_hid_read_timeout(
                     static_cast<SDL_hid_device*>(s.dev), buf, kMaxRawReport, 0);
                 if (n > 0) {
                     std::lock_guard<std::mutex> lk(s.mu);
+                    const bool changed =
+                        s.last_report_len != static_cast<std::size_t>(n) ||
+                        std::memcmp(s.last_report, buf, n) != 0;
                     std::memcpy(s.last_report, buf, n);
                     s.last_report_len = static_cast<std::size_t>(n);
                     s.has_data = true;
+                    if (changed) {
+                        Input::NoteInputOnSlot(slot - 1);
+                        // Fire the slot's Login event the first time
+                        // real instrument input arrives — same UX HID
+                        // gamepad / keyboard input gets via
+                        // FinalizeUpdate. Without this, a MIDI / raw-HID
+                        // / XInput-source kit that's the slot's ONLY
+                        // input source never reaches the game's user
+                        // list, so the game treats the slot as absent.
+                        Input::GameControllers::EnsureLoggedIn(slot - 1);
+                    }
                 } else if (n < 0) {
                     LOG_WARNING(Input,
                                 "HID instrument slot {}: read error, closing & will retry",

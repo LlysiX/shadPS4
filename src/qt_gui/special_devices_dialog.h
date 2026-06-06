@@ -14,6 +14,7 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QListWidget;
 class QPushButton;
 
 namespace Ui {
@@ -51,4 +52,13 @@ private:
     QLabel*    statusLbl(int slot) const;
     QPushButton* probeBtn(int slot) const;
     QLabel*    udevWarn(int slot) const;
+
+    // Kit-library section. Built programmatically into the existing
+    // root layout (the .ui file's per-player grid is hidden). One row
+    // per detected HID VID:PID — green ✓ when probed (a kit TOML
+    // matches), grey "not probed" otherwise, with an inline "Probe…"
+    // button that opens the same wizard the per-player tab uses.
+    void rebuildKitLibrary();
+    QListWidget* m_kit_list = nullptr;
+    QPushButton* m_probe_btn = nullptr;
 };

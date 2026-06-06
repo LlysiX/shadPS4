@@ -1,15 +1,42 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/config.h"
 #include "common/logging/log.h"
 #include "core/libraries/audio/audioin.h"
 #include "core/libraries/audio/sdl_in.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/pad/pad.h"
 
 namespace Libraries::AudioIn {
 
 static std::unique_ptr<SDLAudioIn> audio = std::make_unique<SDLAudioIn>();
+
+float GetMicPeakDbfs(int slot) {
+    return audio ? audio->GetPeakDbfs(slot) : -120.0f;
+}
+
+// Block sceAudioInOpen for slots whose pad class declares an instrument
+// (Guitar / Drum / DjTurntable / Dancemat). Games like Rock Band 4 probe
+// every user_id for a mic and classify the slot as a vocalist if the open
+// succeeds — that races ahead of the device-class lookup and a drummer
+// gets shown as a microphone. Returning ORBIS_AUDIO_IN_ERROR_NOT_OPENED
+// here makes the slot's pad class win the classification.
+//
+// Standard (0), Mic (no enum — exposed via audio detection), Navigation,
+// SteeringWheel, Stick, FightStick, and Gun all still get mics — only the
+// vocal-conflicting instrument classes lock the audio path out.
+static bool SlotIsInstrument(int userId) {
+    if (userId < 1 || userId > 4) return false;
+    if (!Config::getUseSpecialPad(userId)) return false;
+    const int cls = Config::getSpecialPadClass(userId);
+    using Libraries::Pad::OrbisPadDeviceClass;
+    return cls == static_cast<int>(OrbisPadDeviceClass::Guitar) ||
+           cls == static_cast<int>(OrbisPadDeviceClass::Drum) ||
+           cls == static_cast<int>(OrbisPadDeviceClass::DjTurntable) ||
+           cls == static_cast<int>(OrbisPadDeviceClass::Dancemat);
+}
 
 int PS4_SYSV_ABI sceAudioInChangeAppModuleState() {
     LOG_ERROR(Lib_AudioIn, "(STUBBED) called");
@@ -115,7 +142,25 @@ int PS4_SYSV_ABI sceAudioInHqOpen(Libraries::UserService::OrbisUserServiceUserId
     // which open one mic per logged-in player (userId 2/3/4 for players
     // 2/3/4). The backend's 8-slot pool already supports concurrent opens;
     // per-user device + gate config picks the right physical mic per slot.
+    LOG_INFO(Lib_AudioIn,
+             "AudioInOpen ENTRY user_id={} type={} len={} freq={} param={:#x} "
+             "useSpecialPad={} class={} legacy={}",
+             userId, type, len, freq, param,
+             (userId >= 1 && userId <= 4) ? Config::getUseSpecialPad(userId) : false,
+             (userId >= 1 && userId <= 4) ? Config::getSpecialPadClass(userId) : 0,
+             (userId >= 1 && userId <= 4)
+                 ? Config::getSpecialPadLegacyPassUSBRawHID(userId)
+                 : false);
+    if (SlotIsInstrument(userId)) {
+        LOG_INFO(Lib_AudioIn,
+                 "AudioInOpen: REFUSING user_id={} — slot configured as "
+                 "instrument (class={}); returning INVALID_PORT so the "
+                 "game classifies via pad class instead",
+                 userId, Config::getSpecialPadClass(userId));
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
     int result = audio->AudioInOpen(userId, type, len, freq, param);
+    LOG_INFO(Lib_AudioIn, "AudioInOpen RESULT user_id={} -> {:#x}", userId, result);
     if (result < 0) {
         LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
     }
@@ -150,7 +195,25 @@ int PS4_SYSV_ABI sceAudioInOpen(Libraries::UserService::OrbisUserServiceUserId u
                                 u32 index, u32 len, u32 freq, u32 param) {
     // See sceAudioInHqOpen above — the userId != 1 guard was a band-aid
     // for the single-mic era; the backend now routes per-user.
+    LOG_INFO(Lib_AudioIn,
+             "AudioInOpen ENTRY user_id={} type={} len={} freq={} param={:#x} "
+             "useSpecialPad={} class={} legacy={}",
+             userId, type, len, freq, param,
+             (userId >= 1 && userId <= 4) ? Config::getUseSpecialPad(userId) : false,
+             (userId >= 1 && userId <= 4) ? Config::getSpecialPadClass(userId) : 0,
+             (userId >= 1 && userId <= 4)
+                 ? Config::getSpecialPadLegacyPassUSBRawHID(userId)
+                 : false);
+    if (SlotIsInstrument(userId)) {
+        LOG_INFO(Lib_AudioIn,
+                 "AudioInOpen: REFUSING user_id={} — slot configured as "
+                 "instrument (class={}); returning INVALID_PORT so the "
+                 "game classifies via pad class instead",
+                 userId, Config::getSpecialPadClass(userId));
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
     int result = audio->AudioInOpen(userId, type, len, freq, param);
+    LOG_INFO(Lib_AudioIn, "AudioInOpen RESULT user_id={} -> {:#x}", userId, result);
     if (result < 0) {
         LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
     }

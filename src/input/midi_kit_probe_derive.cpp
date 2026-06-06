@@ -128,13 +128,71 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     os << "device_subclass = \""
        << (is_pro ? "pro_drum" : "drum") << "\"\n\n";
 
-    // The Note → pad map. Multiple notes per pad are kept (some modules
-    // expose snare head vs rim as separate notes, or hi-hat closed vs
-    // open). The runtime ORs all listed notes into the same pad slot.
+    // The Note → pad map. A note that arrived during multiple steps
+    // (kick echo bleeding into the red/blue/green captures, etc.) is
+    // assigned ONLY to the pad where it had the highest peak velocity.
+    // Without this, last-writer-wins in the loader would swap pads at
+    // random — the user's red hit could land as green just because
+    // kick's note 36 also appeared in the orange step.
+    struct PadEntry { const PadDef* pad; std::vector<NoteStats> notes; };
+    std::vector<PadEntry> entries;
+    const auto add_pad_entries = [&](const PadDef* list, std::size_t n) {
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto* step = FindStep(data, list[i].step);
+            if (!step) continue;
+            auto ranked = RankNotesForStep(*step);
+            if (ranked.empty()) continue;
+            entries.push_back({&list[i], std::move(ranked)});
+        }
+    };
+    add_pad_entries(kDrumPads, sizeof(kDrumPads) / sizeof(kDrumPads[0]));
+    if (is_pro)
+        add_pad_entries(kProCymbals, sizeof(kProCymbals) / sizeof(kProCymbals[0]));
+
+    // Each note gets assigned to the pad with the highest peak
+    // velocity. On peak ties we prefer the pad that captured more
+    // hits — the "real" pad gets pressed repeatedly, cross-talk strays
+    // bleed in a small number of times. Without the count tiebreaker
+    // a user's red-pad capture (14 hits of note 36 at peak 127) and
+    // a cross-talk leak into blue-pad (5 hits of note 36 at peak 127)
+    // would tie and the loader would assign by iteration order rather
+    // than meaningful preference.
+    struct OwnerKey { std::size_t pad_idx; std::uint8_t peak; int count; };
+    std::map<std::uint8_t, OwnerKey> best_owner;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        for (const auto& n : entries[i].notes) {
+            const OwnerKey cand{i, n.peak_vel, n.count};
+            auto it = best_owner.find(n.note);
+            bool replace = it == best_owner.end();
+            if (!replace) {
+                if (cand.peak > it->second.peak) replace = true;
+                else if (cand.peak == it->second.peak &&
+                         cand.count > it->second.count)
+                    replace = true;
+            }
+            if (replace) best_owner[n.note] = cand;
+        }
+    }
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        auto& notes = entries[i].notes;
+        notes.erase(std::remove_if(notes.begin(), notes.end(),
+                                    [&](const NoteStats& s) {
+                                        auto it = best_owner.find(s.note);
+                                        return it == best_owner.end() ||
+                                               it->second.pad_idx != i;
+                                    }),
+                    notes.end());
+    }
+
     os << "[midi_pad_map]\n";
-    for (const auto& pad : kDrumPads) EmitPadMap(os, data, pad);
-    if (is_pro) {
-        for (const auto& pad : kProCymbals) EmitPadMap(os, data, pad);
+    for (const auto& e : entries) {
+        if (e.notes.empty()) continue;
+        os << e.pad->toml_key << " = [";
+        for (std::size_t i = 0; i < e.notes.size(); ++i) {
+            if (i) os << ", ";
+            os << static_cast<int>(e.notes[i].note);
+        }
+        os << "]\n";
     }
     os << "\n";
 

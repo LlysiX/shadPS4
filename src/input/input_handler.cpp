@@ -410,6 +410,13 @@ void ParseInputConfig(const std::string game_id = "") {
                     break;
                 }
             }
+            LOG_INFO(Input,
+                     "Keyboard-route: line='{}' -> slot {} (P1devs={}, P2devs={}, "
+                     "P3devs={}, P4devs={})",
+                     line, output_gamepad_id, Config::getPlayerSlotDevices(1).size(),
+                     Config::getPlayerSlotDevices(2).size(),
+                     Config::getPlayerSlotDevices(3).size(),
+                     Config::getPlayerSlotDevices(4).size());
         }
         if (button_it != string_to_cbutton_map.end()) {
             // todo add new shit here
@@ -569,6 +576,14 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
     if (!state_changed) {
         return;
     }
+    // Fire Login the first time real input lands on this slot. No-op
+    // when the slot is already logged in. This is what gives RB4 and
+    // similar games their "press OPTIONS to JOIN" UX — pressing any
+    // bound input on a previously-silent slot signs that player in.
+    Input::GameControllers::EnsureLoggedIn(gamepad_index);
+    // Stamp the slot so the Player Assignment dialog's tab indicator
+    // glows when this slot is the one currently producing input.
+    Input::NoteInputOnSlot(gamepad_index);
     old_button_state = new_button_state;
     old_param = *new_param;
     float touchpad_x = 0;

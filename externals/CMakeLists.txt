@@ -29,11 +29,32 @@ endif()
 # RtMidi — cross-platform MIDI input. Linux: ALSA, macOS: CoreMIDI,
 # Windows: WinMM. Built as a static library; JACK / Android backends
 # stay disabled.
+#
+# RtMidi's own CMakeLists defaults each API option to a variable that
+# isn't set yet at option() time (e.g. RTMIDI_API_ALSA defaults to
+# ${ALSA}, which is empty until find_package(ALSA) runs inside the
+# subdirectory's enable block — too late). The end result without an
+# explicit override is "every backend OFF, RtMidi silently has zero
+# API support." Pin the per-platform backend ON here so enumeration
+# actually finds anything at runtime.
 if (NOT TARGET rtmidi)
     set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(RTMIDI_API_JACK   OFF CACHE BOOL "" FORCE)
     set(RTMIDI_API_AMIDI  OFF CACHE BOOL "" FORCE)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(RTMIDI_API_ALSA ON CACHE BOOL "" FORCE)
+        set(RTMIDI_API_CORE  OFF CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WINMM OFF CACHE BOOL "" FORCE)
+    elseif (APPLE)
+        set(RTMIDI_API_ALSA  OFF CACHE BOOL "" FORCE)
+        set(RTMIDI_API_CORE  ON CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WINMM OFF CACHE BOOL "" FORCE)
+    elseif (WIN32)
+        set(RTMIDI_API_ALSA  OFF CACHE BOOL "" FORCE)
+        set(RTMIDI_API_CORE  OFF CACHE BOOL "" FORCE)
+        set(RTMIDI_API_WINMM ON CACHE BOOL "" FORCE)
+    endif()
     add_subdirectory(rtmidi)
 endif()
 

@@ -76,7 +76,20 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
 // Inspection helpers for the Qt UI.
 std::string GetActiveKitName(int slot);    // empty if no kit open
 std::string GetActiveKitSource(int slot);  // "hid" / "xinput" / "", empty if no kit
+// Device-class string ("guitar" / "drum" / "") declared in the kit's TOML for
+// the slot's currently-loaded kit. Empty when no kit is active for the slot.
+// Used by pad.cpp to honour the TOML over the per-slot Config when legacy
+// raw-HID pass-through is on — that's the "Automatic" choice surfaced in the
+// Special Devices dialog.
+std::string GetActiveKitDeviceClass(int slot);
 std::size_t GetLoadedKitCount();         // for "N kits loaded" status
+
+// Load (or reload) a single kit TOML into g_kits and close any open
+// slot whose currently-bound kit's vid:pid matches the new kit's. The
+// next PollLoop iteration re-binds with the fresh KitDef. Called from
+// the wizard's onSaveResults so re-probing a kit takes effect without
+// the user having to close + reopen the game.
+bool LoadKitFile(const std::string& toml_path);
 
 // True if any player slot has legacy raw-HID enabled AND we have a kit
 // definition matching the given VID:PID. Used by libSceUsbd to hide kits

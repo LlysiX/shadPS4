@@ -1229,7 +1229,13 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
                                                    is_game_specific);
         for (int i = 0; i < kNumPlayerSlots; ++i) {
             const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
-            playerSlotDevices[i] = toml::find_or<std::vector<std::string>>(input, key, {});
+            // Per-game configs that don't mention player-slot bindings must
+            // NOT clobber the global assignment loaded earlier — find_or
+            // would write back the default empty vector. Only overwrite when
+            // the file actually carries the key.
+            if (input.contains(key)) {
+                playerSlotDevices[i] = toml::find<std::vector<std::string>>(input, key);
+            }
         }
         isMotionControlsEnabled.setFromToml(input, "isMotionControlsEnabled", is_game_specific);
         useUnifiedInputConfig.setFromToml(input, "useUnifiedInputConfig", is_game_specific);

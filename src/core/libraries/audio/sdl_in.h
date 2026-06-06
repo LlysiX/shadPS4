@@ -41,6 +41,12 @@ public:
     // (silent) for an unopened/invalid handle.
     bool IsSilent(int handle);
 
+    // Most recent peak amplitude (dBFS, -120 = no signal) for the SDL
+    // port currently bound to the given player slot (0..3). Used by the
+    // Player Assignment dialog's VU meter. Returns -120 when no port on
+    // this slot is open.
+    float GetPeakDbfs(int slot);
+
 private:
     // Per-port state. Lives in the fixed-size portsIn array so the pointer
     // we hand to SDL_SetAudioStreamPutCallback as userdata is stable for
@@ -81,6 +87,10 @@ private:
         // its first sceAudioInInput call isn't told the mic is silent —
         // otherwise it may skip reading forever and the flag never clears.
         std::atomic<bool> silent{false};
+        // Latest peak amplitude expressed as dBFS (−inf..0). Updated by
+        // the input callback each chunk; read by the Player Assignment
+        // dialog's VU meter polling. -120 stands in for "no signal yet".
+        std::atomic<float> peak_dbfs{-120.0f};
 
         void Reset() {
             isOpen = false;
@@ -95,6 +105,7 @@ private:
             gate_open = false;
             last_active = {};
             silent.store(false, std::memory_order_relaxed);
+            peak_dbfs.store(-120.0f, std::memory_order_relaxed);
             // mutex / cv are left in place — they're recycled when the
             // slot is reopened.
         }

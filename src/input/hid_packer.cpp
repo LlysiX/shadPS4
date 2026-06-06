@@ -138,8 +138,46 @@ bool LoadKitFromToml(const std::string& file_path) {
             k.drum_blue_cymbal_byte   = 9;   // kSnapByteCymBlue
             k.drum_green_cymbal_byte  = 10;  // kSnapByteCymGreen
             k.report_length = 16;            // kSnapshotBytes
+            // RB4 + similar games only register a drum hit when the
+            // matching face button is set in OrbisPadData::buttons —
+            // velocity in deviceUniqueData alone is silent. Build a
+            // synthetic button_bytes table so PackButtons fires the
+            // corresponding face bit on ANY non-zero velocity byte.
+            //
+            // PS4 RB color → button mapping is canonical and matches
+            // what the guitar TOMLs encode in [buttons_byte_*]: green
+            // is Cross (lowest neck position), red is Circle, yellow
+            // is Triangle, blue is Square, kick / orange is L1. My
+            // earlier attempt swapped red↔green and routed kick to
+            // Cross — RB4 then registered red hits as green and ate
+            // the kick pedal entirely.
+            //
+            // PackButtons walks bits 0..7 of each tracked byte and ORs
+            // the table[bit] mask; making all 8 slots the same button
+            // means "any non-zero velocity → button pressed."
+            using OPBDO = OPB::OrbisPadButtonDataOffset;
+            auto fill_button = [](u32 btn) -> std::array<u32, 8> {
+                return {btn, btn, btn, btn, btn, btn, btn, btn};
+            };
+            k.button_bytes[3]  = fill_button(static_cast<u32>(OPBDO::Circle));    // red snare
+            k.button_bytes[4]  = fill_button(static_cast<u32>(OPBDO::Triangle));  // yellow tom
+            k.button_bytes[5]  = fill_button(static_cast<u32>(OPBDO::Square));    // blue tom
+            k.button_bytes[6]  = fill_button(static_cast<u32>(OPBDO::Cross));     // green floor tom
+            k.button_bytes[1]  = fill_button(static_cast<u32>(OPBDO::L1));        // kick pedal
+            k.button_bytes[8]  = fill_button(static_cast<u32>(OPBDO::Triangle));  // yellow cymbal
+            k.button_bytes[9]  = fill_button(static_cast<u32>(OPBDO::Square));    // blue cymbal
+            k.button_bytes[10] = fill_button(static_cast<u32>(OPBDO::Cross));     // green cymbal
             // [midi_pad_map] holds TOML key -> list[int] of MIDI notes.
             // Translate to KitDef::midi_pad_map: note -> snapshot byte index.
+            //
+            // FIRST-PAD-WINS: a note that's listed under multiple pads
+            // is honoured for whichever pad appeared first in the TOML.
+            // The previous last-writer-wins behaviour silently swapped
+            // pads when the wizard captured cross-talk (kick's note
+            // bleed-through landing in red/blue/orange steps would
+            // route the red pad to the green button, etc.). A warning
+            // is logged for every collision so the user can fix their
+            // TOML — or re-probe — without guessing.
             if (root.contains("midi_pad_map")) {
                 static const std::pair<const char*, int> kKeyToByte[] = {
                     {"red",            3},
@@ -154,6 +192,7 @@ bool LoadKitFromToml(const std::string& file_path) {
                     {"blue_cymbal",    9},
                     {"green_cymbal",  10},
                 };
+                std::map<u8, std::string> note_owner;
                 const auto& tbl = toml::find(root, "midi_pad_map").as_table();
                 for (const auto& [key, val] : tbl) {
                     int byte_idx = -1;
@@ -165,9 +204,20 @@ bool LoadKitFromToml(const std::string& file_path) {
                     for (const auto& nv : val.as_array()) {
                         if (!nv.is_integer()) continue;
                         const int note = static_cast<int>(nv.as_integer());
-                        if (note >= 0 && note <= 127) {
-                            k.midi_pad_map[static_cast<u8>(note)] = byte_idx;
+                        if (note < 0 || note > 127) continue;
+                        const u8 nbyte = static_cast<u8>(note);
+                        auto own = note_owner.find(nbyte);
+                        if (own != note_owner.end()) {
+                            LOG_WARNING(
+                                Input,
+                                "MIDI kit {}: note {} listed under both '{}' "
+                                "(kept) and '{}' (ignored) — re-probe to "
+                                "fix",
+                                file.filename().string(), note, own->second, key);
+                            continue;
                         }
+                        note_owner[nbyte] = key;
+                        k.midi_pad_map[nbyte] = byte_idx;
                     }
                 }
             }
@@ -410,6 +460,18 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             }
             out[dud_idx] = ScaleVel7to8(v);
         };
+        // PackDeviceUniqueData drum layout follows the PS4 RB drum HID
+        // wire format (per docs/PlasticBand/.../4-Lane Drums/PS4.md):
+        //   dud[0] = redDrumVelocity     (HID byte offset 43)
+        //   dud[1] = blueDrumVelocity    (HID byte offset 44)
+        //   dud[2] = yellowDrumVelocity  (HID byte offset 45)
+        //   dud[3] = greenDrumVelocity   (HID byte offset 46)
+        //   dud[4] = yellowCymbalVelocity (HID byte offset 47)
+        //   dud[5] = blueCymbalVelocity   (HID byte offset 48)
+        //   dud[6] = greenCymbalVelocity  (HID byte offset 49)
+        // NOTE: this is NOT the same order as OrbisPadDeviceClassData::drum
+        // (snare/tom1/tom2/floorTom). RB4 reads the raw bytes in their
+        // HID wire order via scePadRead, not via the normalized parse.
         pack_vel(0, kit->drum_red_byte);
         pack_vel(1, kit->drum_blue_byte);
         pack_vel(2, kit->drum_yellow_byte);
@@ -417,6 +479,12 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         pack_vel(4, kit->drum_yellow_cymbal_byte);
         pack_vel(5, kit->drum_blue_cymbal_byte);
         pack_vel(6, kit->drum_green_cymbal_byte);
+        if (out[0] || out[1] || out[2] || out[3] || out[4] || out[5] || out[6]) {
+            LOG_INFO(Input,
+                     "PackDeviceUniqueData drum slot {}: dud=[r={:02x} b={:02x} "
+                     "y={:02x} g={:02x} yC={:02x} bC={:02x} gC={:02x}]",
+                     slot, out[0], out[1], out[2], out[3], out[4], out[5], out[6]);
+        }
         return kMaxDeviceUniqueData;
     }
     if (kit->guitar_ps4_layout) {
@@ -560,6 +628,9 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
             if (b & (1u << bit)) out |= table[bit];
         }
     }
+    if (out) {
+        LOG_INFO(Input, "PackButtons slot {}: face bits 0x{:08x}", slot, out);
+    }
     if (kit->hat_byte >= 0 && static_cast<std::size_t>(kit->hat_byte) < raw_len) {
         const u8 hat = raw[kit->hat_byte];
         if (kit->source == "xinput") {
@@ -642,10 +713,21 @@ std::string GetActiveKitSource(int slot) {
     return k ? k->source : std::string{};
 }
 
+std::string GetActiveKitDeviceClass(int slot) {
+    if (slot < 1 || slot > kNumSlots) return {};
+    const auto* k = g_slots[slot - 1].kit;
+    return k ? k->device_class : std::string{};
+}
+
 std::size_t GetLoadedKitCount() {
     std::lock_guard<std::mutex> lk(g_kits_mu);
     return g_kits.size();
 }
+
+// LoadKitFile lives in hid_instrument.cpp so it can call CloseSlot —
+// the SDL / MidiInput handle ownership lives over there. This file
+// (hid_packer.cpp) only handles the pure-logic TOML parse + g_kits
+// table.
 
 bool ShouldHideFromUsbd(u16 vid, u16 pid) {
     bool any_enabled = false;

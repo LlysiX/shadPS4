@@ -14,6 +14,63 @@
 
 namespace Libraries::Pad {
 
+// Map a kit TOML's `device_class` string ("guitar" / "drum" / ...) onto the
+// SCE enum. Returns Standard for unknown strings — most kits only set this to
+// "guitar" or "drum" in practice.
+static OrbisPadDeviceClass KitClassFromString(const std::string& s) {
+    if (s == "guitar")
+        return OrbisPadDeviceClass::Guitar;
+    if (s == "drum")
+        return OrbisPadDeviceClass::Drum;
+    if (s == "dj_turntable" || s == "turntable")
+        return OrbisPadDeviceClass::DjTurntable;
+    if (s == "dance_mat" || s == "dancemat")
+        return OrbisPadDeviceClass::Dancemat;
+    return OrbisPadDeviceClass::Standard;
+}
+
+// Resolve the game-visible device class for the given slot. Precedence:
+//   1. Legacy raw-HID pass-through is on for this slot AND a kit is active
+//      → the kit TOML's `device_class` wins. This is the "Automatic"
+//      behaviour surfaced in the Special Devices dialog.
+//   2. useSpecialPad{N} → the user-pinned class from Config.
+//   3. Otherwise → SDL's detected class (Guitar / Drum / Standard).
+static OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
+    OrbisPadDeviceClass result;
+    const char* via;
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);
+        if (!kit_cls.empty()) {
+            result = KitClassFromString(kit_cls);
+            via = "kit-toml";
+            LOG_INFO(Lib_Pad,
+                     "ResolveDeviceClass handle={} -> {} (via {}, kit_cls='{}')",
+                     handle, static_cast<int>(result), via, kit_cls);
+            return result;
+        }
+    }
+    if (Config::getUseSpecialPad(handle)) {
+        result = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
+        via = "Config::useSpecialPad";
+        LOG_INFO(Lib_Pad,
+                 "ResolveDeviceClass handle={} -> {} (via {}, legacy={}, "
+                 "kit_cls='{}')",
+                 handle, static_cast<int>(result), via,
+                 Config::getSpecialPadLegacyPassUSBRawHID(handle),
+                 Input::HidInstrument::GetActiveKitDeviceClass(handle));
+        return result;
+    }
+    auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+    result = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
+    via = "SDL";
+    LOG_INFO(Lib_Pad,
+             "ResolveDeviceClass handle={} -> {} (via {}, useSpecialPad=false, "
+             "legacy={})",
+             handle, static_cast<int>(result), via,
+             Config::getSpecialPadLegacyPassUSBRawHID(handle));
+    return result;
+}
+
 int PS4_SYSV_ABI scePadClose(s32 handle) {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
     return ORBIS_OK;
@@ -26,14 +83,9 @@ int PS4_SYSV_ABI scePadConnectPort() {
 
 int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
     s32 handle, OrbisPadDeviceClassExtendedInformation* pExtInfo) {
-    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    LOG_INFO(Lib_Pad, "scePadDeviceClassGetExtendedInformation handle={}", handle);
     std::memset(pExtInfo, 0, sizeof(OrbisPadDeviceClassExtendedInformation));
-    if (Config::getUseSpecialPad(handle)) {
-        pExtInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-    } else {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        pExtInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
-    }
+    pExtInfo->deviceClass = ResolveDeviceClass(handle);
     return ORBIS_OK;
 }
 
@@ -42,15 +94,9 @@ int PS4_SYSV_ABI scePadDeviceClassParseData(s32 handle, const OrbisPadData* pDat
     if (!pData || !pDeviceClassData) {
         return ORBIS_PAD_ERROR_INVALID_ARG;
     }
-    // Device class follows the same precedence as scePadGetControllerInformation:
-    // Config::specialPadClass* when special-pad is set, otherwise SDL detection.
-    OrbisPadDeviceClass dev_class = OrbisPadDeviceClass::Standard;
-    if (Config::getUseSpecialPad(handle)) {
-        dev_class = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-    } else {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        dev_class = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
-    }
+    // Device class follows the shared precedence: legacy raw-HID kit TOML
+    // first, then user's per-slot Config, then SDL detection.
+    OrbisPadDeviceClass dev_class = ResolveDeviceClass(handle);
     const bool ok = Input::HidInstrument::ParseTypedData(
         handle, pData->deviceUniqueData, pData->deviceUniqueDataLen, dev_class, pDeviceClassData);
     if (!ok) {
@@ -112,7 +158,7 @@ int PS4_SYSV_ABI scePadGetCapability() {
 }
 
 int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerInformation* pInfo) {
-    LOG_DEBUG(Lib_Pad, "called handle = {}", handle);
+    LOG_INFO(Lib_Pad, "scePadGetControllerInformation called handle={}", handle);
     if (handle < 0) {
         pInfo->touchPadInfo.pixelDensity = 1;
         pInfo->touchPadInfo.resolution.x = 1920;
@@ -133,14 +179,14 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     pInfo->connectionType = ORBIS_PAD_PORT_TYPE_STANDARD;
     pInfo->connectedCount = 1;
     pInfo->connected = true;
-    pInfo->deviceClass = OrbisPadDeviceClass::Standard;
-    if (Config::getUseSpecialPad(handle)) {
+    pInfo->deviceClass = ResolveDeviceClass(handle);
+    if (pInfo->deviceClass != OrbisPadDeviceClass::Standard) {
         pInfo->connectionType = ORBIS_PAD_PORT_TYPE_SPECIAL;
-        pInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-    } else {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        pInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
     }
+    LOG_INFO(Lib_Pad,
+             "scePadGetControllerInformation returning handle={} class={} connType={}",
+             handle, static_cast<int>(pInfo->deviceClass),
+             static_cast<int>(pInfo->connectionType));
     return 0;
 }
 
@@ -275,16 +321,23 @@ int PS4_SYSV_ABI scePadMbusTerm() {
 }
 
 int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenParam* pParam) {
+    LOG_INFO(Lib_Pad,
+             "scePadOpen ENTRY user_id={} type={} index={} (useSpecialPad={} "
+             "class={} legacy={})",
+             userId, type, index,
+             (userId >= 1 && userId <= 4) ? Config::getUseSpecialPad(userId) : false,
+             (userId >= 1 && userId <= 4) ? Config::getSpecialPadClass(userId) : 0,
+             (userId >= 1 && userId <= 4)
+                 ? Config::getSpecialPadLegacyPassUSBRawHID(userId)
+                 : false);
     if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
-    bool special = Config::getUseSpecialPad(userId);
-    if (!special) {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
-            special = true;
-        }
-    }
+    const OrbisPadDeviceClass resolved = ResolveDeviceClass(userId);
+    const bool special = resolved != OrbisPadDeviceClass::Standard;
+    LOG_INFO(Lib_Pad,
+             "scePadOpen user_id={} resolved class={} → special={} requestedType={}",
+             userId, static_cast<int>(resolved), special, type);
     if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
@@ -292,7 +345,7 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
         if (type != ORBIS_PAD_PORT_TYPE_STANDARD && type != ORBIS_PAD_PORT_TYPE_REMOTE_CONTROL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
     }
-    LOG_INFO(Lib_Pad, "(DUMMY) called user_id = {} type = {} index = {}", userId, type, index);
+    LOG_INFO(Lib_Pad, "scePadOpen success user_id={} type={} (legacy)", userId, type);
     scePadResetLightBar(1);
     return userId;
     // todo: using userId as handle works and simplifies some logic,
@@ -302,13 +355,7 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
 int PS4_SYSV_ABI scePadOpenExt(s32 userId, s32 type, s32 index,
                                const OrbisPadOpenExtParam* pParam) {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
-    bool special = Config::getUseSpecialPad(userId);
-    if (!special) {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
-            special = true;
-        }
-    }
+    const bool special = ResolveDeviceClass(userId) != OrbisPadDeviceClass::Standard;
     if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
@@ -355,7 +402,13 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
     // loop), so passing SDL sticks would double-count and we keep the
     // safe centred default.
     const std::string kit_source = Input::HidInstrument::GetActiveKitSource(handle);
-    const bool nav_passthrough = (kit_source == "hid" || kit_source.empty());
+    // Only XInput-source kits open the same physical SDL gamepad as the
+    // navigation pad, so passing SDL state would double-count. HID-source
+    // and MIDI-source kits are separate devices — the user's Xbox / DS4
+    // sitting beside the drum module is what they expect to navigate
+    // menus with, so let its sticks, triggers, and buttons through.
+    const bool xinput_source = (kit_source == "xinput");
+    const bool nav_passthrough = !xinput_source;
     if (nav_passthrough) {
         pData->leftStick.x =
             static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftX)]);
@@ -423,9 +476,15 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
             OrbisPadButtonDataOffset::L2       | OrbisPadButtonDataOffset::R2       |
             OrbisPadButtonDataOffset::Up       | OrbisPadButtonDataOffset::Down     |
             OrbisPadButtonDataOffset::Left     | OrbisPadButtonDataOffset::Right);
-        const u32 sdl_nav_only = sdl_buttons & ~kInstrumentBtnMask;
+        // The instrument-bit mask only applies to XInput-source kits.
+        // For HID and MIDI sources the navigation gamepad is a separate
+        // device — the user wants pressing X / dpad / etc. to land as
+        // Cross / dpad / etc. in the game, not be filtered out as
+        // "instrument bits."
+        const u32 sdl_for_buttons =
+            xinput_source ? (sdl_buttons & ~kInstrumentBtnMask) : sdl_buttons;
         pData->buttons = static_cast<OrbisPadButtonDataOffset>(
-            sdl_nav_only | Input::HidInstrument::PackButtons(handle, raw, raw_len, cls));
+            sdl_for_buttons | Input::HidInstrument::PackButtons(handle, raw, raw_len, cls));
         pData->deviceUniqueDataLen = static_cast<u8>(
             Input::HidInstrument::PackDeviceUniqueData(handle, raw, raw_len, cls,
                                                        pData->deviceUniqueData));

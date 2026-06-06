@@ -3,6 +3,7 @@
 
 #include "input/midi_kit_probe_data.h"
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <sstream>

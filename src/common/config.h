@@ -142,10 +142,10 @@ bool getSpecialPadLegacyPassUSBRawHID(int pad);
 // will start consulting this map in a follow-up commit.
 constexpr int kNumPlayerSlots = 4;
 enum class PlayerDeviceKind {
-    Gamepad,   // SDL_Gamepad bound by SDL_JoystickGUID (32 hex chars)
-    Kit,       // probed RB instrument bound by VID:PID
-    Keyboard,  // emulator's virtual keyboard pad (singleton)
-    Midi,      // MIDI input port bound by name string
+    Gamepad,  // SDL_Gamepad bound by SDL_JoystickGUID (32 hex chars)
+    Kit,      // probed RB instrument bound by VID:PID
+    Keyboard, // emulator's virtual keyboard pad (singleton)
+    Midi,     // MIDI input port bound by name string
 };
 struct PlayerDevice {
     PlayerDeviceKind kind = PlayerDeviceKind::Gamepad;

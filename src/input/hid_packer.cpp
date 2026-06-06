@@ -104,6 +104,90 @@ bool LoadKitFromToml(const std::string& file_path) {
 
         KitDef k;
         k.source_file = file.string();
+        const std::string schema = toml::find_or<std::string>(root, "schema", "");
+        const bool is_midi = (schema == "shadps4-midi-instrument/v1");
+        if (is_midi) {
+            // MIDI kits don't have USB VID:PID — they're matched against
+            // the host's MIDI ports by name. Synthesize a stable placeholder
+            // VID:PID derived from the port id so the existing g_kits
+            // dedupe-by-vid:pid logic still works (two MIDI ports get
+            // distinct entries).
+            k.source = "midi";
+            k.name = toml::find_or<std::string>(root, "name", "(MIDI)");
+            k.device_class = toml::find_or<std::string>(
+                root, "device_class", "drum");
+            k.midi_port_id =
+                toml::find_or<std::string>(root, "port_id", "");
+            // Hash port_id into a 32-bit value, split across vid/pid.
+            std::uint32_t h = 2166136261u;  // FNV-1a 32-bit
+            for (char c : k.midi_port_id) {
+                h ^= static_cast<std::uint8_t>(c);
+                h *= 16777619u;
+            }
+            k.vid = static_cast<u16>(0xF000 | ((h >> 16) & 0x0FFF));
+            k.pid = static_cast<u16>(h & 0xFFFF);
+            if (k.pid == 0) k.pid = 1;  // 0:0 would trigger the legacy reject path
+            // Drum buffer layout — fixed to the snapshot byte indices the
+            // MidiInput backend writes (see midi_input.h).
+            k.drum_ps4_layout = true;
+            k.drum_red_byte           = 3;   // kSnapByteSnareRed
+            k.drum_blue_byte          = 5;   // kSnapByteTomMidBlue
+            k.drum_yellow_byte        = 4;   // kSnapByteTomHighYel
+            k.drum_green_byte         = 6;   // kSnapByteTomLowGrn
+            k.drum_yellow_cymbal_byte = 8;   // kSnapByteCymYellow
+            k.drum_blue_cymbal_byte   = 9;   // kSnapByteCymBlue
+            k.drum_green_cymbal_byte  = 10;  // kSnapByteCymGreen
+            k.report_length = 16;            // kSnapshotBytes
+            // [midi_pad_map] holds TOML key -> list[int] of MIDI notes.
+            // Translate to KitDef::midi_pad_map: note -> snapshot byte index.
+            if (root.contains("midi_pad_map")) {
+                static const std::pair<const char*, int> kKeyToByte[] = {
+                    {"red",            3},
+                    {"blue",           5},
+                    {"yellow",         4},
+                    {"green",          6},
+                    {"orange",         6},  // 5-lane GH alias
+                    {"kick",           1},
+                    {"kick2",          1},
+                    {"yellow_cymbal",  8},
+                    {"orange_cymbal",  8},
+                    {"blue_cymbal",    9},
+                    {"green_cymbal",  10},
+                };
+                const auto& tbl = toml::find(root, "midi_pad_map").as_table();
+                for (const auto& [key, val] : tbl) {
+                    int byte_idx = -1;
+                    for (const auto& [k_str, b] : kKeyToByte) {
+                        if (key == k_str) { byte_idx = b; break; }
+                    }
+                    if (byte_idx < 0) continue;
+                    if (!val.is_array()) continue;
+                    for (const auto& nv : val.as_array()) {
+                        if (!nv.is_integer()) continue;
+                        const int note = static_cast<int>(nv.as_integer());
+                        if (note >= 0 && note <= 127) {
+                            k.midi_pad_map[static_cast<u8>(note)] = byte_idx;
+                        }
+                    }
+                }
+            }
+            // Velocity scaling is shared with the HID drum path (the
+            // packer reads dud_scale_lo/hi). Parsed below by the same
+            // velocity_scaling block, so no separate work here.
+            std::lock_guard<std::mutex> lk(g_kits_mu);
+            auto it = std::find_if(g_kits.begin(), g_kits.end(),
+                                   [&](const KitDef& e) { return e.vid == k.vid && e.pid == k.pid; });
+            if (it != g_kits.end()) {
+                *it = std::move(k);
+                LOG_INFO(Input, "MIDI kit reloaded from {} (port {})",
+                         file.filename().string(), it->midi_port_id);
+            } else {
+                LOG_INFO(Input, "MIDI kit loaded from {}: {} (port {})",
+                         file.filename().string(), k.name, k.midi_port_id);
+                g_kits.push_back(std::move(k));
+            }
+            return true;
+        }
         k.vid = static_cast<u16>(ParseHexOrDec(toml::find<std::string>(root, "vendor_id")));
         k.pid = static_cast<u16>(ParseHexOrDec(toml::find<std::string>(root, "product_id")));
         if (k.vid == 0 || k.pid == 0) {

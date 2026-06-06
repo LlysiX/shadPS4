@@ -74,6 +74,15 @@ struct KitDef {
     std::array<int, kMaxDeviceUniqueData> dud_scale_lo{};
     std::array<int, kMaxDeviceUniqueData> dud_scale_hi{};
     std::string source_file;
+    // MIDI-only: maps MIDI note number to a destination byte index in
+    // the synthetic snapshot buffer Input::MidiInput::SnapshotDrumBuffer
+    // writes. Built from the [midi_pad_map] TOML section at load time.
+    // Empty for HID / XInput kits.
+    std::map<u8, int> midi_pad_map;
+    // MIDI-only: the OS-specific port id used to re-open the kit's
+    // MIDI input port at runtime. ALSA: "client:port"; CoreMIDI: hex
+    // endpoint UID; WinMM: device index.
+    std::string midi_port_id;
 };
 
 // SDL handles are kept as void* so this header doesn't need SDL3 headers.
@@ -82,6 +91,11 @@ struct KitDef {
 struct SlotState {
     void* dev = nullptr;
     void* gamepad = nullptr;
+    // MIDI handle from Input::MidiInput::OpenInputPort. Mutually
+    // exclusive with `dev` and `gamepad` — at most one of the three is
+    // non-null while the slot is active. Set when the slot's kit has
+    // source == "midi".
+    void* midi = nullptr;
     u16 vid = 0, pid = 0;
     std::string device_path;
     const KitDef* kit = nullptr;

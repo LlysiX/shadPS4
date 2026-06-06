@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,15 @@ struct NoteEvent {
 // gets the same events via SnapshotDrumBuffer below, which calls
 // DrainEvents internally before reading state.
 std::vector<NoteEvent> DrainEvents(void* handle);
+
+// Install a per-kit MIDI-note → snapshot-byte-index map on `handle`.
+// Used by the runtime to honour the wizard-derived [midi_pad_map] for a
+// particular kit instead of the hardcoded General-MIDI defaults. Map
+// keys are 0..127 (MIDI note number); values are byte indices into the
+// snapshot buffer (the kSnapByte* constants). Passing an empty map
+// clears the override and restores defaults — useful when switching
+// between modules without closing the port.
+void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_byte);
 
 // Snapshot the current per-pad velocity state into `out` (size N).
 // Layout mirrors the PS4 RB 4-Lane Drum wire format — see the kSnapshot*

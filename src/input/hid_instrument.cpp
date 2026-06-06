@@ -9,6 +9,7 @@
 
 #include "input/hid_instrument.h"
 #include "input/hid_kit_def.h"
+#include "input/midi_input.h"
 
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hidapi.h>
@@ -45,6 +46,10 @@ void CloseSlot(SlotState& s) {
     if (s.gamepad) {
         SDL_CloseGamepad(static_cast<SDL_Gamepad*>(s.gamepad));
         s.gamepad = nullptr;
+    }
+    if (s.midi) {
+        Input::MidiInput::CloseInputPort(s.midi);
+        s.midi = nullptr;
     }
     s.vid = s.pid = 0;
     s.device_path.clear();
@@ -163,7 +168,7 @@ void PollLoop() {
             SlotState& s = g_slots[i];
 
             if (!enabled) {
-                if (s.dev || s.gamepad) {
+                if (s.dev || s.gamepad || s.midi) {
                     LOG_INFO(Input, "HID instrument slot {}: flag disabled, closing device",
                              slot);
                     CloseSlot(s);
@@ -171,7 +176,7 @@ void PollLoop() {
                 continue;
             }
 
-            if (!s.dev && !s.gamepad) {
+            if (!s.dev && !s.gamepad && !s.midi) {
                 std::vector<KitDef> snapshot;
                 {
                     std::lock_guard<std::mutex> lk(g_kits_mu);
@@ -184,7 +189,25 @@ void PollLoop() {
                     // whichever (other) slot they were bound to in a
                     // later iteration.
                     if (!SlotAcceptsKit(slot, kd.vid, kd.pid)) continue;
-                    if (kd.source == "xinput") {
+                    if (kd.source == "midi") {
+                        // Resolve port_id → current handle. Subscribe via
+                        // Input::MidiInput, install the kit's note→byte
+                        // map, and the per-tick snapshot fills last_report.
+                        if (kd.midi_port_id.empty()) continue;
+                        void* port = Input::MidiInput::OpenInputPort(kd.midi_port_id);
+                        if (!port) continue;
+                        Input::MidiInput::ConfigurePadMap(port, kd.midi_pad_map);
+                        s.midi = port;
+                        s.vid = kd.vid;
+                        s.pid = kd.pid;
+                        s.device_path = "midi:" + kd.midi_port_id;
+                        s.kit = FindKit(kd.vid, kd.pid);
+                        if (!s.kit) s.kit = &kd;
+                        s.open_failed_logged = false;
+                        LOG_INFO(Input,
+                                 "HID instrument slot {}: opened MIDI port {} ({})",
+                                 slot, kd.midi_port_id, kd.name);
+                    } else if (kd.source == "xinput") {
                         int gpcount = 0;
                         SDL_JoystickID* gps = SDL_GetGamepads(&gpcount);
                         for (int gi = 0; gi < gpcount && !s.gamepad; ++gi) {
@@ -228,9 +251,9 @@ void PollLoop() {
                         }
                         SDL_hid_free_enumeration(head);
                     }
-                    if (s.dev || s.gamepad) break;
+                    if (s.dev || s.gamepad || s.midi) break;
                 }
-                if (!s.dev && !s.gamepad && !s.open_failed_logged) {
+                if (!s.dev && !s.gamepad && !s.midi && !s.open_failed_logged) {
                     LOG_WARNING(Input,
                                 "HID instrument slot {}: no known kit found "
                                 "(specialPadLegacyPassUSBRawHID{} is true)",
@@ -240,7 +263,17 @@ void PollLoop() {
                 continue;
             }
 
-            if (s.gamepad) {
+            if (s.midi) {
+                u8 buf[Input::MidiInput::kSnapshotBytes];
+                const std::size_t n = Input::MidiInput::SnapshotDrumBuffer(
+                    s.midi, buf, Input::MidiInput::kSnapshotBytes);
+                if (n > 0) {
+                    std::lock_guard<std::mutex> lk(s.mu);
+                    std::memcpy(s.last_report, buf, n);
+                    s.last_report_len = n;
+                    s.has_data = true;
+                }
+            } else if (s.gamepad) {
                 SDL_UpdateGamepads();
                 u8 buf[kXInputReportLen];
                 FillXInputReport(static_cast<SDL_Gamepad*>(s.gamepad), buf);

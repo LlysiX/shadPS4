@@ -101,6 +101,12 @@ struct LinuxPortHandle {
     int subscribed_port = -1;
     PadState pads[12]{};  // indexed by kPadDefaults order
     std::chrono::steady_clock::time_point opened_at{};
+    // Per-kit note → snapshot byte index override. When non-empty, the
+    // drain loop consults this directly instead of the GM-style
+    // kPadDefaults fallback. velocity is decayed into pads_by_byte[idx]
+    // rather than per-default-pad indices.
+    std::map<std::uint8_t, int> custom_map;
+    PadState pads_by_byte[16]{};  // kSnapshotBytes
 };
 
 }  // namespace
@@ -226,27 +232,51 @@ std::vector<NoteEvent> DrainAndUpdate(LinuxPortHandle* h) {
                 now - h->opened_at)
                 .count());
         out.push_back(record);
-        // Update the state machine too (used by SnapshotDrumBuffer).
-        for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
-            bool match = false;
-            for (int n : kPadDefaults[p].notes) {
-                if (n == note) { match = true; break; }
+        // Update the state machine. Two paths: kit-specific custom map
+        // (preferred — written by ConfigurePadMap from the kit's TOML)
+        // or the GM-style default. Both end up routing the velocity to
+        // a snapshot byte index.
+        if (!h->custom_map.empty()) {
+            auto it = h->custom_map.find(record.note);
+            if (it != h->custom_map.end()) {
+                const int byte_idx = it->second;
+                if (byte_idx >= 0 && byte_idx < (int)(sizeof(h->pads_by_byte) /
+                                                       sizeof(h->pads_by_byte[0]))) {
+                    if (note_on) {
+                        h->pads_by_byte[byte_idx].velocity =
+                            static_cast<std::uint8_t>((vel * 255 + 63) / 127);
+                        h->pads_by_byte[byte_idx].last_active = now;
+                    } else {
+                        h->pads_by_byte[byte_idx].velocity = 0;
+                    }
+                }
             }
-            if (!match) continue;
-            if (note_on) {
-                h->pads[p].velocity =
-                    static_cast<std::uint8_t>((vel * 255 + 63) / 127);  // 0..127 -> 0..255
-                h->pads[p].last_active = now;
-            } else {
-                h->pads[p].velocity = 0;
+        } else {
+            for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
+                bool match = false;
+                for (int n : kPadDefaults[p].notes) {
+                    if (n == note) { match = true; break; }
+                }
+                if (!match) continue;
+                if (note_on) {
+                    h->pads[p].velocity =
+                        static_cast<std::uint8_t>((vel * 255 + 63) / 127);
+                    h->pads[p].last_active = now;
+                } else {
+                    h->pads[p].velocity = 0;
+                }
+                break;
             }
-            break;
         }
         snd_seq_free_event(ev);
     }
     // Decay any pads whose Note On is older than the hold window — covers
     // modules that never send Note Off (or send it on a different chan).
     for (auto& p : h->pads) {
+        if (p.velocity == 0) continue;
+        if (now - p.last_active > kVelocityHoldMs) p.velocity = 0;
+    }
+    for (auto& p : h->pads_by_byte) {
         if (p.velocity == 0) continue;
         if (now - p.last_active > kVelocityHoldMs) p.velocity = 0;
     }
@@ -262,6 +292,17 @@ std::vector<NoteEvent> DrainEvents(void* handle) {
     return DrainAndUpdate(h);
 }
 
+void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_byte) {
+    if (!handle) return;
+    auto* h = static_cast<LinuxPortHandle*>(handle);
+    std::lock_guard lk(g_state_mu);
+    h->custom_map = note_to_byte;
+    // Reset state when the map changes so a stale velocity from the old
+    // mapping can't bleed into the new one.
+    for (auto& p : h->pads) p.velocity = 0;
+    for (auto& p : h->pads_by_byte) p.velocity = 0;
+}
+
 std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
                                std::size_t out_len) {
     if (!handle || !out || out_len < kSnapshotBytes) return 0;
@@ -272,11 +313,25 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
     }
     std::memset(out, 0, kSnapshotBytes);
     std::uint8_t flags = 0;
-    for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
-        const auto& pad = h->pads[p];
-        if (pad.velocity == 0) continue;
-        out[kPadDefaults[p].snap_byte] = pad.velocity;
-        flags |= kPadDefaults[p].mask_bit;
+    if (!h->custom_map.empty()) {
+        // Per-kit map populated pads_by_byte directly. Walk those.
+        for (int b = 0; b < (int)(sizeof(h->pads_by_byte) /
+                                  sizeof(h->pads_by_byte[0])); ++b) {
+            if (h->pads_by_byte[b].velocity == 0) continue;
+            if (b >= (int)kSnapshotBytes) continue;
+            out[b] = h->pads_by_byte[b].velocity;
+            // Set a face-flag bit so PackButtons can tell something
+            // fired; bit is the byte index modulo 8 for a coarse hash —
+            // games look at deviceUniqueData velocity primarily.
+            flags |= static_cast<std::uint8_t>(1u << (b & 7));
+        }
+    } else {
+        for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
+            const auto& pad = h->pads[p];
+            if (pad.velocity == 0) continue;
+            out[kPadDefaults[p].snap_byte] = pad.velocity;
+            flags |= kPadDefaults[p].mask_bit;
+        }
     }
     out[kSnapByteFaceFlags] = flags;
     return kSnapshotBytes;
@@ -301,6 +356,7 @@ std::vector<PortInfo> EnumerateInputPorts() { return {}; }
 void* OpenInputPort(const std::string&) { return nullptr; }
 void CloseInputPort(void*) {}
 std::vector<NoteEvent> DrainEvents(void*) { return {}; }
+void ConfigurePadMap(void*, const std::map<std::uint8_t, int>&) {}
 std::size_t SnapshotDrumBuffer(void*, std::uint8_t*, std::size_t) { return 0; }
 void Shutdown() {}
 #endif

@@ -623,8 +623,17 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
         for (int i = 0; i < mic_count; ++i) {
             const SDL_AudioDeviceID id = mic_devices[i];
             const char* nm = SDL_GetAudioDeviceName(id);
-            if (nm)
-                w.micCombo->addItem(QString::fromUtf8(nm), QString::number(id));
+            if (nm) {
+                const QString qname = QString::fromUtf8(nm);
+                // Persist the device NAME as the item's data. SDL audio
+                // device IDs are runtime handles that re-enumerate to
+                // different values between sessions (and sometimes
+                // between dialog opens), so a saved id wouldn't match
+                // the next time the dialog loads — the combo would
+                // silently revert to "None" and a subsequent Save
+                // would persist that reset.
+                w.micCombo->addItem(qname, qname);
+            }
         }
         SDL_free(mic_devices);
     }

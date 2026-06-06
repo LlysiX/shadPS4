@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -162,6 +164,83 @@ CaseResult RunCase(const fs::path& path) {
                 return r;
             }
             break;
+        }
+    }
+    // A MIDI note must not appear under more than one pad. The original
+    // last-writer-wins parse silently swapped pads when the wizard
+    // captured cross-talk between adjacent steps; we now dedup at derive
+    // time so the same note never lands in two lists.
+    std::map<int, std::string> note_owner;
+    {
+        std::istringstream iss(toml);
+        std::string line;
+        bool in_map = false;
+        while (std::getline(iss, line)) {
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+                line.erase(line.begin());
+            while (!line.empty() && (line.back() == ' ' || line.back() == '\n' ||
+                                      line.back() == '\t'))
+                line.pop_back();
+            if (line.empty()) continue;
+            if (line == "[midi_pad_map]") { in_map = true; continue; }
+            if (line.front() == '[') { in_map = false; continue; }
+            if (!in_map) continue;
+            const auto eq = line.find('=');
+            const auto lbr = line.find('[', eq);
+            const auto rbr = line.find(']', lbr);
+            if (eq == std::string::npos || lbr == std::string::npos ||
+                rbr == std::string::npos)
+                continue;
+            std::string pad = line.substr(0, eq);
+            while (!pad.empty() && pad.back() == ' ') pad.pop_back();
+            std::string toks = line.substr(lbr + 1, rbr - lbr - 1);
+            std::istringstream ns(toks);
+            std::string tok;
+            while (std::getline(ns, tok, ',')) {
+                while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+                    tok.erase(tok.begin());
+                while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+                    tok.pop_back();
+                if (tok.empty()) continue;
+                try {
+                    int n = std::stoi(tok);
+                    auto it = note_owner.find(n);
+                    if (it != note_owner.end() && it->second != pad) {
+                        r.detail = "note " + std::to_string(n) +
+                                   " appears under both '" + it->second +
+                                   "' and '" + pad + "' (dedup broken)";
+                        return r;
+                    }
+                    note_owner[n] = pad;
+                } catch (...) {
+                }
+            }
+        }
+    }
+    // Captures with explicit "expected_pad" hints in their meta header
+    // pin the assignment: e.g. the python_fake_drum_kit fixture knows
+    // note 36 must land under "red" (the user hit "Kick" thinking it
+    // was the red pad — the wizard's job is to honour that).
+    static const std::pair<int, const char*> kExpected[] = {
+        // python_fake_drum_kit.midi.jsonl probe order. Reads as a
+        // smoke test for the best-owner dedup across cross-talk steps.
+        {36, "red"},     {38, "yellow"}, {42, "blue"},   {48, "green"},
+        {49, "orange"},  {51, "kick"},
+    };
+    if (r.name == "python_fake_drum_kit.midi.jsonl") {
+        for (const auto& [note, pad] : kExpected) {
+            auto it = note_owner.find(note);
+            if (it == note_owner.end()) {
+                r.detail = std::string{"expected note "} + std::to_string(note) +
+                           " under '" + pad + "' but it wasn't emitted";
+                return r;
+            }
+            if (it->second != pad) {
+                r.detail = std::string{"note "} + std::to_string(note) +
+                           " landed under '" + it->second + "', expected '" +
+                           pad + "'";
+                return r;
+            }
         }
     }
     r.passed = true;

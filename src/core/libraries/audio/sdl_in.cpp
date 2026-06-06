@@ -105,7 +105,7 @@ int SDLAudioIn::AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_
             // that range (e.g. SYSTEM 0xFF or INVALID -1) falls back to
             // slot 0 via the Config clamp.
             std::string micDevStr = Config::getMicDevice(user_id - 1);
-            uint32_t devId;
+            uint32_t devId = 0;
 
             bool nullDevice = false;
             if (micDevStr == "None") {
@@ -113,11 +113,35 @@ int SDLAudioIn::AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_
             } else if (micDevStr == "Default Device") {
                 devId = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
             } else {
-                try {
-                    devId = static_cast<uint32_t>(std::stoul(micDevStr));
-                } catch (const std::exception& e) {
-                    nullDevice = true;
+                // Player Assignment Overrides stores the device NAME
+                // (SDL audio device IDs aren't stable across enumerations,
+                // so storing the runtime handle would not survive a
+                // dialog reopen). Look the name up in the current SDL
+                // enumeration; fall back to the legacy numeric-id form
+                // for users who saved via the older settings dialog.
+                int count = 0;
+                SDL_AudioDeviceID* devs = SDL_GetAudioRecordingDevices(&count);
+                bool resolved = false;
+                if (devs) {
+                    for (int i = 0; i < count; ++i) {
+                        const char* nm = SDL_GetAudioDeviceName(devs[i]);
+                        if (nm && micDevStr == nm) {
+                            devId = devs[i];
+                            resolved = true;
+                            break;
+                        }
+                    }
+                    SDL_free(devs);
                 }
+                if (!resolved) {
+                    try {
+                        devId = static_cast<uint32_t>(std::stoul(micDevStr));
+                        resolved = true;
+                    } catch (const std::exception&) {
+                        // fall through
+                    }
+                }
+                if (!resolved) nullDevice = true;
             }
 
             // Request a small capture buffer so the very first chunk

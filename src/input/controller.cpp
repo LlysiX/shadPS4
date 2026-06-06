@@ -278,17 +278,11 @@ std::string PathForJoystick(SDL_JoystickID id) {
 
 } // namespace
 
-// Find the player slot a joystick is explicitly bound to, or -1 if
-// it's unbound. Walks Config's per-slot device lists. Prefers a path
-// match (uniquely identifies a specific USB port) when the binding
-// stored one; falls back to GUID-only matching for bindings written
-// before path support or for controllers whose path the OS doesn't
-// give us. Path-vs-GUID matters when the user has two physically
-// identical controllers — they share a GUID but have distinct paths.
+// Pass 1 matches (guid, path) so identical controllers in distinct USB
+// ports can be told apart. Pass 2 falls back to GUID-only so a saved
+// path-pinned binding still resolves after the kernel renumbered the
+// device's event node.
 int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
-    // Pass 1: exact (guid, path) match wins. Used so two identical
-    // controllers (same VID:PID, same SDL GUID) can be told apart by
-    // which USB port they're plugged into.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
             if (dev.kind != Config::PlayerDeviceKind::Gamepad)
@@ -297,13 +291,6 @@ int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
                 return slot;
         }
     }
-    // Pass 2: GUID-only fallback (path-pinned bindings included).
-    // The previous behaviour skipped path-pinned bindings entirely
-    // when paths drifted — kernel-assigned event node renumbering
-    // would silently disable the slot. Now a controller whose GUID
-    // is bound somewhere is at least placed there, even when its path
-    // changed since the user last saved. Identical-controller setups
-    // still get exact-path placement via pass 1 above.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
             if (dev.kind != Config::PlayerDeviceKind::Gamepad)
@@ -317,16 +304,12 @@ int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
 
 namespace {
 
-// Convenience wrapper for code paths that don't have a path handy yet
-// (live disconnect detection etc.). Equivalent to passing path="".
 int FindBoundSlotForGuid(const std::string& guid) {
     return FindBoundSlotForGamepad(guid, std::string{});
 }
 
-// True if slot 1..N has at least one gamepad binding configured. Used to
-// mark a slot as "reserved" during pass 2 — even if no bound gamepad has
-// connected yet, we don't want a random gamepad squatting in a slot the
-// user explicitly carved out for a specific device.
+// Pass-2 placement reserves the slot even if the bound gamepad isn't
+// connected yet — keeps an unrelated controller from squatting it.
 bool SlotHasGamepadBinding(int slot) {
     for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
         if (dev.kind == Config::PlayerDeviceKind::Gamepad)
@@ -357,10 +340,6 @@ void EnableSensorsAndLog(GameController* gc, SDL_Gamepad* pad, int slot) {
 void GameControllers::ApplyAssignmentChanges() {
     using namespace Libraries::UserService;
     auto controllers = *Common::Singleton<GameControllers>::Instance();
-    // First pass: close any primary or secondary whose GUID is now bound
-    // to a different slot than the one it currently occupies. The
-    // subsequent TryOpenSDLControllers call's placement passes will route
-    // them to the slot the user configured.
     for (int i = 0; i < 4; i++) {
         auto* gc = controllers[i];
         if (gc->m_sdl_gamepad) {
@@ -377,7 +356,6 @@ void GameControllers::ApplyAssignmentChanges() {
                 gc->user_id = -1;
             }
         }
-        // Same check for secondaries.
         auto& secs = gc->m_additional_gamepads;
         secs.erase(std::remove_if(secs.begin(), secs.end(),
                                   [&, i](SDL_Gamepad* p) {
@@ -393,8 +371,6 @@ void GameControllers::ApplyAssignmentChanges() {
                                   }),
                    secs.end());
     }
-    // Second pass: re-run normal placement. Any gamepad we just closed
-    // will be re-opened into its bound slot here.
     TryOpenSDLControllers(controllers);
 }
 
@@ -402,20 +378,18 @@ void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot,
                                          bool& slot_taken, bool /*fire_login*/) {
     auto* gc = controllers[slot];
     if (!slot_taken) {
-        // First device for this slot — becomes the primary.
+        // No auto-Login; EnsureLoggedIn fires from FinalizeUpdate on the
+        // first real input, which is what the "press OPTIONS to JOIN"
+        // flow gates on.
         gc->m_sdl_gamepad = pad;
         gc->player_index = static_cast<u8>(slot);
         slot_taken = true;
-        // No auto-Login. The slot stays un-logged-in (user_id == -1)
-        // until the user actually presses a button on this gamepad.
-        // EnsureLoggedIn (called from FinalizeUpdate) fires Login then,
-        // which is what triggers a game's "press OPTIONS to JOIN" flow.
         LOG_INFO(Input, "Gamepad registered for slot {} (primary). Handle: {}", slot,
                  SDL_GetGamepadID(pad));
     } else {
-        // Slot already has a primary — add this one as a secondary. SDL
-        // events for it route to the same GameController via player_index,
-        // so its inputs OR with the primary's at the m_last_state level.
+        // SDL events for the secondary route to the same GameController
+        // via player_index, so its inputs OR with the primary at
+        // m_last_state.
         gc->m_additional_gamepads.push_back(pad);
         LOG_INFO(Input, "Gamepad added to slot {} (secondary). Handle: {}", slot,
                  SDL_GetGamepadID(pad));
@@ -581,8 +555,6 @@ std::array<std::atomic<u64>, 4> g_last_input_ns{};
 void NoteInputOnSlot(int slot) {
     if (slot < 0 || slot >= 4)
         return;
-    // Steady clock so the dialog can diff "now - last" without
-    // worrying about wall-clock jumps.
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     const u64 ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
     g_last_input_ns[slot].store(ns, std::memory_order_relaxed);

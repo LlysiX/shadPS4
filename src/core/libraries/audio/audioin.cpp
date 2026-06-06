@@ -18,21 +18,11 @@ float GetMicPeakDbfs(int slot) {
     return audio ? audio->GetPeakDbfs(slot) : -120.0f;
 }
 
-// Block sceAudioInOpen for slots whose pad class declares an instrument
-// (Guitar / Drum / DjTurntable / Dancemat). Games like Rock Band 4 probe
-// every user_id for a mic and classify the slot as a vocalist if the open
-// succeeds — that races ahead of the device-class lookup and a drummer
-// gets shown as a microphone. Returning ORBIS_AUDIO_IN_ERROR_NOT_OPENED
-// here makes the slot's pad class win the classification.
-//
-// Standard (0), Mic (no enum — exposed via audio detection), Navigation,
-// SteeringWheel, Stick, FightStick, and Gun all still get mics — only the
-// vocal-conflicting instrument classes lock the audio path out.
-// Considers BOTH Config::useSpecialPad and the legacy raw-HID kit
-// TOML. Without the kit-TOML check, a slot on "Automatic" mode
-// (useSpecialPad=false but the bound kit's TOML declares
-// device_class = "drum") would return false and RB4 would open a
-// mic on the drummer.
+// Refuse sceAudioInOpen for instrument-class slots. RB4 probes mics
+// before the device-class lookup, so a successful open classifies a
+// drummer as a vocalist. The legacy-kit-TOML branch is what makes
+// "Automatic" mode (useSpecialPad=false but kit declares drum) still
+// register as an instrument.
 static bool SlotIsInstrument(int userId) {
     if (userId < 1 || userId > 4) return false;
     using Libraries::Pad::OrbisPadDeviceClass;

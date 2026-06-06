@@ -152,6 +152,12 @@ struct PlayerDevice {
     // For Gamepad: SDL GUID hex (32 chars). For Midi: port name. For Kit
     // / Keyboard: unused.
     std::string guid;
+    // For Gamepad: OS-specific device path (SDL_GetJoystickPathForID).
+    // Unique per physical USB port — two identical-model controllers
+    // get distinct paths even though their GUID matches. Optional: when
+    // empty, GUID-only matching is used (backward compat with bindings
+    // written before path support landed).
+    std::string path;
     // For Kit: device VID:PID. Unused for other kinds.
     u16 vid = 0;
     u16 pid = 0;

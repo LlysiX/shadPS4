@@ -878,7 +878,13 @@ static int clampPlayerSlot(int slot) {
 std::string encodePlayerDevice(const PlayerDevice& dev) {
     switch (dev.kind) {
     case PlayerDeviceKind::Gamepad:
-        return "gamepad:" + dev.guid;
+        // gamepad:<guid>            — older format, GUID-only matching
+        // gamepad:<guid>:p:<path>   — extended, path disambiguates identical
+        //                             controllers. The "p:" prefix lets the
+        //                             decoder distinguish path from any
+        //                             future extension.
+        if (dev.path.empty()) return "gamepad:" + dev.guid;
+        return "gamepad:" + dev.guid + ":p:" + dev.path;
     case PlayerDeviceKind::Kit:
         return fmt::format("kit:0x{:04x}:0x{:04x}", dev.vid, dev.pid);
     case PlayerDeviceKind::Keyboard:
@@ -898,7 +904,14 @@ bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out) {
     if (kind == "gamepad") {
         if (rest.empty()) return false;
         out.kind = PlayerDeviceKind::Gamepad;
-        out.guid = rest;
+        // Look for the optional ":p:<path>" suffix.
+        const auto pmarker = rest.find(":p:");
+        if (pmarker == std::string::npos) {
+            out.guid = rest;
+        } else {
+            out.guid = rest.substr(0, pmarker);
+            out.path = rest.substr(pmarker + 3);  // skip ":p:"
+        }
         return true;
     }
     if (kind == "kit") {

@@ -124,6 +124,13 @@ public:
     static void TryOpenSDLControllers(GameControllers& controllers);
     static u8 GetGamepadIndexFromJoystickId(SDL_JoystickID id);
 
+    // Close any currently-open gamepad whose GUID is now bound to a
+    // different slot than the one it's in, then re-run
+    // TryOpenSDLControllers so the placement passes re-route them. Used
+    // by the Player Assignment dialog so changes apply without forcing
+    // the user to unplug + replug their controllers.
+    static void ApplyAssignmentChanges();
+
 private:
     // Attach `pad` to slot `slot` as primary (if the slot is empty) or as
     // a secondary (otherwise). Sets SDL's player_index, enables sensors,

@@ -270,19 +270,42 @@ std::string GuidHexForJoystick(SDL_JoystickID id) {
     return std::string(buf);
 }
 
-// Find the player slot a joystick GUID is explicitly bound to, or -1 if
-// it's unbound. Walks Config's per-slot device lists looking for a
-// PlayerDeviceKind::Gamepad entry whose stored GUID matches.
-int FindBoundSlotForGuid(const std::string& guid) {
+std::string PathForJoystick(SDL_JoystickID id) {
+    const char* p = SDL_GetJoystickPathForID(id);
+    return p ? std::string(p) : std::string{};
+}
+
+// Find the player slot a joystick is explicitly bound to, or -1 if
+// it's unbound. Walks Config's per-slot device lists. Prefers a path
+// match (uniquely identifies a specific USB port) when the binding
+// stored one; falls back to GUID-only matching for bindings written
+// before path support or for controllers whose path the OS doesn't
+// give us. Path-vs-GUID matters when the user has two physically
+// identical controllers — they share a GUID but have distinct paths.
+int FindBoundSlotForGamepad(const std::string& guid, const std::string& path) {
+    // Pass 1: path-aware match wins.
     for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
         for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
-            if (dev.kind == Config::PlayerDeviceKind::Gamepad &&
-                dev.guid == guid) {
-                return slot;
-            }
+            if (dev.kind != Config::PlayerDeviceKind::Gamepad) continue;
+            if (!dev.path.empty() && dev.path == path) return slot;
+        }
+    }
+    // Pass 2: GUID-only fallback.
+    for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
+        for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
+            if (dev.kind != Config::PlayerDeviceKind::Gamepad) continue;
+            // Skip bindings that pin a path — those only match in pass 1.
+            if (!dev.path.empty()) continue;
+            if (dev.guid == guid) return slot;
         }
     }
     return -1;
+}
+
+// Convenience wrapper for code paths that don't have a path handy yet
+// (live disconnect detection etc.). Equivalent to passing path="".
+int FindBoundSlotForGuid(const std::string& guid) {
+    return FindBoundSlotForGamepad(guid, std::string{});
 }
 
 // True if slot 1..N has at least one gamepad binding configured. Used to
@@ -316,6 +339,55 @@ void EnableSensorsAndLog(GameController* gc, SDL_Gamepad* pad, int slot) {
 }
 
 } // namespace
+
+void GameControllers::ApplyAssignmentChanges() {
+    using namespace Libraries::UserService;
+    auto controllers = *Common::Singleton<GameControllers>::Instance();
+    // First pass: close any primary or secondary whose GUID is now bound
+    // to a different slot than the one it currently occupies. The
+    // subsequent TryOpenSDLControllers call's placement passes will route
+    // them to the slot the user configured.
+    for (int i = 0; i < 4; i++) {
+        auto* gc = controllers[i];
+        if (gc->m_sdl_gamepad) {
+            const SDL_JoystickID id = SDL_GetGamepadID(gc->m_sdl_gamepad);
+            const std::string guid = GuidHexForJoystick(id);
+            const std::string path = PathForJoystick(id);
+            const int bound = FindBoundSlotForGamepad(guid, path);
+            if (bound > 0 && bound - 1 != i) {
+                LOG_INFO(Input,
+                         "Player Assignment changed: slot {} primary moves to slot {}",
+                         i, bound - 1);
+                SDL_CloseGamepad(gc->m_sdl_gamepad);
+                gc->m_sdl_gamepad = nullptr;
+                AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
+                gc->user_id = -1;
+            }
+        }
+        // Same check for secondaries.
+        auto& secs = gc->m_additional_gamepads;
+        secs.erase(std::remove_if(secs.begin(), secs.end(),
+                                  [&, i](SDL_Gamepad* p) {
+                                      const SDL_JoystickID sid =
+                                          SDL_GetGamepadID(p);
+                                      const std::string guid =
+                                          GuidHexForJoystick(sid);
+                                      const std::string path =
+                                          PathForJoystick(sid);
+                                      const int bound =
+                                          FindBoundSlotForGamepad(guid, path);
+                                      if (bound > 0 && bound - 1 != i) {
+                                          SDL_CloseGamepad(p);
+                                          return true;
+                                      }
+                                      return false;
+                                  }),
+                   secs.end());
+    }
+    // Second pass: re-run normal placement. Any gamepad we just closed
+    // will be re-opened into its bound slot here.
+    TryOpenSDLControllers(controllers);
+}
 
 void GameControllers::PlaceGamepadInSlot(GameControllers& controllers, int slot,
                                          SDL_Gamepad* pad, bool& slot_taken,
@@ -412,7 +484,11 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
         const SDL_JoystickID id = new_joysticks[j];
         if (assigned_ids.contains(id)) continue;
         const std::string guid = GuidHexForJoystick(id);
-        const int bound = FindBoundSlotForGuid(guid);
+        const std::string path = PathForJoystick(id);
+        // Path match wins when set; GUID falls back for two-identical-
+        // controller setups whose bindings the user pinned to specific
+        // USB ports via the picker dialog.
+        const int bound = FindBoundSlotForGamepad(guid, path);
         if (bound < 1 || bound > 4) continue;
         SDL_Gamepad* pad = SDL_OpenGamepad(id);
         if (!pad) continue;

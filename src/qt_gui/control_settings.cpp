@@ -16,6 +16,7 @@
 #include "common/path_util.h"
 #include "control_settings.h"
 #include "input/input_handler.h"
+#include "player_assignment_dialog.h"
 #include "special_devices_dialog.h"
 #include "ui_control_settings.h"
 
@@ -93,6 +94,10 @@ ControlSettings::ControlSettings(std::shared_ptr<GameInfoClass> game_info_get, b
     // raw-HID passthrough, udev install, kit probe wizard).
     connect(ui->openSpecialDevicesBtn, &QPushButton::clicked, this, [this]() {
         SpecialDevicesDialog dlg(this);
+        dlg.exec();
+    });
+    connect(ui->playerAssignmentBtn, &QPushButton::clicked, this, [this]() {
+        PlayerAssignmentDialog dlg(this);
         dlg.exec();
     });
 

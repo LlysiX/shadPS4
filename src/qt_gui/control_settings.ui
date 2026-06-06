@@ -12,7 +12,7 @@
     <x>0</x>
     <y>0</y>
     <width>1124</width>
-    <height>887</height>
+    <height>927</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -1795,6 +1795,12 @@
        </layout>
       </widget>
      </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="playerAssignmentBtn">
+     <property name="text"><string>Player Assignment Overrides...</string></property>
+     <property name="toolTip"><string>Pin specific gamepads, keyboard, RB instruments, or MIDI inputs to particular PS4 player slots instead of relying on plug-in order. Multiple devices on the same slot merge their inputs (keyboard + gamepad coop, etc.).</string></property>
     </widget>
    </item>
    <item>

@@ -17,11 +17,17 @@
 #include <QRegularExpressionValidator>
 #include <QVBoxLayout>
 
+#include <set>
 #include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_hidapi.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_joystick.h>
 
 #include "common/config.h"
+#include "device_picker_dialog.h"
+#include "input/controller.h"
+#include "input/hid_kit_def.h"
+#include "input/input_handler.h"
 #include "input/midi_input.h"
 
 namespace {
@@ -80,7 +86,7 @@ QListWidgetItem* makeDeviceItem(const Config::PlayerDevice& dev) {
 
 PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent)
     : QDialog(parent) {
-    setWindowTitle(tr("Player Assignment"));
+    setWindowTitle(tr("Player Assignment Overrides"));
     setModal(true);
     resize(640, 540);
 
@@ -161,8 +167,11 @@ void PlayerAssignmentDialog::addGamepadDevice(int slot) {
                                  tr("Plug in a controller and try again."));
         return;
     }
-    QStringList labels;
-    QStringList guids;
+    DevicePickerDialog dlg(tr("Add Gamepad"),
+        tr("Choose a gamepad to bind to Player %1. Two physically "
+           "identical controllers are told apart by their USB port "
+           "(device path) — bindings stay tied to the port until you "
+           "move the cable.").arg(slot), this);
     for (int i = 0; i < n; ++i) {
         char buf[33];
         SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[i]), buf, sizeof(buf));
@@ -170,43 +179,103 @@ void PlayerAssignmentDialog::addGamepadDevice(int slot) {
         if (!nm || !*nm) nm = SDL_GetGamepadNameForID(ids[i]);
         const QString name = nm ? QString::fromUtf8(nm) : QStringLiteral("?");
         const QString guid = QString::fromLatin1(buf);
-        labels << QStringLiteral("%1 — %2…").arg(name, guid.left(12));
-        guids << guid;
+        const char* path = SDL_GetJoystickPathForID(ids[i]);
+        Config::PlayerDevice dev;
+        dev.kind = Config::PlayerDeviceKind::Gamepad;
+        dev.guid = guid.toStdString();
+        if (path) dev.path = path;
+        const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
+        // Show the path suffix so the user can distinguish identical
+        // controllers at a glance.
+        QString label = QStringLiteral("%1 — %2…").arg(name, guid.left(12));
+        if (path && *path) {
+            QString p = QString::fromUtf8(path);
+            if (p.size() > 28) p = QStringLiteral("…%1").arg(p.right(28));
+            label += QStringLiteral("  [%1]").arg(p);
+        }
+        dlg.addRow(label, enc, true);
     }
     SDL_free(ids);
-    bool ok = false;
-    const QString choice = QInputDialog::getItem(
-        this, tr("Add Gamepad"), tr("Choose a gamepad to bind to Player %1:").arg(slot),
-        labels, 0, /*editable=*/false, &ok);
-    if (!ok) return;
-    const int idx = labels.indexOf(choice);
-    if (idx < 0) return;
+    if (dlg.exec() != QDialog::Accepted) return;
     Config::PlayerDevice dev;
-    dev.kind = Config::PlayerDeviceKind::Gamepad;
-    dev.guid = guids[idx].toStdString();
-    auto* item = makeDeviceItem(dev);
-    m_lists[slot - 1]->addItem(item);
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
+    m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
 void PlayerAssignmentDialog::addKitDevice(int slot) {
-    bool ok = false;
-    const QString s = QInputDialog::getText(
-        this, tr("Add Kit"),
-        tr("Enter the kit's VID:PID (e.g. 0x1209:0x2882):"),
-        QLineEdit::Normal, QString(), &ok);
-    if (!ok || s.isEmpty()) return;
-    const QRegularExpression re(
-        QStringLiteral("^\\s*0?x?([0-9a-fA-F]{1,4})\\s*:\\s*0?x?([0-9a-fA-F]{1,4})\\s*$"));
-    const auto m = re.match(s);
-    if (!m.hasMatch()) {
-        QMessageBox::warning(this, tr("Bad VID:PID"),
-                             tr("Expected format: 0x1209:0x2882 (4 hex digits each)."));
+    // Snapshot which kits the runtime currently has loaded — those are
+    // the ones that have been probed via the wizard. Anything detected
+    // but not in this set still gets listed so the user sees it exists,
+    // but with a hint that it needs probing first.
+    std::set<std::pair<u16, u16>> loaded;
+    {
+        std::lock_guard<std::mutex> lk(Input::HidInstrument::g_kits_mu);
+        for (const auto& kd : Input::HidInstrument::g_kits) {
+            loaded.insert({kd.vid, kd.pid});
+        }
+    }
+    // Walk every HID device on the host. Collapse duplicates by
+    // VID:PID — the same kit often exposes several HID interfaces.
+    SDL_hid_init();
+    std::set<std::pair<u16, u16>> seen;
+    struct Row {
+        std::string label;
+        u16 vid, pid;
+        bool probed;
+    };
+    std::vector<Row> rows;
+    if (auto* head = SDL_hid_enumerate(0, 0)) {
+        for (auto* d = head; d; d = d->next) {
+            const std::pair<u16, u16> key{d->vendor_id, d->product_id};
+            if (seen.count(key)) continue;
+            seen.insert(key);
+            const std::string mfr =
+                d->manufacturer_string
+                    ? QString::fromWCharArray(d->manufacturer_string).trimmed().toStdString()
+                    : "";
+            const std::string prod =
+                d->product_string
+                    ? QString::fromWCharArray(d->product_string).trimmed().toStdString()
+                    : "";
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%04x:%04x  %s %s",
+                          d->vendor_id, d->product_id,
+                          mfr.empty() ? "?" : mfr.c_str(),
+                          prod.c_str());
+            Row r;
+            r.label = buf;
+            r.vid = d->vendor_id;
+            r.pid = d->product_id;
+            r.probed = loaded.count(key) > 0;
+            rows.push_back(std::move(r));
+        }
+        SDL_hid_free_enumeration(head);
+    }
+    if (rows.empty()) {
+        QMessageBox::information(this, tr("No HID devices detected"),
+            tr("Plug in your instrument, then open this dialog again."));
         return;
     }
+    DevicePickerDialog dlg(tr("Add Kit"),
+        tr("Choose a detected HID device to bind to Player %1. "
+           "Greyed-out devices haven't been probed yet — open "
+           "Special Devices → probe wizard first.").arg(slot), this);
+    for (const auto& r : rows) {
+        Config::PlayerDevice dev;
+        dev.kind = Config::PlayerDeviceKind::Kit;
+        dev.vid = r.vid;
+        dev.pid = r.pid;
+        const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
+        const QString suffix =
+            r.probed ? tr("  [probed]") : tr("  [needs probing]");
+        dlg.addRow(QString::fromStdString(r.label) + suffix, enc, r.probed,
+                   r.probed ? QString()
+                            : tr("Open Settings → Configure Special Devices "
+                                 "→ Probe wizard to register this kit."));
+    }
+    if (dlg.exec() != QDialog::Accepted) return;
     Config::PlayerDevice dev;
-    dev.kind = Config::PlayerDeviceKind::Kit;
-    dev.vid = static_cast<u16>(m.captured(1).toUInt(nullptr, 16));
-    dev.pid = static_cast<u16>(m.captured(2).toUInt(nullptr, 16));
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
@@ -234,25 +303,20 @@ void PlayerAssignmentDialog::addMidiDevice(int slot) {
                "module (or a USB-MIDI adapter), open this dialog again."));
         return;
     }
-    QStringList labels;
-    QStringList ids;
+    DevicePickerDialog dlg(tr("Add MIDI"),
+        tr("Choose a MIDI input port to bind to Player %1.").arg(slot), this);
     for (const auto& p : ports) {
         const QString name = QString::fromStdString(p.name);
         const QString port_id = QString::fromStdString(p.id);
-        labels << QStringLiteral("%1  [port %2]").arg(name, port_id);
-        ids << port_id;
+        Config::PlayerDevice dev;
+        dev.kind = Config::PlayerDeviceKind::Midi;
+        dev.guid = port_id.toStdString();
+        const QString enc = QString::fromStdString(Config::encodePlayerDevice(dev));
+        dlg.addRow(QStringLiteral("%1  [port %2]").arg(name, port_id), enc, true);
     }
-    bool ok = false;
-    const QString choice = QInputDialog::getItem(
-        this, tr("Add MIDI"),
-        tr("Choose a MIDI input port to bind to Player %1:").arg(slot),
-        labels, 0, /*editable=*/false, &ok);
-    if (!ok) return;
-    const int idx = labels.indexOf(choice);
-    if (idx < 0) return;
+    if (dlg.exec() != QDialog::Accepted) return;
     Config::PlayerDevice dev;
-    dev.kind = Config::PlayerDeviceKind::Midi;
-    dev.guid = ids[idx].toStdString();
+    if (!Config::decodePlayerDevice(dlg.chosenEncoded().toStdString(), dev)) return;
     m_lists[slot - 1]->addItem(makeDeviceItem(dev));
 }
 
@@ -276,5 +340,11 @@ void PlayerAssignmentDialog::onAccept() {
         }
         Config::setPlayerSlotDevices(slot, devs);
     }
+    // Apply changes live: relocate connected gamepads whose GUID is now
+    // bound to a different slot, then re-parse keybindings so keyboard
+    // routing picks up any new Keyboard-slot mapping.
+    Input::GameControllers::ApplyAssignmentChanges();
+    Input::ParseInputConfig(Config::GetUseUnifiedInputConfig() ? std::string("default")
+                                                               : std::string());
     accept();
 }

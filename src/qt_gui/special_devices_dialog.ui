@@ -105,10 +105,6 @@
       <property name="text"><string>Refresh detected kits</string></property>
       <property name="toolTip"><string>Re-scan kits and re-open devices for slots whose Legacy raw-HID flag changed.</string></property>
      </widget></item>
-     <item><widget class="QPushButton" name="playerAssignmentBtn">
-      <property name="text"><string>Player Assignment…</string></property>
-      <property name="toolTip"><string>Pin specific gamepads, kits, the keyboard, or MIDI inputs to particular PS4 player slots instead of relying on plug-in order.</string></property>
-     </widget></item>
     </layout>
    </item>
 

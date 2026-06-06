@@ -1113,6 +1113,8 @@ set(QT_GUI src/qt_gui/about_dialog.cpp
            src/qt_gui/special_devices_dialog.ui
            src/qt_gui/player_assignment_dialog.cpp
            src/qt_gui/player_assignment_dialog.h
+           src/qt_gui/device_picker_dialog.cpp
+           src/qt_gui/device_picker_dialog.h
            src/qt_gui/kbm_gui.cpp
            src/qt_gui/kbm_gui.h
            src/qt_gui/kbm_gui.ui

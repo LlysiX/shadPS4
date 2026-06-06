@@ -382,6 +382,35 @@ void ParseInputConfig(const std::string game_id = "") {
                         lineCount, line);
             return;
         }
+        // Per-player keyboard routing. If the binding's input is a
+        // keyboard or mouse event (not a controller) AND the user
+        // didn't write an explicit :N suffix on the output, route to
+        // whichever player slot has Keyboard listed in its Player
+        // Assignment. Without this, keyboard always lands on slot 0
+        // even when the user assigned it elsewhere — which the Player
+        // Assignment dialog claimed would work.
+        bool binding_uses_gamepad = false;
+        for (const auto& k : binding.keys) {
+            if (k.type == InputType::Controller || k.type == InputType::Axis) {
+                binding_uses_gamepad = true;
+                break;
+            }
+        }
+        if (output_gamepad_id == -1 && !binding_uses_gamepad) {
+            for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
+                bool slot_has_keyboard = false;
+                for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
+                    if (dev.kind == Config::PlayerDeviceKind::Keyboard) {
+                        slot_has_keyboard = true;
+                        break;
+                    }
+                }
+                if (slot_has_keyboard) {
+                    output_gamepad_id = slot;
+                    break;
+                }
+            }
+        }
         if (button_it != string_to_cbutton_map.end()) {
             // todo add new shit here
             connection = BindingConnection(

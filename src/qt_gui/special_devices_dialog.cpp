@@ -18,7 +18,6 @@
 #include "common/path_util.h"
 #include "input/hid_instrument.h"
 #include "kit_probe_dialog.h"
-#include "player_assignment_dialog.h"
 
 namespace {
 
@@ -64,11 +63,6 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
 #endif
     connect(ui->refreshBtn, &QPushButton::clicked, this,
             &SpecialDevicesDialog::onRefresh);
-    connect(ui->playerAssignmentBtn, &QPushButton::clicked, this,
-            [this]() {
-                PlayerAssignmentDialog dlg(this);
-                dlg.exec();
-            });
     connect(ui->buttonBox, &QDialogButtonBox::clicked, this,
             [this](QAbstractButton* b) {
                 const auto role = ui->buttonBox->standardButton(b);

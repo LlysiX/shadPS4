@@ -32,8 +32,6 @@ u64 GetLastInputNs(int slot /*0..3*/);
 // the runtime's placement when lighting up its tab indicator.
 int FindBoundSlotForGamepad(const std::string& guid, const std::string& path);
 
-
-
 enum class Axis {
     LeftX = 0,
     LeftY = 1,

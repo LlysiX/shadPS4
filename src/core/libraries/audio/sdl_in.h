@@ -31,8 +31,7 @@ public:
     // and to read the per-slot noise gate config in AudioInInput, so
     // games that open multiple mics for harmonies (RB4 vocals) route
     // each player to its own device with its own gate threshold.
-    int AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_t freq,
-                    uint32_t format);
+    int AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_t freq, uint32_t format);
     int AudioInInput(int handle, void* out_buffer);
     void AudioInClose(int handle);
     // True when the software noise gate currently considers the port's

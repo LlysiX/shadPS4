@@ -37,17 +37,18 @@ u32 ButtonByName(std::string_view name) {
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     static const std::pair<const char*, B> map[] = {
-        {"square", B::Square},     {"cross", B::Cross},
-        {"circle", B::Circle},     {"triangle", B::Triangle},
-        {"l1", B::L1},             {"r1", B::R1},
-        {"l2", B::L2},             {"r2", B::R2},
-        {"l3", B::L3},             {"r3", B::R3},
-        {"options", B::Options},   {"touchpad", B::TouchPad},
-        {"up", B::Up},             {"down", B::Down},
-        {"left", B::Left},         {"right", B::Right},
+        {"square", B::Square},   {"cross", B::Cross},
+        {"circle", B::Circle},   {"triangle", B::Triangle},
+        {"l1", B::L1},           {"r1", B::R1},
+        {"l2", B::L2},           {"r2", B::R2},
+        {"l3", B::L3},           {"r3", B::R3},
+        {"options", B::Options}, {"touchpad", B::TouchPad},
+        {"up", B::Up},           {"down", B::Down},
+        {"left", B::Left},       {"right", B::Right},
     };
     for (const auto& [n, v] : map) {
-        if (lower == n) return static_cast<u32>(v);
+        if (lower == n)
+            return static_cast<u32>(v);
     }
     return 0;
 }
@@ -68,30 +69,31 @@ u32 ParseHexOrDec(const std::string& s) {
 // state involved. This is what makes the packer testable in isolation —
 // PackDeviceUniqueData passes its own `raw` arg instead of reaching into
 // g_slots[slot].last_report.
-bool ComputeAccelerationFrom(const KitDef& kit, const u8* raw, std::size_t raw_len,
-                             float& out_x) {
+bool ComputeAccelerationFrom(const KitDef& kit, const u8* raw, std::size_t raw_len, float& out_x) {
     out_x = 0.0f;
-    if (!raw || raw_len == 0) return false;
-    if (kit.tilt_byte < 0 ||
-        static_cast<std::size_t>(kit.tilt_byte) >= raw_len) {
+    if (!raw || raw_len == 0)
+        return false;
+    if (kit.tilt_byte < 0 || static_cast<std::size_t>(kit.tilt_byte) >= raw_len) {
         return false;
     }
     int rawv = raw[kit.tilt_byte];
-    if (kit.tilt_byte_high >= 0 &&
-        static_cast<std::size_t>(kit.tilt_byte_high) < raw_len) {
+    if (kit.tilt_byte_high >= 0 && static_cast<std::size_t>(kit.tilt_byte_high) < raw_len) {
         rawv |= (raw[kit.tilt_byte_high] & 0x03) << 8;
     }
     const int delta = rawv - kit.tilt_baseline;
     const int scale = (kit.tilt_scale > 0) ? kit.tilt_scale : 128;
     float x = -static_cast<float>(delta) / static_cast<float>(scale);
-    if (kit.tilt_invert) x = -x;
-    if (x < -1.0f) x = -1.0f;
-    if (x > 1.0f) x = 1.0f;
+    if (kit.tilt_invert)
+        x = -x;
+    if (x < -1.0f)
+        x = -1.0f;
+    if (x > 1.0f)
+        x = 1.0f;
     out_x = x;
     return true;
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Kit loading
@@ -114,30 +116,29 @@ bool LoadKitFromToml(const std::string& file_path) {
             // distinct entries).
             k.source = "midi";
             k.name = toml::find_or<std::string>(root, "name", "(MIDI)");
-            k.device_class = toml::find_or<std::string>(
-                root, "device_class", "drum");
-            k.midi_port_id =
-                toml::find_or<std::string>(root, "port_id", "");
+            k.device_class = toml::find_or<std::string>(root, "device_class", "drum");
+            k.midi_port_id = toml::find_or<std::string>(root, "port_id", "");
             // Hash port_id into a 32-bit value, split across vid/pid.
-            std::uint32_t h = 2166136261u;  // FNV-1a 32-bit
+            std::uint32_t h = 2166136261u; // FNV-1a 32-bit
             for (char c : k.midi_port_id) {
                 h ^= static_cast<std::uint8_t>(c);
                 h *= 16777619u;
             }
             k.vid = static_cast<u16>(0xF000 | ((h >> 16) & 0x0FFF));
             k.pid = static_cast<u16>(h & 0xFFFF);
-            if (k.pid == 0) k.pid = 1;  // 0:0 would trigger the legacy reject path
+            if (k.pid == 0)
+                k.pid = 1; // 0:0 would trigger the legacy reject path
             // Drum buffer layout — fixed to the snapshot byte indices the
             // MidiInput backend writes (see midi_input.h).
             k.drum_ps4_layout = true;
-            k.drum_red_byte           = 3;   // kSnapByteSnareRed
-            k.drum_blue_byte          = 5;   // kSnapByteTomMidBlue
-            k.drum_yellow_byte        = 4;   // kSnapByteTomHighYel
-            k.drum_green_byte         = 6;   // kSnapByteTomLowGrn
-            k.drum_yellow_cymbal_byte = 8;   // kSnapByteCymYellow
-            k.drum_blue_cymbal_byte   = 9;   // kSnapByteCymBlue
-            k.drum_green_cymbal_byte  = 10;  // kSnapByteCymGreen
-            k.report_length = 16;            // kSnapshotBytes
+            k.drum_red_byte = 3;           // kSnapByteSnareRed
+            k.drum_blue_byte = 5;          // kSnapByteTomMidBlue
+            k.drum_yellow_byte = 4;        // kSnapByteTomHighYel
+            k.drum_green_byte = 6;         // kSnapByteTomLowGrn
+            k.drum_yellow_cymbal_byte = 8; // kSnapByteCymYellow
+            k.drum_blue_cymbal_byte = 9;   // kSnapByteCymBlue
+            k.drum_green_cymbal_byte = 10; // kSnapByteCymGreen
+            k.report_length = 16;          // kSnapshotBytes
             // RB4 + similar games only register a drum hit when the
             // matching face button is set in OrbisPadData::buttons —
             // velocity in deviceUniqueData alone is silent. Build a
@@ -159,14 +160,14 @@ bool LoadKitFromToml(const std::string& file_path) {
             auto fill_button = [](u32 btn) -> std::array<u32, 8> {
                 return {btn, btn, btn, btn, btn, btn, btn, btn};
             };
-            k.button_bytes[3]  = fill_button(static_cast<u32>(OPBDO::Circle));    // red snare
-            k.button_bytes[4]  = fill_button(static_cast<u32>(OPBDO::Triangle));  // yellow tom
-            k.button_bytes[5]  = fill_button(static_cast<u32>(OPBDO::Square));    // blue tom
-            k.button_bytes[6]  = fill_button(static_cast<u32>(OPBDO::Cross));     // green floor tom
-            k.button_bytes[1]  = fill_button(static_cast<u32>(OPBDO::L1));        // kick pedal
-            k.button_bytes[8]  = fill_button(static_cast<u32>(OPBDO::Triangle));  // yellow cymbal
-            k.button_bytes[9]  = fill_button(static_cast<u32>(OPBDO::Square));    // blue cymbal
-            k.button_bytes[10] = fill_button(static_cast<u32>(OPBDO::Cross));     // green cymbal
+            k.button_bytes[3] = fill_button(static_cast<u32>(OPBDO::Circle));   // red snare
+            k.button_bytes[4] = fill_button(static_cast<u32>(OPBDO::Triangle)); // yellow tom
+            k.button_bytes[5] = fill_button(static_cast<u32>(OPBDO::Square));   // blue tom
+            k.button_bytes[6] = fill_button(static_cast<u32>(OPBDO::Cross));    // green floor tom
+            k.button_bytes[1] = fill_button(static_cast<u32>(OPBDO::L1));       // kick pedal
+            k.button_bytes[8] = fill_button(static_cast<u32>(OPBDO::Triangle)); // yellow cymbal
+            k.button_bytes[9] = fill_button(static_cast<u32>(OPBDO::Square));   // blue cymbal
+            k.button_bytes[10] = fill_button(static_cast<u32>(OPBDO::Cross));   // green cymbal
             // [midi_pad_map] holds TOML key -> list[int] of MIDI notes.
             // Translate to KitDef::midi_pad_map: note -> snapshot byte index.
             //
@@ -180,40 +181,39 @@ bool LoadKitFromToml(const std::string& file_path) {
             // TOML — or re-probe — without guessing.
             if (root.contains("midi_pad_map")) {
                 static const std::pair<const char*, int> kKeyToByte[] = {
-                    {"red",            3},
-                    {"blue",           5},
-                    {"yellow",         4},
-                    {"green",          6},
-                    {"orange",         6},  // 5-lane GH alias
-                    {"kick",           1},
-                    {"kick2",          1},
-                    {"yellow_cymbal",  8},
-                    {"orange_cymbal",  8},
-                    {"blue_cymbal",    9},
-                    {"green_cymbal",  10},
+                    {"red", 3},           {"blue", 5},        {"yellow", 4},
+                    {"green", 6},         {"orange", 6}, // 5-lane GH alias
+                    {"kick", 1},          {"kick2", 1},       {"yellow_cymbal", 8},
+                    {"orange_cymbal", 8}, {"blue_cymbal", 9}, {"green_cymbal", 10},
                 };
                 std::map<u8, std::string> note_owner;
                 const auto& tbl = toml::find(root, "midi_pad_map").as_table();
                 for (const auto& [key, val] : tbl) {
                     int byte_idx = -1;
                     for (const auto& [k_str, b] : kKeyToByte) {
-                        if (key == k_str) { byte_idx = b; break; }
+                        if (key == k_str) {
+                            byte_idx = b;
+                            break;
+                        }
                     }
-                    if (byte_idx < 0) continue;
-                    if (!val.is_array()) continue;
+                    if (byte_idx < 0)
+                        continue;
+                    if (!val.is_array())
+                        continue;
                     for (const auto& nv : val.as_array()) {
-                        if (!nv.is_integer()) continue;
+                        if (!nv.is_integer())
+                            continue;
                         const int note = static_cast<int>(nv.as_integer());
-                        if (note < 0 || note > 127) continue;
+                        if (note < 0 || note > 127)
+                            continue;
                         const u8 nbyte = static_cast<u8>(note);
                         auto own = note_owner.find(nbyte);
                         if (own != note_owner.end()) {
-                            LOG_WARNING(
-                                Input,
-                                "MIDI kit {}: note {} listed under both '{}' "
-                                "(kept) and '{}' (ignored) — re-probe to "
-                                "fix",
-                                file.filename().string(), note, own->second, key);
+                            LOG_WARNING(Input,
+                                        "MIDI kit {}: note {} listed under both '{}' "
+                                        "(kept) and '{}' (ignored) — re-probe to "
+                                        "fix",
+                                        file.filename().string(), note, own->second, key);
                             continue;
                         }
                         note_owner[nbyte] = key;
@@ -225,15 +225,16 @@ bool LoadKitFromToml(const std::string& file_path) {
             // packer reads dud_scale_lo/hi). Parsed below by the same
             // velocity_scaling block, so no separate work here.
             std::lock_guard<std::mutex> lk(g_kits_mu);
-            auto it = std::find_if(g_kits.begin(), g_kits.end(),
-                                   [&](const KitDef& e) { return e.vid == k.vid && e.pid == k.pid; });
+            auto it = std::find_if(g_kits.begin(), g_kits.end(), [&](const KitDef& e) {
+                return e.vid == k.vid && e.pid == k.pid;
+            });
             if (it != g_kits.end()) {
                 *it = std::move(k);
-                LOG_INFO(Input, "MIDI kit reloaded from {} (port {})",
-                         file.filename().string(), it->midi_port_id);
+                LOG_INFO(Input, "MIDI kit reloaded from {} (port {})", file.filename().string(),
+                         it->midi_port_id);
             } else {
-                LOG_INFO(Input, "MIDI kit loaded from {}: {} (port {})",
-                         file.filename().string(), k.name, k.midi_port_id);
+                LOG_INFO(Input, "MIDI kit loaded from {}: {} (port {})", file.filename().string(),
+                         k.name, k.midi_port_id);
                 g_kits.push_back(std::move(k));
             }
             return true;
@@ -262,19 +263,18 @@ bool LoadKitFromToml(const std::string& file_path) {
         k.fret_mask = static_cast<u8>(toml::find_or<int>(root, "fret_mask", 0xFF));
         k.solo_fret_byte = toml::find_or<int>(root, "solo_fret_byte", -1);
         k.solo_modifier_byte = toml::find_or<int>(root, "solo_modifier_byte", -1);
-        k.solo_modifier_mask = static_cast<u8>(
-            toml::find_or<int>(root, "solo_modifier_mask", 0));
+        k.solo_modifier_mask = static_cast<u8>(toml::find_or<int>(root, "solo_modifier_mask", 0));
         k.whammy_baseline = toml::find_or<int>(root, "whammy_baseline", 0x80);
         k.tilt_invert = toml::find_or<bool>(root, "tilt_invert", false);
         k.guitar_ps4_layout = toml::find_or<bool>(root, "guitar_ps4_layout", false);
         k.drum_ps4_layout = toml::find_or<bool>(root, "drum_ps4_layout", false);
-        k.drum_red_byte           = toml::find_or<int>(root, "drum_red_byte", -1);
-        k.drum_blue_byte          = toml::find_or<int>(root, "drum_blue_byte", -1);
-        k.drum_yellow_byte        = toml::find_or<int>(root, "drum_yellow_byte", -1);
-        k.drum_green_byte         = toml::find_or<int>(root, "drum_green_byte", -1);
+        k.drum_red_byte = toml::find_or<int>(root, "drum_red_byte", -1);
+        k.drum_blue_byte = toml::find_or<int>(root, "drum_blue_byte", -1);
+        k.drum_yellow_byte = toml::find_or<int>(root, "drum_yellow_byte", -1);
+        k.drum_green_byte = toml::find_or<int>(root, "drum_green_byte", -1);
         k.drum_yellow_cymbal_byte = toml::find_or<int>(root, "drum_yellow_cymbal_byte", -1);
-        k.drum_blue_cymbal_byte   = toml::find_or<int>(root, "drum_blue_cymbal_byte", -1);
-        k.drum_green_cymbal_byte  = toml::find_or<int>(root, "drum_green_cymbal_byte", -1);
+        k.drum_blue_cymbal_byte = toml::find_or<int>(root, "drum_blue_cymbal_byte", -1);
+        k.drum_green_cymbal_byte = toml::find_or<int>(root, "drum_green_cymbal_byte", -1);
         if (root.contains("motion_bytes")) {
             k.motion_bytes = toml::find<std::vector<int>>(root, "motion_bytes");
         }
@@ -285,8 +285,8 @@ bool LoadKitFromToml(const std::string& file_path) {
             }
             k.has_dud0_remap = true;
         }
-        k.clear_dud0_when_raw1_bits = static_cast<u8>(
-            toml::find_or<int>(root, "clear_dud0_when_raw1_bits", 0));
+        k.clear_dud0_when_raw1_bits =
+            static_cast<u8>(toml::find_or<int>(root, "clear_dud0_when_raw1_bits", 0));
         if (root.contains("device_unique_data")) {
             const auto& arr = toml::find<std::vector<int>>(root, "device_unique_data");
             for (std::size_t i = 0; i < kMaxDeviceUniqueData && i < arr.size(); ++i) {
@@ -300,16 +300,23 @@ bool LoadKitFromToml(const std::string& file_path) {
                 const u32 mask = ParseHexOrDec(key);
                 const u32 btn = ButtonByName(val.as_string());
                 for (int bit = 0; bit < 8; ++bit) {
-                    if (mask & (1u << bit)) out[bit] |= btn;
+                    if (mask & (1u << bit))
+                        out[bit] |= btn;
                 }
             }
         };
         if (root.is_table()) {
             for (const auto& [key, val] : root.as_table()) {
-                if (key.rfind("buttons_byte_", 0) != 0) continue;
+                if (key.rfind("buttons_byte_", 0) != 0)
+                    continue;
                 int byte_idx = 0;
-                try { byte_idx = std::stoi(key.substr(13)); } catch (...) { continue; }
-                if (byte_idx < 0) continue;
+                try {
+                    byte_idx = std::stoi(key.substr(13));
+                } catch (...) {
+                    continue;
+                }
+                if (byte_idx < 0)
+                    continue;
                 load_button_table(key, byte_idx);
             }
         }
@@ -317,12 +324,20 @@ bool LoadKitFromToml(const std::string& file_path) {
             const auto& tbl = toml::find(root, "velocity_scaling").as_table();
             for (const auto& [key, val] : tbl) {
                 int idx = 0;
-                try { idx = std::stoi(key); } catch (...) { continue; }
-                if (idx < 0 || idx >= (int)kMaxDeviceUniqueData) continue;
-                if (!val.is_table()) continue;
+                try {
+                    idx = std::stoi(key);
+                } catch (...) {
+                    continue;
+                }
+                if (idx < 0 || idx >= (int)kMaxDeviceUniqueData)
+                    continue;
+                if (!val.is_table())
+                    continue;
                 const auto& o = val.as_table();
-                if (o.count("lo")) k.dud_scale_lo[idx] = o.at("lo").as_integer();
-                if (o.count("hi")) k.dud_scale_hi[idx] = o.at("hi").as_integer();
+                if (o.count("lo"))
+                    k.dud_scale_lo[idx] = o.at("lo").as_integer();
+                if (o.count("hi"))
+                    k.dud_scale_hi[idx] = o.at("hi").as_integer();
             }
         }
         std::lock_guard<std::mutex> lk(g_kits_mu);
@@ -330,11 +345,11 @@ bool LoadKitFromToml(const std::string& file_path) {
                                [&](const KitDef& e) { return e.vid == k.vid && e.pid == k.pid; });
         if (it != g_kits.end()) {
             *it = std::move(k);
-            LOG_INFO(Input, "kit reloaded from {} ({:04x}:{:04x})",
-                     file.filename().string(), it->vid, it->pid);
+            LOG_INFO(Input, "kit reloaded from {} ({:04x}:{:04x})", file.filename().string(),
+                     it->vid, it->pid);
         } else {
-            LOG_INFO(Input, "kit loaded from {}: {} ({:04x}:{:04x})",
-                     file.filename().string(), k.name, k.vid, k.pid);
+            LOG_INFO(Input, "kit loaded from {}: {} ({:04x}:{:04x})", file.filename().string(),
+                     k.name, k.vid, k.pid);
             g_kits.push_back(std::move(k));
         }
         return true;
@@ -346,7 +361,7 @@ bool LoadKitFromToml(const std::string& file_path) {
 
 namespace {
 std::once_flag g_kits_loaded_once;
-}  // namespace
+} // namespace
 
 // Lazy-load all kit TOMLs exactly once, no SDL / no poll thread. The
 // full EnsureInit() in the IO layer also chains through here, so the
@@ -362,11 +377,13 @@ void EnsureKitsLoaded() {
 void LoadAllKits() {
     auto scan_dir = [](const fs::path& dir) {
         std::error_code ec;
-        if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return;
+        if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+            return;
         for (auto it = fs::recursive_directory_iterator(
                  dir, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (ec) break;
+            if (ec)
+                break;
             if (it->is_regular_file(ec) && it->path().extension() == ".toml") {
                 LoadKitFromToml(it->path().string());
             }
@@ -383,16 +400,17 @@ void LoadAllKits() {
 const KitDef* FindKit(u16 vid, u16 pid) {
     std::lock_guard<std::mutex> lk(g_kits_mu);
     for (const auto& k : g_kits) {
-        if (k.vid == vid && k.pid == pid) return &k;
+        if (k.vid == vid && k.pid == pid)
+            return &k;
     }
     return nullptr;
 }
 
 bool PathInUseByOtherSlot(const std::string& path, int this_slot_index) {
     for (int i = 0; i < kNumSlots; ++i) {
-        if (i == this_slot_index) continue;
-        if ((g_slots[i].dev || g_slots[i].gamepad) &&
-            g_slots[i].device_path == path) {
+        if (i == this_slot_index)
+            continue;
+        if ((g_slots[i].dev || g_slots[i].gamepad) && g_slots[i].device_path == path) {
             return true;
         }
     }
@@ -404,25 +422,33 @@ bool PathInUseByOtherSlot(const std::string& path, int this_slot_index) {
 // ---------------------------------------------------------------------------
 
 bool GetLatestReport(int slot, u8* out, std::size_t* out_len) {
-    if (slot < 1 || slot > kNumSlots) return false;
-    if (!Config::getSpecialPadLegacyPassUSBRawHID(slot)) return false;
+    if (slot < 1 || slot > kNumSlots)
+        return false;
+    if (!Config::getSpecialPadLegacyPassUSBRawHID(slot))
+        return false;
     EnsureInit();
     SlotState& s = g_slots[slot - 1];
     std::lock_guard<std::mutex> lk(s.mu);
-    if (!s.has_data || s.last_report_len == 0) return false;
-    if (out) std::memcpy(out, s.last_report, s.last_report_len);
-    if (out_len) *out_len = s.last_report_len;
+    if (!s.has_data || s.last_report_len == 0)
+        return false;
+    if (out)
+        std::memcpy(out, s.last_report, s.last_report_len);
+    if (out_len)
+        *out_len = s.last_report_len;
     return true;
 }
 
 bool GetLatestAcceleration(int slot, float& out_x, float& out_y, float& out_z) {
     out_x = out_y = out_z = 0.0f;
-    if (slot < 1 || slot > kNumSlots) return false;
-    if (!Config::getSpecialPadLegacyPassUSBRawHID(slot)) return false;
+    if (slot < 1 || slot > kNumSlots)
+        return false;
+    if (!Config::getSpecialPadLegacyPassUSBRawHID(slot))
+        return false;
     EnsureInit();
     SlotState& s = g_slots[slot - 1];
     std::lock_guard<std::mutex> lk(s.mu);
-    if (!s.has_data || s.last_report_len == 0 || !s.kit) return false;
+    if (!s.has_data || s.last_report_len == 0 || !s.kit)
+        return false;
     return ComputeAccelerationFrom(*s.kit, s.last_report, s.last_report_len, out_x);
 }
 
@@ -431,10 +457,10 @@ bool GetLatestAcceleration(int slot, float& out_x, float& out_y, float& out_z) {
 // ---------------------------------------------------------------------------
 
 std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
-                                 OPB::OrbisPadDeviceClass dev_class,
-                                 u8 out[kMaxDeviceUniqueData]) {
+                                 OPB::OrbisPadDeviceClass dev_class, u8 out[kMaxDeviceUniqueData]) {
     (void)dev_class;
-    if (!raw || !out || raw_len == 0) return 0;
+    if (!raw || !out || raw_len == 0)
+        return 0;
     // Hold g_kits_mu for the duration of the pack. The runtime's
     // LoadKitFile path can null s.kit and overwrite the underlying
     // KitDef via *it = std::move(k); without this lock a torn read
@@ -442,26 +468,31 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
     // 2026-06-07.
     std::lock_guard<std::mutex> kits_lk(g_kits_mu);
     const KitDef* kit = nullptr;
-    if (slot >= 1 && slot <= 4) kit = g_slots[slot - 1].kit;
+    if (slot >= 1 && slot <= 4)
+        kit = g_slots[slot - 1].kit;
     if (!kit) {
         std::memset(out, 0, kMaxDeviceUniqueData);
         return kMaxDeviceUniqueData;
     }
     auto at = [&](int i) -> u8 {
-        if (i < 0 || static_cast<std::size_t>(i) >= raw_len) return 0;
+        if (i < 0 || static_cast<std::size_t>(i) >= raw_len)
+            return 0;
         return raw[i];
     };
     if (kit->drum_ps4_layout) {
         std::memset(out, 0, kMaxDeviceUniqueData);
         auto pack_vel = [&](int dud_idx, int raw_idx) {
-            if (raw_idx < 0 || static_cast<std::size_t>(raw_idx) >= raw_len) return;
+            if (raw_idx < 0 || static_cast<std::size_t>(raw_idx) >= raw_len)
+                return;
             u8 v = raw[raw_idx];
             const int lo = kit->dud_scale_lo[dud_idx];
             const int hi = kit->dud_scale_hi[dud_idx];
             if (hi > lo) {
                 int scaled = (static_cast<int>(v) - lo) * 0x7F / (hi - lo);
-                if (scaled < 0) scaled = 0;
-                if (scaled > 0x7F) scaled = 0x7F;
+                if (scaled < 0)
+                    scaled = 0;
+                if (scaled > 0x7F)
+                    scaled = 0x7F;
                 v = static_cast<u8>(scaled);
             }
             out[dud_idx] = ScaleVel7to8(v);
@@ -512,15 +543,15 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
                     out[0] = last;
                 } else {
                     u8 notch = static_cast<u8>(tone_raw / (0xFFu / 5u));
-                    if (notch > 4) notch = 4;
+                    if (notch > 4)
+                        notch = 4;
                     last = notch;
                     out[0] = notch;
                 }
             } else {
-                u8 notch = (tone_raw == 0x7F)
-                               ? 0
-                               : static_cast<u8>(tone_raw / (0xFFu / 5u));
-                if (notch > 4) notch = 4;
+                u8 notch = (tone_raw == 0x7F) ? 0 : static_cast<u8>(tone_raw / (0xFFu / 5u));
+                if (notch > 4)
+                    notch = 4;
                 out[0] = notch;
             }
         }
@@ -528,9 +559,7 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             const u8 w = at(kit->whammy_byte);
             const int base = kit->whammy_baseline;
             const int range = std::max(1, 0xFF - base);
-            out[1] = (w > base)
-                ? static_cast<u8>(std::min(0xFE, (w - base) * 0xFE / range))
-                : 0;
+            out[1] = (w > base) ? static_cast<u8>(std::min(0xFE, (w - base) * 0xFE / range)) : 0;
         }
         // Compute tilt from the raw frame we were given — *not* from slot
         // state. This lets tests pass arbitrary frames in without first
@@ -538,7 +567,8 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         float acc_x = 0.0f;
         if (ComputeAccelerationFrom(*kit, raw, raw_len, acc_x) && acc_x > 0.0f) {
             float t = acc_x * 255.0f;
-            if (t > 255.0f) t = 255.0f;
+            if (t > 255.0f)
+                t = 255.0f;
             out[2] = static_cast<u8>(t);
         }
         u8 frets = at(kit->fret_byte) & kit->fret_mask;
@@ -548,7 +578,8 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         if (kit->has_dud0_remap) {
             u8 remapped = 0;
             for (int b = 0; b < 8; ++b) {
-                if (frets & (1u << b)) remapped |= (1u << kit->dud0_bit_remap[b]);
+                if (frets & (1u << b))
+                    remapped |= (1u << kit->dud0_bit_remap[b]);
             }
             frets = remapped;
         }
@@ -560,11 +591,9 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         //      a dedicated byte carries the solo bitmask independently
         //      from the main fret byte. Both can fire simultaneously.
         //   3. Neither: dud[3] = main frets, dud[4] = 0.
-        const bool solo_active =
-            kit->solo_modifier_byte >= 0 &&
-            kit->solo_modifier_mask != 0 &&
-            static_cast<std::size_t>(kit->solo_modifier_byte) < raw_len &&
-            (raw[kit->solo_modifier_byte] & kit->solo_modifier_mask) != 0;
+        const bool solo_active = kit->solo_modifier_byte >= 0 && kit->solo_modifier_mask != 0 &&
+                                 static_cast<std::size_t>(kit->solo_modifier_byte) < raw_len &&
+                                 (raw[kit->solo_modifier_byte] & kit->solo_modifier_mask) != 0;
         if (solo_active) {
             out[3] = 0;
             out[4] = frets;
@@ -584,7 +613,8 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
     if (kit->has_dud0_remap) {
         u8 remapped = 0;
         for (int b = 0; b < 8; ++b) {
-            if (flags & (1u << b)) remapped |= (1u << kit->dud0_bit_remap[b]);
+            if (flags & (1u << b))
+                remapped |= (1u << kit->dud0_bit_remap[b]);
         }
         flags = remapped;
     }
@@ -595,8 +625,10 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
         const int hi = kit->dud_scale_hi[i];
         if (hi > lo) {
             int scaled = (static_cast<int>(v) - lo) * 0x7F / (hi - lo);
-            if (scaled < 0) scaled = 0;
-            if (scaled > 0x7F) scaled = 0x7F;
+            if (scaled < 0)
+                scaled = 0;
+            if (scaled > 0x7F)
+                scaled = 0x7F;
             v = static_cast<u8>(scaled);
         }
         out[i] = v;
@@ -604,16 +636,18 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
     return kMaxDeviceUniqueData;
 }
 
-u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
-                OPB::OrbisPadDeviceClass dev_class) {
+u32 PackButtons(int slot, const u8* raw, std::size_t raw_len, OPB::OrbisPadDeviceClass dev_class) {
     using B = OPB::OrbisPadButtonDataOffset;
     (void)dev_class;
-    if (!raw || raw_len == 0) return 0;
+    if (!raw || raw_len == 0)
+        return 0;
     // See PackDeviceUniqueData — same race avoidance.
     std::lock_guard<std::mutex> kits_lk(g_kits_mu);
     const KitDef* kit = nullptr;
-    if (slot >= 1 && slot <= 4) kit = g_slots[slot - 1].kit;
-    if (!kit) return 0;
+    if (slot >= 1 && slot <= 4)
+        kit = g_slots[slot - 1].kit;
+    if (!kit)
+        return 0;
     // PackDeviceUniqueData clears dud[0] (the fret slot) whenever a menu
     // bit is held in raw[1] — so the game's fret state goes to 0 while
     // Start/Select is down. But PackButtons reads the same byte the frets
@@ -623,17 +657,18 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
     // the fret_byte when the suppression is active, so PackButtons agrees
     // with PackDeviceUniqueData about which inputs are live.
     const bool suppress_frets =
-        kit->clear_dud0_when_raw1_bits && raw_len > 1 &&
-        (raw[1] & kit->clear_dud0_when_raw1_bits);
+        kit->clear_dud0_when_raw1_bits && raw_len > 1 && (raw[1] & kit->clear_dud0_when_raw1_bits);
     u32 out = 0;
     for (const auto& [byte_idx, table] : kit->button_bytes) {
-        if (byte_idx < 0 || static_cast<std::size_t>(byte_idx) >= raw_len) continue;
+        if (byte_idx < 0 || static_cast<std::size_t>(byte_idx) >= raw_len)
+            continue;
         u8 b = raw[byte_idx];
         if (suppress_frets && byte_idx == kit->fret_byte) {
             b &= ~kit->fret_mask;
         }
         for (int bit = 0; bit < 8; ++bit) {
-            if (b & (1u << bit)) out |= table[bit];
+            if (b & (1u << bit))
+                out |= table[bit];
         }
     }
     if (kit->hat_byte >= 0 && static_cast<std::size_t>(kit->hat_byte) < raw_len) {
@@ -643,21 +678,42 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
             // down=bit1, left=bit2, right=bit3) — not as an HID HAT
             // position. Decode bit-for-bit so XInput strum doesn't read
             // out as diagonals.
-            if (hat & 0x01) out |= static_cast<u32>(B::Up);
-            if (hat & 0x02) out |= static_cast<u32>(B::Down);
-            if (hat & 0x04) out |= static_cast<u32>(B::Left);
-            if (hat & 0x08) out |= static_cast<u32>(B::Right);
+            if (hat & 0x01)
+                out |= static_cast<u32>(B::Up);
+            if (hat & 0x02)
+                out |= static_cast<u32>(B::Down);
+            if (hat & 0x04)
+                out |= static_cast<u32>(B::Left);
+            if (hat & 0x08)
+                out |= static_cast<u32>(B::Right);
         } else {
             switch (hat & 0x0F) {
-            case 0x00: out |= static_cast<u32>(B::Up); break;
-            case 0x01: out |= static_cast<u32>(B::Up) | static_cast<u32>(B::Right); break;
-            case 0x02: out |= static_cast<u32>(B::Right); break;
-            case 0x03: out |= static_cast<u32>(B::Right) | static_cast<u32>(B::Down); break;
-            case 0x04: out |= static_cast<u32>(B::Down); break;
-            case 0x05: out |= static_cast<u32>(B::Down) | static_cast<u32>(B::Left); break;
-            case 0x06: out |= static_cast<u32>(B::Left); break;
-            case 0x07: out |= static_cast<u32>(B::Left) | static_cast<u32>(B::Up); break;
-            default: break;
+            case 0x00:
+                out |= static_cast<u32>(B::Up);
+                break;
+            case 0x01:
+                out |= static_cast<u32>(B::Up) | static_cast<u32>(B::Right);
+                break;
+            case 0x02:
+                out |= static_cast<u32>(B::Right);
+                break;
+            case 0x03:
+                out |= static_cast<u32>(B::Right) | static_cast<u32>(B::Down);
+                break;
+            case 0x04:
+                out |= static_cast<u32>(B::Down);
+                break;
+            case 0x05:
+                out |= static_cast<u32>(B::Down) | static_cast<u32>(B::Left);
+                break;
+            case 0x06:
+                out |= static_cast<u32>(B::Left);
+                break;
+            case 0x07:
+                out |= static_cast<u32>(B::Left) | static_cast<u32>(B::Up);
+                break;
+            default:
+                break;
             }
         }
     }
@@ -665,9 +721,9 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len,
 }
 
 bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
-                    OPB::OrbisPadDeviceClass dev_class,
-                    OPB::OrbisPadDeviceClassData* out) {
-    if (!dud || !out || dud_len < 8) return false;
+                    OPB::OrbisPadDeviceClass dev_class, OPB::OrbisPadDeviceClassData* out) {
+    if (!dud || !out || dud_len < 8)
+        return false;
     std::memset(out, 0, sizeof(*out));
     out->deviceClass = dev_class;
     out->bDataValid = true;
@@ -686,25 +742,24 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
         // g_kits_mu pins the kit's std::string/std::vector members
         // against an in-place *it = std::move(k) from LoadKitFile.
         std::lock_guard<std::mutex> kits_lk(g_kits_mu);
-        const KitDef* kit = (slot >= 1 && slot <= kNumSlots) ? g_slots[slot - 1].kit
-                                                              : nullptr;
+        const KitDef* kit = (slot >= 1 && slot <= kNumSlots) ? g_slots[slot - 1].kit : nullptr;
         const bool ps4 = kit && kit->drum_ps4_layout;
         auto scale = [&](u8 v) { return ps4 ? v : ScaleVel7to8(v); };
-        out->classData.drum.snare       = scale(dud[0]);
-        out->classData.drum.tom1        = scale(dud[1]);
-        out->classData.drum.tom2        = scale(dud[2]);
-        out->classData.drum.floorTom    = scale(dud[3]);
+        out->classData.drum.snare = scale(dud[0]);
+        out->classData.drum.tom1 = scale(dud[1]);
+        out->classData.drum.tom2 = scale(dud[2]);
+        out->classData.drum.floorTom = scale(dud[3]);
         out->classData.drum.hihatCymbal = scale(dud[4]);
-        out->classData.drum.rideCymbal  = scale(dud[5]);
+        out->classData.drum.rideCymbal = scale(dud[5]);
         out->classData.drum.crashCymbal = scale(dud[6]);
         return true;
     }
     if (dev_class == OPB::OrbisPadDeviceClass::Guitar) {
         out->classData.guitar.toneNumber = dud[0];
-        out->classData.guitar.whammyBar  = dud[1];
-        out->classData.guitar.tilt       = dud[2];
-        out->classData.guitar.fret       = dud[3];
-        out->classData.guitar.fretSolo   = dud[4];
+        out->classData.guitar.whammyBar = dud[1];
+        out->classData.guitar.tilt = dud[2];
+        out->classData.guitar.fret = dud[3];
+        out->classData.guitar.fretSolo = dud[4];
         return true;
     }
     return false;
@@ -717,21 +772,24 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
 // GetActiveKitDeviceClass at scePadRead cadence, so this lock matters in
 // practice — same race PackButtons/PackDeviceUniqueData were patched for.
 std::string GetActiveKitName(int slot) {
-    if (slot < 1 || slot > kNumSlots) return {};
+    if (slot < 1 || slot > kNumSlots)
+        return {};
     std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->name : std::string{};
 }
 
 std::string GetActiveKitSource(int slot) {
-    if (slot < 1 || slot > kNumSlots) return {};
+    if (slot < 1 || slot > kNumSlots)
+        return {};
     std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->source : std::string{};
 }
 
 std::string GetActiveKitDeviceClass(int slot) {
-    if (slot < 1 || slot > kNumSlots) return {};
+    if (slot < 1 || slot > kNumSlots)
+        return {};
     std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->device_class : std::string{};
@@ -755,14 +813,16 @@ bool ShouldHideFromUsbd(u16 vid, u16 pid) {
             break;
         }
     }
-    if (!any_enabled) return false;
+    if (!any_enabled)
+        return false;
     // sceUsbdGetDeviceList usually runs during game boot, before any
     // scePadRead triggers EnsureInit(). Populate the kit list lazily here
     // so the very first libusb enumeration sees a non-empty g_kits.
     EnsureKitsLoaded();
     std::lock_guard<std::mutex> lk(g_kits_mu);
     for (const auto& k : g_kits) {
-        if (k.vid == vid && k.pid == pid) return true;
+        if (k.vid == vid && k.pid == pid)
+            return true;
     }
     return false;
 }
@@ -792,8 +852,10 @@ void ResetForTesting() {
 }
 
 bool BindKitFromTomlForTesting(int slot, const std::string& toml_path) {
-    if (slot < 1 || slot > kNumSlots) return false;
-    if (!LoadKitFromToml(toml_path)) return false;
+    if (slot < 1 || slot > kNumSlots)
+        return false;
+    if (!LoadKitFromToml(toml_path))
+        return false;
     std::lock_guard<std::mutex> lk(g_kits_mu);
     for (auto& k : g_kits) {
         if (k.source_file == toml_path) {
@@ -804,6 +866,6 @@ bool BindKitFromTomlForTesting(int slot, const std::string& toml_path) {
     return false;
 }
 
-}  // namespace Testing
+} // namespace Testing
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

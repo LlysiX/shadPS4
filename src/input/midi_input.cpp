@@ -34,14 +34,14 @@ struct PadDefault {
 };
 
 const PadDefault kPadDefaults[] = {
-    {kSnapByteKick,       0x10, {35, 36}},
-    {kSnapByteSnareRed,   0x02, {38, 40}},
+    {kSnapByteKick, 0x10, {35, 36}},
+    {kSnapByteSnareRed, 0x02, {38, 40}},
     {kSnapByteTomHighYel, 0x08, {48, 50}},
     {kSnapByteTomMidBlue, 0x04, {45, 47}},
-    {kSnapByteTomLowGrn,  0x01, {41, 43}},
-    {kSnapByteCymYellow,  0x08, {42, 44, 46, 51, 53}},
-    {kSnapByteCymBlue,    0x04, {49, 57, 55, 52}},
-    {kSnapByteCymGreen,   0x01, {49, 51, 57}},
+    {kSnapByteTomLowGrn, 0x01, {41, 43}},
+    {kSnapByteCymYellow, 0x08, {42, 44, 46, 51, 53}},
+    {kSnapByteCymBlue, 0x04, {49, 57, 55, 52}},
+    {kSnapByteCymGreen, 0x01, {49, 51, 57}},
 };
 
 constexpr auto kVelocityHoldMs = std::chrono::milliseconds(80);
@@ -58,7 +58,7 @@ struct PortHandle {
     std::unique_ptr<RtMidiIn> midi;
     std::chrono::steady_clock::time_point opened_at{};
     PadState pads[12]{};
-    PadState pads_by_byte[16]{};  // kSnapshotBytes
+    PadState pads_by_byte[16]{}; // kSnapshotBytes
     std::map<std::uint8_t, int> custom_map;
 };
 
@@ -70,7 +70,7 @@ std::mutex g_global_mu;
 // subscriber apart from anything else they're running.
 constexpr const char* kClientName = "shadPS4";
 
-}  // namespace
+} // namespace
 
 bool EnsureInit() {
     // RtMidi creates its OS client on RtMidiIn construction; no global
@@ -105,7 +105,11 @@ std::vector<PortInfo> EnumerateInputPorts() {
 
 void* OpenInputPort(const std::string& id) {
     int idx = -1;
-    try { idx = std::stoi(id); } catch (...) { idx = -1; }
+    try {
+        idx = std::stoi(id);
+    } catch (...) {
+        idx = -1;
+    }
     if (idx < 0) {
         LOG_WARNING(Input, "MIDI: malformed port id {}", id);
         return nullptr;
@@ -114,31 +118,30 @@ void* OpenInputPort(const std::string& id) {
         auto handle = std::make_unique<PortHandle>();
         handle->midi = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kClientName);
         if (idx >= (int)handle->midi->getPortCount()) {
-            LOG_WARNING(Input, "MIDI: port index {} out of range ({} available)",
-                        idx, handle->midi->getPortCount());
+            LOG_WARNING(Input, "MIDI: port index {} out of range ({} available)", idx,
+                        handle->midi->getPortCount());
             return nullptr;
         }
-        handle->midi->openPort(static_cast<unsigned int>(idx),
-                                "shadPS4 MIDI in");
+        handle->midi->openPort(static_cast<unsigned int>(idx), "shadPS4 MIDI in");
         // Ignore SysEx, timing, and active-sensing — we only care about
         // Note On / Off.
         handle->midi->ignoreTypes(true, true, true);
         handle->opened_at = std::chrono::steady_clock::now();
-        LOG_INFO(Input, "MIDI: opened port {} ({})",
-                 idx, handle->midi->getPortName(idx));
+        LOG_INFO(Input, "MIDI: opened port {} ({})", idx, handle->midi->getPortName(idx));
         return handle.release();
     } catch (const RtMidiError& e) {
-        LOG_WARNING(Input, "MIDI: open failed for port {}: {}",
-                    id, e.getMessage());
+        LOG_WARNING(Input, "MIDI: open failed for port {}: {}", id, e.getMessage());
         return nullptr;
     }
 }
 
 void CloseInputPort(void* handle) {
-    if (!handle) return;
+    if (!handle)
+        return;
     auto* h = static_cast<PortHandle*>(handle);
     try {
-        if (h->midi && h->midi->isPortOpen()) h->midi->closePort();
+        if (h->midi && h->midi->isPortOpen())
+            h->midi->closePort();
     } catch (...) {
     }
     std::lock_guard lk(g_global_mu);
@@ -155,7 +158,8 @@ namespace {
 // with the wizard's per-step convention.
 std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     std::vector<NoteEvent> out;
-    if (!h->midi || !h->midi->isPortOpen()) return out;
+    if (!h->midi || !h->midi->isPortOpen())
+        return out;
     const auto now = std::chrono::steady_clock::now();
     std::vector<unsigned char> msg;
     while (true) {
@@ -165,7 +169,8 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
             LOG_WARNING(Input, "MIDI: getMessage failed: {}", e.getMessage());
             break;
         }
-        if (msg.empty()) break;
+        if (msg.empty())
+            break;
         // Channel messages are 2 or 3 bytes. We care about 0x80 (Note
         // Off) and 0x90 (Note On) on any channel; lower nibble is the
         // channel number, ignored.
@@ -177,7 +182,10 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
         if (status == 0x90 && msg.size() >= 3) {
             note = msg[1] & 0x7F;
             vel = msg[2] & 0x7F;
-            if (vel > 0) note_on = true; else note_off = true;
+            if (vel > 0)
+                note_on = true;
+            else
+                note_off = true;
         } else if (status == 0x80 && msg.size() >= 3) {
             note = msg[1] & 0x7F;
             vel = msg[2] & 0x7F;
@@ -191,8 +199,7 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
         record.note = static_cast<std::uint8_t>(note);
         record.velocity = static_cast<std::uint8_t>(vel);
         record.t_ms = static_cast<std::uint32_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - h->opened_at).count());
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - h->opened_at).count());
         out.push_back(record);
 
         if (!h->custom_map.empty()) {
@@ -213,12 +220,15 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
             for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
                 bool match = false;
                 for (int n : kPadDefaults[p].notes) {
-                    if (n == note) { match = true; break; }
+                    if (n == note) {
+                        match = true;
+                        break;
+                    }
                 }
-                if (!match) continue;
+                if (!match)
+                    continue;
                 if (note_on) {
-                    h->pads[p].velocity =
-                        static_cast<std::uint8_t>((vel * 255 + 63) / 127);
+                    h->pads[p].velocity = static_cast<std::uint8_t>((vel * 255 + 63) / 127);
                     h->pads[p].last_active = now;
                 } else {
                     h->pads[p].velocity = 0;
@@ -229,37 +239,45 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     }
     // Decay pads whose last activity is older than the hold window.
     for (auto& p : h->pads) {
-        if (p.velocity == 0) continue;
-        if (now - p.last_active > kVelocityHoldMs) p.velocity = 0;
+        if (p.velocity == 0)
+            continue;
+        if (now - p.last_active > kVelocityHoldMs)
+            p.velocity = 0;
     }
     for (auto& p : h->pads_by_byte) {
-        if (p.velocity == 0) continue;
-        if (now - p.last_active > kVelocityHoldMs) p.velocity = 0;
+        if (p.velocity == 0)
+            continue;
+        if (now - p.last_active > kVelocityHoldMs)
+            p.velocity = 0;
     }
     return out;
 }
 
-}  // namespace
+} // namespace
 
 std::vector<NoteEvent> DrainEvents(void* handle) {
-    if (!handle) return {};
+    if (!handle)
+        return {};
     auto* h = static_cast<PortHandle*>(handle);
     std::lock_guard lk(g_global_mu);
     return DrainAndUpdate(h);
 }
 
 void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_byte) {
-    if (!handle) return;
+    if (!handle)
+        return;
     auto* h = static_cast<PortHandle*>(handle);
     std::lock_guard lk(g_global_mu);
     h->custom_map = note_to_byte;
-    for (auto& p : h->pads) p.velocity = 0;
-    for (auto& p : h->pads_by_byte) p.velocity = 0;
+    for (auto& p : h->pads)
+        p.velocity = 0;
+    for (auto& p : h->pads_by_byte)
+        p.velocity = 0;
 }
 
-std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
-                               std::size_t out_len) {
-    if (!handle || !out || out_len < kSnapshotBytes) return 0;
+std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_len) {
+    if (!handle || !out || out_len < kSnapshotBytes)
+        return 0;
     auto* h = static_cast<PortHandle*>(handle);
     std::lock_guard lk(g_global_mu);
     (void)DrainAndUpdate(h);
@@ -267,18 +285,23 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
     std::uint8_t flags = 0;
     if (!h->custom_map.empty()) {
         for (int b = 0; b < (int)kSnapshotBytes; ++b) {
-            if (h->pads_by_byte[b].velocity == 0) continue;
+            if (h->pads_by_byte[b].velocity == 0)
+                continue;
             out[b] = h->pads_by_byte[b].velocity;
             std::uint8_t mask = 0;
             for (const auto& d : kPadDefaults) {
-                if (d.snap_byte == b) { mask = d.mask_bit; break; }
+                if (d.snap_byte == b) {
+                    mask = d.mask_bit;
+                    break;
+                }
             }
             flags |= mask;
         }
     } else {
         for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
             const auto& pad = h->pads[p];
-            if (pad.velocity == 0) continue;
+            if (pad.velocity == 0)
+                continue;
             out[kPadDefaults[p].snap_byte] = pad.velocity;
             flags |= kPadDefaults[p].mask_bit;
         }
@@ -292,4 +315,4 @@ void Shutdown() {
     // RtMidiIn destructors close their OS clients automatically.
 }
 
-}  // namespace Input::MidiInput
+} // namespace Input::MidiInput

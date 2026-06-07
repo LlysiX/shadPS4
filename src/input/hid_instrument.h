@@ -24,8 +24,7 @@ namespace Input::HidInstrument {
 
 constexpr int kNumSlots = 4;
 constexpr std::size_t kMaxRawReport = 64;
-constexpr std::size_t kMaxDeviceUniqueData =
-    Libraries::Pad::ORBIS_PAD_MAX_DEVICE_UNIQUE_DATA_SIZE;
+constexpr std::size_t kMaxDeviceUniqueData = Libraries::Pad::ORBIS_PAD_MAX_DEVICE_UNIQUE_DATA_SIZE;
 
 // Idempotent. Called lazily on first use; safe to call from any thread.
 bool EnsureInit();
@@ -74,15 +73,15 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
                     Libraries::Pad::OrbisPadDeviceClassData* out);
 
 // Inspection helpers for the Qt UI.
-std::string GetActiveKitName(int slot);    // empty if no kit open
-std::string GetActiveKitSource(int slot);  // "hid" / "xinput" / "", empty if no kit
+std::string GetActiveKitName(int slot);   // empty if no kit open
+std::string GetActiveKitSource(int slot); // "hid" / "xinput" / "", empty if no kit
 // Device-class string ("guitar" / "drum" / "") declared in the kit's TOML for
 // the slot's currently-loaded kit. Empty when no kit is active for the slot.
 // Used by pad.cpp to honour the TOML over the per-slot Config when legacy
 // raw-HID pass-through is on — that's the "Automatic" choice surfaced in the
 // Special Devices dialog.
 std::string GetActiveKitDeviceClass(int slot);
-std::size_t GetLoadedKitCount();         // for "N kits loaded" status
+std::size_t GetLoadedKitCount(); // for "N kits loaded" status
 
 // Load (or reload) a single kit TOML into g_kits and close any open
 // slot whose currently-bound kit's vid:pid matches the new kit's. The
@@ -124,6 +123,6 @@ void PollXInputGamepad(void* gamepad, u8* out);
 namespace Testing {
 void ResetForTesting();
 bool BindKitFromTomlForTesting(int slot, const std::string& toml_path);
-}  // namespace Testing
+} // namespace Testing
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

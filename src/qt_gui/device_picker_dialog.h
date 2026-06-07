@@ -41,8 +41,7 @@ public:
     // pressed — lets the user identify which physical controller a
     // row corresponds to by tapping a button.
     void addRow(const QString& label, const QString& encoded, bool enabled,
-                const QString& disabled_hint = QString(),
-                SDL_JoystickID joystick_id = 0);
+                const QString& disabled_hint = QString(), SDL_JoystickID joystick_id = 0);
 
     // After exec(), returns the encoded string of the chosen row. Empty
     // when the dialog was cancelled or no enabled row was selected.

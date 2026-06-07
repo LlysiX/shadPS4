@@ -18,34 +18,34 @@
 namespace Input::MidiInstrument {
 
 struct MidiEvent {
-    bool on = false;             // Note On (velocity > 0) or Note Off
-    std::uint8_t note = 0;       // 0..127
-    std::uint8_t velocity = 0;   // 0..127, as the device sent it
-    std::uint32_t t_ms = 0;      // ms relative to step start
+    bool on = false;           // Note On (velocity > 0) or Note Off
+    std::uint8_t note = 0;     // 0..127
+    std::uint8_t velocity = 0; // 0..127, as the device sent it
+    std::uint32_t t_ms = 0;    // ms relative to step start
 };
 
 struct MidiStepResult {
-    std::string key;     // "_idle_baseline", "red_pad", etc.
+    std::string key; // "_idle_baseline", "red_pad", etc.
     bool captured = false;
     std::vector<MidiEvent> events;
 };
 
 enum class MidiDeviceType {
-    Drum,     // 4-lane (red/blue/yellow/green + kick), no cymbal split
-    ProDrum,  // pads + cymbals + 2nd kick optional
+    Drum,    // 4-lane (red/blue/yellow/green + kick), no cymbal split
+    ProDrum, // pads + cymbals + 2nd kick optional
 };
 
 struct MidiKitProbeData {
     // Meta. The wire format for these mirrors HID's meta record so a
     // future viewer can show all captures with one parser.
     int version = 1;
-    std::string device_name;     // device + port pretty name
-    std::string port_id;          // OS-specific port handle ("client:port" on ALSA)
+    std::string device_name; // device + port pretty name
+    std::string port_id;     // OS-specific port handle ("client:port" on ALSA)
     std::string source = "midi";
     MidiDeviceType device_type = MidiDeviceType::Drum;
-    std::string timestamp;        // ISO-8601 capture time
-    std::string capture_uuid;     // random UUID per capture
-    std::string host_hash;        // SHA-256(salt + machineUniqueId), first 16 hex
+    std::string timestamp;    // ISO-8601 capture time
+    std::string capture_uuid; // random UUID per capture
+    std::string host_hash;    // SHA-256(salt + machineUniqueId), first 16 hex
     std::vector<MidiStepResult> results;
 };
 
@@ -56,4 +56,4 @@ struct MidiKitProbeData {
 // loader can route by header without sniffing fields.
 std::string DeriveMidiKitToml(const MidiKitProbeData& data);
 
-}  // namespace Input::MidiInstrument
+} // namespace Input::MidiInstrument

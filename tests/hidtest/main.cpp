@@ -38,210 +38,228 @@ namespace {
 // Tiny field extractor — assumes well-formed JSON objects with simple values.
 // Returns: bare string contents for "k":"v", raw array text for "k":[...],
 // numeric/boolean run for "k":N.
-std::string ExtractField(const std::string& line, const std::string& key) {
-    const std::string needle = "\"" + key + "\":";
-    auto pos = line.find(needle);
-    if (pos == std::string::npos) return {};
-    pos += needle.size();
-    if (pos >= line.size()) return {};
-    if (line[pos] == '"') {
-        auto end = line.find('"', pos + 1);
-        if (end == std::string::npos) return {};
-        return line.substr(pos + 1, end - pos - 1);
-    }
-    if (line[pos] == '[') {
-        auto end = line.find(']', pos);
-        if (end == std::string::npos) return {};
-        return line.substr(pos, end - pos + 1);
-    }
-    auto end = line.find_first_of(",}", pos);
-    return line.substr(pos, end - pos);
+std::string ExtractField(const std::string &line, const std::string &key) {
+  const std::string needle = "\"" + key + "\":";
+  auto pos = line.find(needle);
+  if (pos == std::string::npos)
+    return {};
+  pos += needle.size();
+  if (pos >= line.size())
+    return {};
+  if (line[pos] == '"') {
+    auto end = line.find('"', pos + 1);
+    if (end == std::string::npos)
+      return {};
+    return line.substr(pos + 1, end - pos - 1);
+  }
+  if (line[pos] == '[') {
+    auto end = line.find(']', pos);
+    if (end == std::string::npos)
+      return {};
+    return line.substr(pos, end - pos + 1);
+  }
+  auto end = line.find_first_of(",}", pos);
+  return line.substr(pos, end - pos);
 }
 
-std::vector<uint8_t> ParseBytes(const std::string& arr_str) {
-    std::vector<uint8_t> out;
-    std::string num;
-    auto flush = [&]() {
-        if (num.empty()) return;
-        try {
-            const int v = std::stoi(num);
-            if (v >= 0 && v <= 255) out.push_back(static_cast<uint8_t>(v));
-        } catch (...) {
-        }
-        num.clear();
-    };
-    for (char c : arr_str) {
-        if ((c >= '0' && c <= '9') || c == '-') {
-            num += c;
-        } else {
-            flush();
-        }
-    }
-    flush();
-    return out;
-}
-
-uint16_t ParseVidPid(const std::string& s) {
+std::vector<uint8_t> ParseBytes(const std::string &arr_str) {
+  std::vector<uint8_t> out;
+  std::string num;
+  auto flush = [&]() {
+    if (num.empty())
+      return;
     try {
-        std::string v = s;
-        if (v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
-            return static_cast<uint16_t>(std::stoul(v.substr(2), nullptr, 16));
-        }
-        return static_cast<uint16_t>(std::stoul(v, nullptr, 16));
+      const int v = std::stoi(num);
+      if (v >= 0 && v <= 255)
+        out.push_back(static_cast<uint8_t>(v));
     } catch (...) {
-        return 0;
     }
+    num.clear();
+  };
+  for (char c : arr_str) {
+    if ((c >= '0' && c <= '9') || c == '-') {
+      num += c;
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return out;
 }
 
-bool VidPidFromFilename(const fs::path& p, uint16_t& vid, uint16_t& pid) {
-    // Accepts both `kit_<vid>_<pid>.raw.jsonl` and the disambiguated form
-    // `kit_<vid>_<pid>_<hash>.raw.jsonl` (used when two physical devices
-    // share the same VID:PID — e.g. a Santroller flashed as a Guitar Hero 5
-    // clone vs. flashed as a Pro Drum). Only the first two underscore-
-    // delimited fields after the `kit_` prefix carry meaning here.
-    auto stem = p.stem().string();
-    if (stem.size() > 4 && stem.rfind(".raw") == stem.size() - 4) {
-        stem = stem.substr(0, stem.size() - 4);
+uint16_t ParseVidPid(const std::string &s) {
+  try {
+    std::string v = s;
+    if (v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
+      return static_cast<uint16_t>(std::stoul(v.substr(2), nullptr, 16));
     }
-    if (stem.rfind("kit_", 0) != 0) return false;
-    const std::string rest = stem.substr(4);
-    const auto us1 = rest.find('_');
-    if (us1 == std::string::npos) return false;
-    const std::string vid_s = rest.substr(0, us1);
-    const std::string after = rest.substr(us1 + 1);
-    const auto us2 = after.find('_');
-    const std::string pid_s = (us2 == std::string::npos) ? after : after.substr(0, us2);
-    vid = ParseVidPid(vid_s);
-    pid = ParseVidPid(pid_s);
-    return vid != 0 && pid != 0;
+    return static_cast<uint16_t>(std::stoul(v, nullptr, 16));
+  } catch (...) {
+    return 0;
+  }
 }
 
-ProbeDeviceType InferDeviceType(const std::vector<StepResultData>& steps) {
-    bool has_fret = false, has_pad = false;
-    for (const auto& s : steps) {
-        if (s.key.find("_fret") != std::string::npos ||
-            s.key == "whammy_bar" || s.key == "touch_slider" ||
-            s.key.find("strum") != std::string::npos) {
-            has_fret = true;
-        }
-        if (s.key.find("_pad") != std::string::npos ||
-            s.key.find("_cymbal") != std::string::npos ||
-            s.key == "kick_pedal") {
-            has_pad = true;
-        }
-    }
-    if (has_fret && !has_pad) return ProbeDeviceType::Guitar;
-    if (has_pad && !has_fret) return ProbeDeviceType::Drum;
-    return ProbeDeviceType::Guitar;  // default
+bool VidPidFromFilename(const fs::path &p, uint16_t &vid, uint16_t &pid) {
+  // Accepts both `kit_<vid>_<pid>.raw.jsonl` and the disambiguated form
+  // `kit_<vid>_<pid>_<hash>.raw.jsonl` (used when two physical devices
+  // share the same VID:PID — e.g. a Santroller flashed as a Guitar Hero 5
+  // clone vs. flashed as a Pro Drum). Only the first two underscore-
+  // delimited fields after the `kit_` prefix carry meaning here.
+  auto stem = p.stem().string();
+  if (stem.size() > 4 && stem.rfind(".raw") == stem.size() - 4) {
+    stem = stem.substr(0, stem.size() - 4);
+  }
+  if (stem.rfind("kit_", 0) != 0)
+    return false;
+  const std::string rest = stem.substr(4);
+  const auto us1 = rest.find('_');
+  if (us1 == std::string::npos)
+    return false;
+  const std::string vid_s = rest.substr(0, us1);
+  const std::string after = rest.substr(us1 + 1);
+  const auto us2 = after.find('_');
+  const std::string pid_s =
+      (us2 == std::string::npos) ? after : after.substr(0, us2);
+  vid = ParseVidPid(vid_s);
+  pid = ParseVidPid(pid_s);
+  return vid != 0 && pid != 0;
 }
 
-bool LoadKitProbeFromFile(const fs::path& path, KitProbeData& out) {
-    std::ifstream in(path);
-    if (!in) return false;
-    std::string line;
-    bool meta_seen = false;
-
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> frames;
-
-    while (std::getline(in, line)) {
-        if (line.empty()) continue;
-        const std::string type = ExtractField(line, "type");
-        if (type == "meta") {
-            meta_seen = true;
-            try {
-                const std::string v = ExtractField(line, "version");
-                if (!v.empty()) out.version = std::stoi(v);
-            } catch (...) {
-            }
-            out.vid = ParseVidPid(ExtractField(line, "vendor_id"));
-            out.pid = ParseVidPid(ExtractField(line, "product_id"));
-            out.device_name = ExtractField(line, "device_name");
-            const std::string dt = ExtractField(line, "device_type");
-            if (dt == "drum") out.device_type = ProbeDeviceType::Drum;
-            else if (dt == "drum_pro") out.device_type = ProbeDeviceType::ProDrum;
-            else if (dt == "guitar") out.device_type = ProbeDeviceType::Guitar;
-            else if (dt == "guitar_solo") out.device_type = ProbeDeviceType::GuitarSolo;
-            out.is_xinput = (ExtractField(line, "source") == "xinput");
-            try {
-                out.report_length = std::stoi(ExtractField(line, "report_length"));
-            } catch (...) {
-            }
-            continue;
-        }
-        const std::string step = ExtractField(line, "step");
-        if (step.empty()) continue;
-        auto bytes = ParseBytes(ExtractField(line, "bytes"));
-        if (bytes.empty()) continue;
-        frames.emplace_back(step, std::move(bytes));
+ProbeDeviceType InferDeviceType(const std::vector<StepResultData> &steps) {
+  bool has_fret = false, has_pad = false;
+  for (const auto &s : steps) {
+    if (s.key.find("_fret") != std::string::npos || s.key == "whammy_bar" ||
+        s.key == "touch_slider" || s.key.find("strum") != std::string::npos) {
+      has_fret = true;
     }
-
-    if (out.vid == 0 || out.pid == 0) {
-        VidPidFromFilename(path, out.vid, out.pid);
+    if (s.key.find("_pad") != std::string::npos ||
+        s.key.find("_cymbal") != std::string::npos || s.key == "kick_pedal") {
+      has_pad = true;
     }
-    if (out.report_length == 0) {
-        for (const auto& [_, b] : frames) {
-            if (static_cast<int>(b.size()) > out.report_length) {
-                out.report_length = static_cast<int>(b.size());
-            }
-        }
+  }
+  if (has_fret && !has_pad)
+    return ProbeDeviceType::Guitar;
+  if (has_pad && !has_fret)
+    return ProbeDeviceType::Drum;
+  return ProbeDeviceType::Guitar; // default
+}
+
+bool LoadKitProbeFromFile(const fs::path &path, KitProbeData &out) {
+  std::ifstream in(path);
+  if (!in)
+    return false;
+  std::string line;
+  bool meta_seen = false;
+
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> frames;
+
+  while (std::getline(in, line)) {
+    if (line.empty())
+      continue;
+    const std::string type = ExtractField(line, "type");
+    if (type == "meta") {
+      meta_seen = true;
+      try {
+        const std::string v = ExtractField(line, "version");
+        if (!v.empty())
+          out.version = std::stoi(v);
+      } catch (...) {
+      }
+      out.vid = ParseVidPid(ExtractField(line, "vendor_id"));
+      out.pid = ParseVidPid(ExtractField(line, "product_id"));
+      out.device_name = ExtractField(line, "device_name");
+      const std::string dt = ExtractField(line, "device_type");
+      if (dt == "drum")
+        out.device_type = ProbeDeviceType::Drum;
+      else if (dt == "drum_pro")
+        out.device_type = ProbeDeviceType::ProDrum;
+      else if (dt == "guitar")
+        out.device_type = ProbeDeviceType::Guitar;
+      else if (dt == "guitar_solo")
+        out.device_type = ProbeDeviceType::GuitarSolo;
+      out.is_xinput = (ExtractField(line, "source") == "xinput");
+      try {
+        out.report_length = std::stoi(ExtractField(line, "report_length"));
+      } catch (...) {
+      }
+      continue;
     }
-    if (out.report_length <= 0) return false;
-    out.report_length = std::min(out.report_length, 64);
+    const std::string step = ExtractField(line, "step");
+    if (step.empty())
+      continue;
+    auto bytes = ParseBytes(ExtractField(line, "bytes"));
+    if (bytes.empty())
+      continue;
+    frames.emplace_back(step, std::move(bytes));
+  }
 
-    std::map<std::string, StepResultData*> by_key;
-
-    for (auto& [step, bytes] : frames) {
-        StepResultData* r = nullptr;
-        auto it = by_key.find(step);
-        if (it == by_key.end()) {
-            out.results.emplace_back();
-            r = &out.results.back();
-            r->key = step;
-            r->captured = true;
-            by_key[step] = r;
-        } else {
-            r = it->second;
-        }
-        r->raw.push_back(bytes);
-        const int n = std::min<int>(64, static_cast<int>(bytes.size()));
-        for (int i = 0; i < n; ++i) {
-            const int v = bytes[i];
-            auto& b = r->bytes[i];
-            b.min = std::min(b.min, v);
-            b.max = std::max(b.max, v);
-            if (v != 0 && (b.min_nonzero < 0 || v < b.min_nonzero)) {
-                b.min_nonzero = v;
-            }
-            b.samples++;
-        }
+  if (out.vid == 0 || out.pid == 0) {
+    VidPidFromFilename(path, out.vid, out.pid);
+  }
+  if (out.report_length == 0) {
+    for (const auto &[_, b] : frames) {
+      if (static_cast<int>(b.size()) > out.report_length) {
+        out.report_length = static_cast<int>(b.size());
+      }
     }
+  }
+  if (out.report_length <= 0)
+    return false;
+  out.report_length = std::min(out.report_length, 64);
 
-    Input::HidInstrument::DeriveBaselineAndMotion(out);
+  std::map<std::string, StepResultData *> by_key;
 
-    if (!meta_seen) {
-        out.device_type = InferDeviceType(out.results);
+  for (auto &[step, bytes] : frames) {
+    StepResultData *r = nullptr;
+    auto it = by_key.find(step);
+    if (it == by_key.end()) {
+      out.results.emplace_back();
+      r = &out.results.back();
+      r->key = step;
+      r->captured = true;
+      by_key[step] = r;
+    } else {
+      r = it->second;
     }
-    return true;
+    r->raw.push_back(bytes);
+    const int n = std::min<int>(64, static_cast<int>(bytes.size()));
+    for (int i = 0; i < n; ++i) {
+      const int v = bytes[i];
+      auto &b = r->bytes[i];
+      b.min = std::min(b.min, v);
+      b.max = std::max(b.max, v);
+      if (v != 0 && (b.min_nonzero < 0 || v < b.min_nonzero)) {
+        b.min_nonzero = v;
+      }
+      b.samples++;
+    }
+  }
+
+  Input::HidInstrument::DeriveBaselineAndMotion(out);
+
+  if (!meta_seen) {
+    out.device_type = InferDeviceType(out.results);
+  }
+  return true;
 }
 
 struct CaseResult {
-    std::string name;
-    bool passed = false;
-    std::string detail;
+  std::string name;
+  bool passed = false;
+  std::string detail;
 };
 
-bool TomlContains(const std::string& toml, const std::string& needle) {
-    return toml.find(needle) != std::string::npos;
+bool TomlContains(const std::string &toml, const std::string &needle) {
+  return toml.find(needle) != std::string::npos;
 }
 
 // Write `text` to a unique temp .toml file and return its path. Caller is
 // responsible for cleanup.
-fs::path WriteTempToml(const std::string& stem, const std::string& text) {
-    fs::path tmp = fs::temp_directory_path() /
-                   ("hidtest_" + stem + ".toml");
-    std::ofstream out(tmp);
-    out << text;
-    return tmp;
+fs::path WriteTempToml(const std::string &stem, const std::string &text) {
+  fs::path tmp = fs::temp_directory_path() / ("hidtest_" + stem + ".toml");
+  std::ofstream out(tmp);
+  out << text;
+  return tmp;
 }
 
 // Round-trip stage: feed the derived TOML back through the live packer and
@@ -251,30 +269,32 @@ fs::path WriteTempToml(const std::string& stem, const std::string& text) {
 // means the kit's wizard derivation didn't pick up that input at all, which
 // is exactly the regression class we want to catch (the v0.2 fret-byte bug
 // landed every fret_press step on the same idle-state pattern).
-bool RoundTripStep(const StepResultData& step, std::string& detail) {
-    if (step.raw.empty()) {
-        detail = "step '" + step.key + "' has no frames";
-        return false;
-    }
-    // Try every captured frame for the step — at least one must produce
-    // non-zero output. Picking only the last frame is fragile: the user may
-    // have released the input by the final frame (especially for tilt,
-    // where they return the guitar to neutral after pulling it up).
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
-        const u32 buttons = HID::PackButtons(
-            1, frame.data(), frame.size(),
-            Libraries::Pad::OrbisPadDeviceClass::Guitar);
-        if (buttons != 0) return true;
-        for (std::size_t i = 0; i < HID::kMaxDeviceUniqueData; ++i) {
-            if (dud[i] != 0) return true;
-        }
-    }
-    detail = "step '" + step.key + "' packed to all-zero output across "
-             + std::to_string(step.raw.size()) + " frames";
+bool RoundTripStep(const StepResultData &step, std::string &detail) {
+  if (step.raw.empty()) {
+    detail = "step '" + step.key + "' has no frames";
     return false;
+  }
+  // Try every captured frame for the step — at least one must produce
+  // non-zero output. Picking only the last frame is fragile: the user may
+  // have released the input by the final frame (especially for tilt,
+  // where they return the guitar to neutral after pulling it up).
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    const u32 buttons =
+        HID::PackButtons(1, frame.data(), frame.size(),
+                         Libraries::Pad::OrbisPadDeviceClass::Guitar);
+    if (buttons != 0)
+      return true;
+    for (std::size_t i = 0; i < HID::kMaxDeviceUniqueData; ++i) {
+      if (dud[i] != 0)
+        return true;
+    }
+  }
+  detail = "step '" + step.key + "' packed to all-zero output across " +
+           std::to_string(step.raw.size()) + " frames";
+  return false;
 }
 
 // Per-fret face-button check, used for the 5 solo_*_fret steps on a
@@ -290,43 +310,48 @@ bool RoundTripStep(const StepResultData& step, std::string& detail) {
 // routes the bits to dud[4] instead of letting them stay in the main
 // fret slot. Catches a regression where solo_modifier_byte is set but
 // PackDeviceUniqueData ignores it.
-bool SoloFretStep(const StepResultData& step, std::string& detail) {
-    using B = Libraries::Pad::OrbisPadButtonDataOffset;
-    const u32 face_mask =
-        static_cast<u32>(B::Cross) | static_cast<u32>(B::Circle) |
-        static_cast<u32>(B::Triangle) | static_cast<u32>(B::Square) |
-        static_cast<u32>(B::L1);
-    if (step.raw.empty()) {
-        detail = "solo step '" + step.key + "' has no frames";
-        return false;
-    }
-    bool saw_solo_dud = false, saw_face_button = false, saw_solo_isolated = false;
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
-        if (dud[4] != 0) {
-            saw_solo_dud = true;
-            if (dud[3] == 0) saw_solo_isolated = true;
-        }
-        const u32 buttons = HID::PackButtons(
-            1, frame.data(), frame.size(),
-            Libraries::Pad::OrbisPadDeviceClass::Guitar);
-        if (buttons & face_mask) saw_face_button = true;
-        if (saw_solo_dud && saw_face_button && saw_solo_isolated) return true;
-    }
-    if (!saw_solo_dud) {
-        detail = "solo step '" + step.key + "' produced no dud[4] bit";
-        return false;
-    }
-    if (!saw_face_button) {
-        detail = "solo step '" + step.key + "' fired dud[4] but no face button bit "
-                 "(missing [buttons_byte_<solo>] mapping?)";
-        return false;
-    }
-    detail = "solo step '" + step.key + "' set dud[4] but never cleared dud[3] "
-             "in the same frame (solo_modifier_byte not gating dud[3]?)";
+bool SoloFretStep(const StepResultData &step, std::string &detail) {
+  using B = Libraries::Pad::OrbisPadButtonDataOffset;
+  const u32 face_mask = static_cast<u32>(B::Cross) |
+                        static_cast<u32>(B::Circle) |
+                        static_cast<u32>(B::Triangle) |
+                        static_cast<u32>(B::Square) | static_cast<u32>(B::L1);
+  if (step.raw.empty()) {
+    detail = "solo step '" + step.key + "' has no frames";
     return false;
+  }
+  bool saw_solo_dud = false, saw_face_button = false, saw_solo_isolated = false;
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    if (dud[4] != 0) {
+      saw_solo_dud = true;
+      if (dud[3] == 0)
+        saw_solo_isolated = true;
+    }
+    const u32 buttons =
+        HID::PackButtons(1, frame.data(), frame.size(),
+                         Libraries::Pad::OrbisPadDeviceClass::Guitar);
+    if (buttons & face_mask)
+      saw_face_button = true;
+    if (saw_solo_dud && saw_face_button && saw_solo_isolated)
+      return true;
+  }
+  if (!saw_solo_dud) {
+    detail = "solo step '" + step.key + "' produced no dud[4] bit";
+    return false;
+  }
+  if (!saw_face_button) {
+    detail = "solo step '" + step.key +
+             "' fired dud[4] but no face button bit "
+             "(missing [buttons_byte_<solo>] mapping?)";
+    return false;
+  }
+  detail = "solo step '" + step.key +
+           "' set dud[4] but never cleared dud[3] "
+           "in the same frame (solo_modifier_byte not gating dud[3]?)";
+  return false;
 }
 
 // Counterpart for the regular fret_* steps on a GuitarSolo kit: pressing
@@ -335,28 +360,29 @@ bool SoloFretStep(const StepResultData& step, std::string& detail) {
 // (modifier always active) would route every fret press to dud[4],
 // effectively breaking the whole main fretboard — and SoloFretStep alone
 // wouldn't catch it because it doesn't run on non-solo steps.
-bool MainFretStep(const StepResultData& step, std::string& detail) {
-    if (step.raw.empty()) {
-        detail = "fret step '" + step.key + "' has no frames";
-        return false;
+bool MainFretStep(const StepResultData &step, std::string &detail) {
+  if (step.raw.empty()) {
+    detail = "fret step '" + step.key + "' has no frames";
+    return false;
+  }
+  bool saw_main_dud = false;
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    if (dud[4] != 0) {
+      detail = "fret step '" + step.key +
+               "' leaked into dud[4] (modifier code path stuck on?)";
+      return false;
     }
-    bool saw_main_dud = false;
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
-        if (dud[4] != 0) {
-            detail = "fret step '" + step.key +
-                     "' leaked into dud[4] (modifier code path stuck on?)";
-            return false;
-        }
-        if (dud[3] != 0) saw_main_dud = true;
-    }
-    if (!saw_main_dud) {
-        detail = "fret step '" + step.key + "' produced no dud[3] bit";
-        return false;
-    }
-    return true;
+    if (dud[3] != 0)
+      saw_main_dud = true;
+  }
+  if (!saw_main_dud) {
+    detail = "fret step '" + step.key + "' produced no dud[3] bit";
+    return false;
+  }
+  return true;
 }
 
 // Pickup / FX switch sweep step (X360 RB Guitar, PS3/Wii guitars, and the
@@ -369,37 +395,37 @@ bool MainFretStep(const StepResultData& step, std::string& detail) {
 // is exactly "wah-wah unreachable AND fewer than 4 distinct outputs."
 // Skipped if the kit's derived TOML doesn't declare a tone_byte (the
 // Riffmaster fixture's fx_switch capture is flat, so wizard omits it).
-bool PickupSwitchStep(const StepResultData& step, const std::string& toml,
-                      std::string& detail) {
-    if (toml.find("tone_byte") == std::string::npos) return true;
-    if (step.raw.empty()) {
-        detail = "fx_switch step has no frames";
-        return false;
-    }
-    std::set<u8> distinct;
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar,
-                                  dud);
-        distinct.insert(dud[0]);
-    }
-    if (distinct.size() < 3) {
-        detail = "fx_switch packed to only " + std::to_string(distinct.size()) +
-                 " distinct dud[0] values (sweep should hit ≥ 3 notches)";
-        return false;
-    }
-    if (*distinct.begin() != 0) {
-        detail = "fx_switch never reached dud[0] = 0 (wah-wah unreachable) "
-                 "— PlasticBand quantization broken?";
-        return false;
-    }
-    if (*distinct.rbegin() < 3) {
-        detail = "fx_switch never reached the high notches (max dud[0] = " +
-                 std::to_string(*distinct.rbegin()) + ")";
-        return false;
-    }
+bool PickupSwitchStep(const StepResultData &step, const std::string &toml,
+                      std::string &detail) {
+  if (toml.find("tone_byte") == std::string::npos)
     return true;
+  if (step.raw.empty()) {
+    detail = "fx_switch step has no frames";
+    return false;
+  }
+  std::set<u8> distinct;
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    distinct.insert(dud[0]);
+  }
+  if (distinct.size() < 3) {
+    detail = "fx_switch packed to only " + std::to_string(distinct.size()) +
+             " distinct dud[0] values (sweep should hit ≥ 3 notches)";
+    return false;
+  }
+  if (*distinct.begin() != 0) {
+    detail = "fx_switch never reached dud[0] = 0 (wah-wah unreachable) "
+             "— PlasticBand quantization broken?";
+    return false;
+  }
+  if (*distinct.rbegin() < 3) {
+    detail = "fx_switch never reached the high notches (max dud[0] = " +
+             std::to_string(*distinct.rbegin()) + ")";
+    return false;
+  }
+  return true;
 }
 
 // "Both solo frets held" combo (e.g. solo_green_blue). The capture must
@@ -409,35 +435,39 @@ bool PickupSwitchStep(const StepResultData& step, const std::string& toml,
 // Catches kit derivations that pick a fret mask too narrow to cover both
 // bits, or that drop the [buttons_byte_<solo>] entries for individual
 // colours so the combined press only fires one button.
-bool SoloFretComboStep(const StepResultData& step, std::string& detail) {
-    using B = Libraries::Pad::OrbisPadButtonDataOffset;
-    const u32 both_buttons = static_cast<u32>(B::Cross) | static_cast<u32>(B::Square);
-    if (step.raw.empty()) {
-        detail = "solo combo '" + step.key + "' has no frames";
-        return false;
-    }
-    bool saw_two_dud_bits = false, saw_both_buttons = false;
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
-        const u8 d4 = dud[4];
-        if (d4 != 0 && (d4 & (d4 - 1)) != 0) saw_two_dud_bits = true;
-        const u32 buttons = HID::PackButtons(
-            1, frame.data(), frame.size(),
-            Libraries::Pad::OrbisPadDeviceClass::Guitar);
-        if ((buttons & both_buttons) == both_buttons) saw_both_buttons = true;
-        if (saw_two_dud_bits && saw_both_buttons) return true;
-    }
-    if (!saw_two_dud_bits) {
-        detail = "solo combo '" + step.key +
-                 "' never set two bits in dud[4] (solo_fret_byte mask too narrow?)";
-        return false;
-    }
-    detail = "solo combo '" + step.key +
-             "' set two dud[4] bits but never fired both face buttons "
-             "(missing solo bit→button mapping for one of green/blue?)";
+bool SoloFretComboStep(const StepResultData &step, std::string &detail) {
+  using B = Libraries::Pad::OrbisPadButtonDataOffset;
+  const u32 both_buttons =
+      static_cast<u32>(B::Cross) | static_cast<u32>(B::Square);
+  if (step.raw.empty()) {
+    detail = "solo combo '" + step.key + "' has no frames";
     return false;
+  }
+  bool saw_two_dud_bits = false, saw_both_buttons = false;
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    const u8 d4 = dud[4];
+    if (d4 != 0 && (d4 & (d4 - 1)) != 0)
+      saw_two_dud_bits = true;
+    const u32 buttons =
+        HID::PackButtons(1, frame.data(), frame.size(),
+                         Libraries::Pad::OrbisPadDeviceClass::Guitar);
+    if ((buttons & both_buttons) == both_buttons)
+      saw_both_buttons = true;
+    if (saw_two_dud_bits && saw_both_buttons)
+      return true;
+  }
+  if (!saw_two_dud_bits) {
+    detail = "solo combo '" + step.key +
+             "' never set two bits in dud[4] (solo_fret_byte mask too narrow?)";
+    return false;
+  }
+  detail = "solo combo '" + step.key +
+           "' set two dud[4] bits but never fired both face buttons "
+           "(missing solo bit→button mapping for one of green/blue?)";
+  return false;
 }
 
 // Tilt-activation regression. For any kit whose derived TOML declares a
@@ -452,30 +482,31 @@ bool SoloFretComboStep(const StepResultData& step, std::string& detail) {
 // Skipped for kits without a tilt_byte (XInput synth captures with no
 // real tilt sensor — those correctly produce NO tilt_byte after the
 // tilt_shift heuristic, and there's nothing to verify).
-bool TiltActivationStep(const StepResultData& step, const std::string& toml,
-                        std::string& detail) {
-    if (toml.find("\ntilt_byte ") == std::string::npos) return true;
-    if (step.raw.empty()) {
-        detail = "tilt_activation: no tilt_up frames";
-        return false;
-    }
-    u8 max_dud2 = 0;
-    for (const auto& frame : step.raw) {
-        u8 dud[HID::kMaxDeviceUniqueData] = {};
-        HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
-                                  Libraries::Pad::OrbisPadDeviceClass::Guitar,
-                                  dud);
-        if (dud[2] > max_dud2) max_dud2 = dud[2];
-    }
-    if (max_dud2 < 0x40) {
-        char hex[8];
-        std::snprintf(hex, sizeof(hex), "%02X", max_dud2);
-        detail = "tilt_activation: tilt_up never pushed dud[2] above 0x40 "
-                 "(max = 0x" + std::string(hex) +
-                 "). tilt_byte may be a counter / wrong byte.";
-        return false;
-    }
+bool TiltActivationStep(const StepResultData &step, const std::string &toml,
+                        std::string &detail) {
+  if (toml.find("\ntilt_byte ") == std::string::npos)
     return true;
+  if (step.raw.empty()) {
+    detail = "tilt_activation: no tilt_up frames";
+    return false;
+  }
+  u8 max_dud2 = 0;
+  for (const auto &frame : step.raw) {
+    u8 dud[HID::kMaxDeviceUniqueData] = {};
+    HID::PackDeviceUniqueData(1, frame.data(), frame.size(),
+                              Libraries::Pad::OrbisPadDeviceClass::Guitar, dud);
+    if (dud[2] > max_dud2)
+      max_dud2 = dud[2];
+  }
+  if (max_dud2 < 0x40) {
+    char hex[8];
+    std::snprintf(hex, sizeof(hex), "%02X", max_dud2);
+    detail = "tilt_activation: tilt_up never pushed dud[2] above 0x40 "
+             "(max = 0x" +
+             std::string(hex) + "). tilt_byte may be a counter / wrong byte.";
+    return false;
+  }
+  return true;
 }
 
 // Santroller HID and similar kits that pack frets + Start on the same byte
@@ -486,281 +517,292 @@ bool TiltActivationStep(const StepResultData& step, const std::string& toml,
 // out" mid-navigation. This synthesises the chord from the captured
 // button_start frame OR'd with green_fret's byte 1, replays through
 // PackButtons, and asserts no fret face button bit fires.
-bool StartFretSuppressionStep(const StepResultData& start_step,
-                              const StepResultData& green_step,
-                              const std::string& toml, std::string& detail) {
-    if (toml.find("clear_dud0_when_raw1_bits") == std::string::npos) return true;
-    if (start_step.raw.empty() || green_step.raw.empty()) {
-        detail = "start_fret_suppression: missing button_start or green_fret frames";
-        return false;
-    }
-    using B = Libraries::Pad::OrbisPadButtonDataOffset;
-    const u32 face_mask =
-        static_cast<u32>(B::Cross) | static_cast<u32>(B::Circle) |
-        static_cast<u32>(B::Square) | static_cast<u32>(B::Triangle) |
-        static_cast<u32>(B::L1);
-    // Pick the brightest pressed frame from each step.
-    auto brightest = [](const StepResultData& s) {
-        std::vector<uint8_t> best = s.raw.front();
-        int best_score = -1;
-        for (const auto& fr : s.raw) {
-            int score = 0;
-            for (uint8_t b : fr) score += b;
-            if (score > best_score) { best_score = score; best = fr; }
-        }
-        return best;
-    };
-    const std::vector<uint8_t> start_fr = brightest(start_step);
-    const std::vector<uint8_t> green_fr = brightest(green_step);
-    if (start_fr.size() != green_fr.size()) {
-        detail = "start_fret_suppression: frame sizes differ";
-        return false;
-    }
-    std::vector<uint8_t> chord = start_fr;
-    for (std::size_t i = 0; i < chord.size(); ++i) chord[i] |= green_fr[i];
-    const u32 buttons = HID::PackButtons(
-        1, chord.data(), chord.size(),
-        Libraries::Pad::OrbisPadDeviceClass::Guitar);
-    if (buttons & face_mask) {
-        char hex[8];
-        std::snprintf(hex, sizeof(hex), "%02X", chord[1]);
-        detail = "start_fret_suppression: Start+green chord (raw[1]=0x" +
-                 std::string(hex) +
-                 ") fired a fret face button; clear_dud0_when_raw1_bits "
-                 "must mask fret bits in PackButtons too";
-        return false;
-    }
+bool StartFretSuppressionStep(const StepResultData &start_step,
+                              const StepResultData &green_step,
+                              const std::string &toml, std::string &detail) {
+  if (toml.find("clear_dud0_when_raw1_bits") == std::string::npos)
     return true;
+  if (start_step.raw.empty() || green_step.raw.empty()) {
+    detail =
+        "start_fret_suppression: missing button_start or green_fret frames";
+    return false;
+  }
+  using B = Libraries::Pad::OrbisPadButtonDataOffset;
+  const u32 face_mask = static_cast<u32>(B::Cross) |
+                        static_cast<u32>(B::Circle) |
+                        static_cast<u32>(B::Square) |
+                        static_cast<u32>(B::Triangle) | static_cast<u32>(B::L1);
+  // Pick the brightest pressed frame from each step.
+  auto brightest = [](const StepResultData &s) {
+    std::vector<uint8_t> best = s.raw.front();
+    int best_score = -1;
+    for (const auto &fr : s.raw) {
+      int score = 0;
+      for (uint8_t b : fr)
+        score += b;
+      if (score > best_score) {
+        best_score = score;
+        best = fr;
+      }
+    }
+    return best;
+  };
+  const std::vector<uint8_t> start_fr = brightest(start_step);
+  const std::vector<uint8_t> green_fr = brightest(green_step);
+  if (start_fr.size() != green_fr.size()) {
+    detail = "start_fret_suppression: frame sizes differ";
+    return false;
+  }
+  std::vector<uint8_t> chord = start_fr;
+  for (std::size_t i = 0; i < chord.size(); ++i)
+    chord[i] |= green_fr[i];
+  const u32 buttons =
+      HID::PackButtons(1, chord.data(), chord.size(),
+                       Libraries::Pad::OrbisPadDeviceClass::Guitar);
+  if (buttons & face_mask) {
+    char hex[8];
+    std::snprintf(hex, sizeof(hex), "%02X", chord[1]);
+    detail = "start_fret_suppression: Start+green chord (raw[1]=0x" +
+             std::string(hex) +
+             ") fired a fret face button; clear_dud0_when_raw1_bits "
+             "must mask fret bits in PackButtons too";
+    return false;
+  }
+  return true;
 }
 
-CaseResult RunCase(const fs::path& path) {
-    CaseResult r{};
-    r.name = path.filename().string();
-    KitProbeData data;
-    if (!LoadKitProbeFromFile(path, data)) {
-        r.detail = "could not parse fixture";
-        return r;
-    }
-    const std::string toml = DeriveKitToml(data);
-    if (toml.empty()) {
-        r.detail = "DeriveKitToml returned empty";
-        return r;
-    }
-    if (!TomlContains(toml, "schema       = \"shadps4-legacy-instrument/v1\"")) {
-        r.detail = "missing schema header";
-        return r;
-    }
-    const bool is_guitar = data.device_type == ProbeDeviceType::Guitar ||
-                           data.device_type == ProbeDeviceType::GuitarSolo;
-    // v3 introduced combo steps (green_strum / green_blue / green_blue_strum)
-    // and the solo-fret walkthrough for GuitarSolo kits. v1/v2 captures
-    // predate them and must not be punished for missing keys.
-    auto has_step = [&](const char* name) {
-        for (const auto& s : data.results) {
-            if (s.key == name && s.captured) return true;
-        }
-        return false;
-    };
-    if (data.version >= 3 && is_guitar) {
-        if (!has_step("green_strum")) {
-            r.detail = "v3 guitar missing combo step 'green_strum'";
-            return r;
-        }
-    }
-    if (data.version >= 5 && data.device_type == ProbeDeviceType::GuitarSolo) {
-        if (!has_step("solo_green_blue")) {
-            r.detail = "v5 guitar_solo missing combo step 'solo_green_blue'";
-            return r;
-        }
-    }
-    if (is_guitar) {
-        if (!TomlContains(toml, "device_class = \"guitar\"")) {
-            r.detail = "expected device_class = \"guitar\"";
-            return r;
-        }
-        if (!TomlContains(toml, "fret_byte = ")) {
-            r.detail = "missing fret_byte for guitar";
-            return r;
-        }
-        // GuitarSolo TOMLs must declare at least one solo-encoding path:
-        //   solo_fret_byte         (PS4 Mustang / PS5 Riffmaster — dedicated byte)
-        //   solo_modifier_byte     (X360 RB / Strat — main fret + L3 modifier)
-        // If neither shows up, the wizard didn't actually capture solo
-        // frets — call it out.
-        if (data.device_type == ProbeDeviceType::GuitarSolo &&
-            !TomlContains(toml, "solo_fret_byte = ") &&
-            !TomlContains(toml, "solo_modifier_byte = ")) {
-            r.detail = "missing solo_fret_byte / solo_modifier_byte for guitar_solo";
-            return r;
-        }
-        if (!TomlContains(toml, "[buttons_byte_")) {
-            r.detail = "no [buttons_byte_*] section for guitar frets";
-            return r;
-        }
-    } else {
-        if (!TomlContains(toml, "device_class = \"drum\"")) {
-            r.detail = "expected device_class = \"drum\"";
-            return r;
-        }
-        if (!TomlContains(toml, "[buttons_byte_")) {
-            r.detail = "no [buttons_byte_*] section for drum face buttons";
-            return r;
-        }
-    }
-
-    // Round-trip: derived TOML -> live packer -> per-step replay.
-    HID::Testing::ResetForTesting();
-    const fs::path tmp = WriteTempToml(path.stem().string(), toml);
-    const bool bound = HID::Testing::BindKitFromTomlForTesting(1, tmp.string());
-    std::error_code ec;
-    fs::remove(tmp, ec);
-    if (!bound) {
-        r.detail = "BindKitFromTomlForTesting failed";
-        return r;
-    }
-    // Steps the round-trip can't reliably verify through PackButtons /
-    // PackDeviceUniqueData:
-    //   button_ps    — not all guitars expose Guide/Home on their HID report;
-    //                  on some kits the wizard correctly omits it.
-    //   kick_pedal_2 — captured by the wizard but the current derivation
-    //                  only maps the primary kick into the TOML; packing
-    //                  the 2nd kick frame produces no output. Optional step.
-    // tilt_up has its own per-step check (TiltActivationStep) below; it
-    // exits the round-trip path via the explicit step.key == "tilt_up"
-    // branch and doesn't need to be on this skip list.
-    static const std::vector<std::string> kSkipSteps = {
-        "button_ps",
-        "kick_pedal_2",
-    };
-    const bool check_solo_buttons =
-        data.device_type == ProbeDeviceType::GuitarSolo &&
-        (TomlContains(toml, "solo_fret_byte = ") ||
-         TomlContains(toml, "solo_modifier_byte = "));
-    for (const auto& step : data.results) {
-        if (step.key.empty() || step.key[0] == '_') continue;
-        if (std::find(kSkipSteps.begin(), kSkipSteps.end(), step.key) !=
-            kSkipSteps.end()) {
-            continue;
-        }
-        std::string detail;
-        // Stronger check for the 5 solo frets on a GuitarSolo kit with a
-        // dedicated solo_fret_byte: each press must produce BOTH a dud[4]
-        // bit AND a face-button bit. The generic RoundTripStep only
-        // requires one of the two, which lets the regression slip
-        // through.
-        const bool is_solo_step =
-            step.key.rfind("solo_", 0) == 0 &&
-            step.key.find("_fret") != std::string::npos;
-        if (check_solo_buttons && is_solo_step) {
-            if (!SoloFretStep(step, detail)) {
-                r.detail = detail;
-                return r;
-            }
-            continue;
-        }
-        if (check_solo_buttons && step.key == "solo_green_blue") {
-            if (!SoloFretComboStep(step, detail)) {
-                r.detail = detail;
-                return r;
-            }
-            continue;
-        }
-        // On a GuitarSolo kit, main fret presses must NOT leak into
-        // dud[4]. green_blue / green_blue_strum are combo steps that
-        // skip strict main-fret checking (HAT byte may interact);
-        // green_strum strums while holding green — also fine.
-        const bool is_main_fret =
-            step.key.find("_fret") != std::string::npos &&
-            step.key.rfind("solo_", 0) != 0;
-        if (check_solo_buttons && is_main_fret) {
-            if (!MainFretStep(step, detail)) {
-                r.detail = detail;
-                return r;
-            }
-            continue;
-        }
-        if (step.key == "fx_switch") {
-            if (!PickupSwitchStep(step, toml, detail)) {
-                r.detail = detail;
-                return r;
-            }
-            continue;
-        }
-        if (step.key == "tilt_up") {
-            if (!TiltActivationStep(step, toml, detail)) {
-                r.detail = detail;
-                return r;
-            }
-            continue;
-        }
-        if (!RoundTripStep(step, detail)) {
-            r.detail = detail;
-            return r;
-        }
-    }
-    // Cross-step synthesis: Start + green chord, applies when the kit
-    // declares clear_dud0_when_raw1_bits (frets + menu on same byte).
-    const StepResultData* start_step = nullptr;
-    const StepResultData* green_step = nullptr;
-    for (const auto& s : data.results) {
-        if (s.key == "button_start" && s.captured) start_step = &s;
-        if (s.key == "green_fret" && s.captured) green_step = &s;
-    }
-    if (start_step && green_step) {
-        std::string detail;
-        if (!StartFretSuppressionStep(*start_step, *green_step, toml, detail)) {
-            r.detail = detail;
-            return r;
-        }
-    }
-    r.passed = true;
+CaseResult RunCase(const fs::path &path) {
+  CaseResult r{};
+  r.name = path.filename().string();
+  KitProbeData data;
+  if (!LoadKitProbeFromFile(path, data)) {
+    r.detail = "could not parse fixture";
     return r;
+  }
+  const std::string toml = DeriveKitToml(data);
+  if (toml.empty()) {
+    r.detail = "DeriveKitToml returned empty";
+    return r;
+  }
+  if (!TomlContains(toml, "schema       = \"shadps4-legacy-instrument/v1\"")) {
+    r.detail = "missing schema header";
+    return r;
+  }
+  const bool is_guitar = data.device_type == ProbeDeviceType::Guitar ||
+                         data.device_type == ProbeDeviceType::GuitarSolo;
+  // v3 introduced combo steps (green_strum / green_blue / green_blue_strum)
+  // and the solo-fret walkthrough for GuitarSolo kits. v1/v2 captures
+  // predate them and must not be punished for missing keys.
+  auto has_step = [&](const char *name) {
+    for (const auto &s : data.results) {
+      if (s.key == name && s.captured)
+        return true;
+    }
+    return false;
+  };
+  if (data.version >= 3 && is_guitar) {
+    if (!has_step("green_strum")) {
+      r.detail = "v3 guitar missing combo step 'green_strum'";
+      return r;
+    }
+  }
+  if (data.version >= 5 && data.device_type == ProbeDeviceType::GuitarSolo) {
+    if (!has_step("solo_green_blue")) {
+      r.detail = "v5 guitar_solo missing combo step 'solo_green_blue'";
+      return r;
+    }
+  }
+  if (is_guitar) {
+    if (!TomlContains(toml, "device_class = \"guitar\"")) {
+      r.detail = "expected device_class = \"guitar\"";
+      return r;
+    }
+    if (!TomlContains(toml, "fret_byte = ")) {
+      r.detail = "missing fret_byte for guitar";
+      return r;
+    }
+    // GuitarSolo TOMLs must declare at least one solo-encoding path:
+    //   solo_fret_byte         (PS4 Mustang / PS5 Riffmaster — dedicated byte)
+    //   solo_modifier_byte     (X360 RB / Strat — main fret + L3 modifier)
+    // If neither shows up, the wizard didn't actually capture solo
+    // frets — call it out.
+    if (data.device_type == ProbeDeviceType::GuitarSolo &&
+        !TomlContains(toml, "solo_fret_byte = ") &&
+        !TomlContains(toml, "solo_modifier_byte = ")) {
+      r.detail = "missing solo_fret_byte / solo_modifier_byte for guitar_solo";
+      return r;
+    }
+    if (!TomlContains(toml, "[buttons_byte_")) {
+      r.detail = "no [buttons_byte_*] section for guitar frets";
+      return r;
+    }
+  } else {
+    if (!TomlContains(toml, "device_class = \"drum\"")) {
+      r.detail = "expected device_class = \"drum\"";
+      return r;
+    }
+    if (!TomlContains(toml, "[buttons_byte_")) {
+      r.detail = "no [buttons_byte_*] section for drum face buttons";
+      return r;
+    }
+  }
+
+  // Round-trip: derived TOML -> live packer -> per-step replay.
+  HID::Testing::ResetForTesting();
+  const fs::path tmp = WriteTempToml(path.stem().string(), toml);
+  const bool bound = HID::Testing::BindKitFromTomlForTesting(1, tmp.string());
+  std::error_code ec;
+  fs::remove(tmp, ec);
+  if (!bound) {
+    r.detail = "BindKitFromTomlForTesting failed";
+    return r;
+  }
+  // Steps the round-trip can't reliably verify through PackButtons /
+  // PackDeviceUniqueData:
+  //   button_ps    — not all guitars expose Guide/Home on their HID report;
+  //                  on some kits the wizard correctly omits it.
+  //   kick_pedal_2 — captured by the wizard but the current derivation
+  //                  only maps the primary kick into the TOML; packing
+  //                  the 2nd kick frame produces no output. Optional step.
+  // tilt_up has its own per-step check (TiltActivationStep) below; it
+  // exits the round-trip path via the explicit step.key == "tilt_up"
+  // branch and doesn't need to be on this skip list.
+  static const std::vector<std::string> kSkipSteps = {
+      "button_ps",
+      "kick_pedal_2",
+  };
+  const bool check_solo_buttons =
+      data.device_type == ProbeDeviceType::GuitarSolo &&
+      (TomlContains(toml, "solo_fret_byte = ") ||
+       TomlContains(toml, "solo_modifier_byte = "));
+  for (const auto &step : data.results) {
+    if (step.key.empty() || step.key[0] == '_')
+      continue;
+    if (std::find(kSkipSteps.begin(), kSkipSteps.end(), step.key) !=
+        kSkipSteps.end()) {
+      continue;
+    }
+    std::string detail;
+    // Stronger check for the 5 solo frets on a GuitarSolo kit with a
+    // dedicated solo_fret_byte: each press must produce BOTH a dud[4]
+    // bit AND a face-button bit. The generic RoundTripStep only
+    // requires one of the two, which lets the regression slip
+    // through.
+    const bool is_solo_step = step.key.rfind("solo_", 0) == 0 &&
+                              step.key.find("_fret") != std::string::npos;
+    if (check_solo_buttons && is_solo_step) {
+      if (!SoloFretStep(step, detail)) {
+        r.detail = detail;
+        return r;
+      }
+      continue;
+    }
+    if (check_solo_buttons && step.key == "solo_green_blue") {
+      if (!SoloFretComboStep(step, detail)) {
+        r.detail = detail;
+        return r;
+      }
+      continue;
+    }
+    // On a GuitarSolo kit, main fret presses must NOT leak into
+    // dud[4]. green_blue / green_blue_strum are combo steps that
+    // skip strict main-fret checking (HAT byte may interact);
+    // green_strum strums while holding green — also fine.
+    const bool is_main_fret = step.key.find("_fret") != std::string::npos &&
+                              step.key.rfind("solo_", 0) != 0;
+    if (check_solo_buttons && is_main_fret) {
+      if (!MainFretStep(step, detail)) {
+        r.detail = detail;
+        return r;
+      }
+      continue;
+    }
+    if (step.key == "fx_switch") {
+      if (!PickupSwitchStep(step, toml, detail)) {
+        r.detail = detail;
+        return r;
+      }
+      continue;
+    }
+    if (step.key == "tilt_up") {
+      if (!TiltActivationStep(step, toml, detail)) {
+        r.detail = detail;
+        return r;
+      }
+      continue;
+    }
+    if (!RoundTripStep(step, detail)) {
+      r.detail = detail;
+      return r;
+    }
+  }
+  // Cross-step synthesis: Start + green chord, applies when the kit
+  // declares clear_dud0_when_raw1_bits (frets + menu on same byte).
+  const StepResultData *start_step = nullptr;
+  const StepResultData *green_step = nullptr;
+  for (const auto &s : data.results) {
+    if (s.key == "button_start" && s.captured)
+      start_step = &s;
+    if (s.key == "green_fret" && s.captured)
+      green_step = &s;
+  }
+  if (start_step && green_step) {
+    std::string detail;
+    if (!StartFretSuppressionStep(*start_step, *green_step, toml, detail)) {
+      r.detail = detail;
+      return r;
+    }
+  }
+  r.passed = true;
+  return r;
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
-    // `hidtest --dump <file.raw.jsonl>` — parse the fixture, run DeriveKitToml,
-    // print the resulting TOML to stdout. Helpful when a stored .toml looks
-    // incomplete and we want to confirm whether the current code path produces
-    // the right output from the captured data (vs. an older wizard binary
-    // having written the .toml).
-    if (argc >= 3 && std::string(argv[1]) == "--dump") {
-        KitProbeData data;
-        if (!LoadKitProbeFromFile(fs::path(argv[2]), data)) {
-            std::cerr << "hidtest --dump: could not parse " << argv[2] << "\n";
-            return 2;
-        }
-        std::cout << DeriveKitToml(data);
-        return 0;
+int main(int argc, char **argv) {
+  // `hidtest --dump <file.raw.jsonl>` — parse the fixture, run DeriveKitToml,
+  // print the resulting TOML to stdout. Helpful when a stored .toml looks
+  // incomplete and we want to confirm whether the current code path produces
+  // the right output from the captured data (vs. an older wizard binary
+  // having written the .toml).
+  if (argc >= 3 && std::string(argv[1]) == "--dump") {
+    KitProbeData data;
+    if (!LoadKitProbeFromFile(fs::path(argv[2]), data)) {
+      std::cerr << "hidtest --dump: could not parse " << argv[2] << "\n";
+      return 2;
     }
-    fs::path fixtures = (argc > 1) ? fs::path(argv[1])
-                                   : fs::current_path() / "tests" / "hid_kits";
-    if (!fs::is_directory(fixtures)) {
-        std::cerr << "hidtest: fixtures dir not found: " << fixtures << "\n";
-        return 2;
+    std::cout << DeriveKitToml(data);
+    return 0;
+  }
+  fs::path fixtures = (argc > 1) ? fs::path(argv[1])
+                                 : fs::current_path() / "tests" / "hid_kits";
+  if (!fs::is_directory(fixtures)) {
+    std::cerr << "hidtest: fixtures dir not found: " << fixtures << "\n";
+    return 2;
+  }
+  std::vector<fs::path> files;
+  for (auto &entry : fs::directory_iterator(fixtures)) {
+    if (entry.path().extension() == ".jsonl") {
+      files.push_back(entry.path());
     }
-    std::vector<fs::path> files;
-    for (auto& entry : fs::directory_iterator(fixtures)) {
-        if (entry.path().extension() == ".jsonl") {
-            files.push_back(entry.path());
-        }
-    }
-    std::sort(files.begin(), files.end());
+  }
+  std::sort(files.begin(), files.end());
 
-    std::vector<CaseResult> results;
-    for (auto& f : files) {
-        results.push_back(RunCase(f));
-    }
+  std::vector<CaseResult> results;
+  for (auto &f : files) {
+    results.push_back(RunCase(f));
+  }
 
-    int failed = 0;
-    for (const auto& r : results) {
-        std::cout << (r.passed ? "[ OK ]  " : "[FAIL]  ") << r.name;
-        if (!r.detail.empty()) std::cout << "  -- " << r.detail;
-        std::cout << "\n";
-        if (!r.passed) ++failed;
-    }
-    std::cout << "hidtest: " << (results.size() - failed) << "/"
-              << results.size() << " passed\n";
-    return failed ? 1 : 0;
+  int failed = 0;
+  for (const auto &r : results) {
+    std::cout << (r.passed ? "[ OK ]  " : "[FAIL]  ") << r.name;
+    if (!r.detail.empty())
+      std::cout << "  -- " << r.detail;
+    std::cout << "\n";
+    if (!r.passed)
+      ++failed;
+  }
+  std::cout << "hidtest: " << (results.size() - failed) << "/" << results.size()
+            << " passed\n";
+  return failed ? 1 : 0;
 }

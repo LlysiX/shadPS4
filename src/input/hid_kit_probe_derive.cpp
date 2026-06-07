@@ -17,7 +17,7 @@ namespace {
 bool IsGuitarType(ProbeDeviceType t) {
     return t == ProbeDeviceType::Guitar || t == ProbeDeviceType::GuitarSolo;
 }
-}  // namespace
+} // namespace
 
 std::string DeriveKitToml(const KitProbeData& data) {
     const int report_len = data.report_length;
@@ -28,19 +28,23 @@ std::string DeriveKitToml(const KitProbeData& data) {
 
     auto velByte = [&](const std::string& key) -> int {
         for (const auto& r : results) {
-            if (r.key != key || !r.captured) continue;
+            if (r.key != key || !r.captured)
+                continue;
             int best = -1, best_range = 0;
             for (int i = 3; i < report_len; ++i) {
-                if (motion_bytes.count(i)) continue;
+                if (motion_bytes.count(i))
+                    continue;
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                if (b.max < 0x20) continue;
+                if (b.samples == 0)
+                    continue;
+                if (b.max < 0x20)
+                    continue;
                 const int baseline_floor = baseline_min[i];
                 const int baseline_ceil = baseline_max[i];
                 const bool quiet_at_idle =
-                    (baseline_ceil <= 4) ||
-                    (baseline_floor >= 0x7C && baseline_ceil <= 0x84);
-                if (!quiet_at_idle) continue;
+                    (baseline_ceil <= 4) || (baseline_floor >= 0x7C && baseline_ceil <= 0x84);
+                if (!quiet_at_idle)
+                    continue;
                 const int range = b.max - b.min;
                 if (range > best_range && i != 26) {
                     best_range = range;
@@ -53,9 +57,11 @@ std::string DeriveKitToml(const KitProbeData& data) {
     };
     auto flagBit = [&](const std::string& key, int rawByte) -> uint8_t {
         for (const auto& r : results) {
-            if (r.key != key || !r.captured) continue;
+            if (r.key != key || !r.captured)
+                continue;
             const auto& b = r.bytes[rawByte];
-            if (b.samples == 0) return 0;
+            if (b.samples == 0)
+                return 0;
             return static_cast<uint8_t>(b.max);
         }
         return 0;
@@ -68,16 +74,22 @@ std::string DeriveKitToml(const KitProbeData& data) {
         [&](const std::string& key) -> std::vector<std::pair<int, uint8_t>> {
         std::vector<std::pair<int, uint8_t>> out;
         for (const auto& r : results) {
-            if (r.key != key || !r.captured) continue;
+            if (r.key != key || !r.captured)
+                continue;
             for (int i = 0; i < report_len; ++i) {
-                if (motion_bytes.count(i)) continue;
+                if (motion_bytes.count(i))
+                    continue;
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
+                if (b.samples == 0)
+                    continue;
                 const int baseline = baseline_max[i];
-                if (b.max <= baseline) continue;
+                if (b.max <= baseline)
+                    continue;
                 const int diff = b.max & ~baseline;
-                if (diff == 0) continue;
-                if ((diff & (diff - 1)) != 0) continue;
+                if (diff == 0)
+                    continue;
+                if ((diff & (diff - 1)) != 0)
+                    continue;
                 out.push_back({i, static_cast<uint8_t>(diff)});
             }
             break;
@@ -95,15 +107,20 @@ std::string DeriveKitToml(const KitProbeData& data) {
         [&](const std::string& key) -> std::vector<std::pair<int, uint8_t>> {
         std::vector<std::pair<int, uint8_t>> out;
         for (const auto& r : results) {
-            if (r.key != key || !r.captured) continue;
+            if (r.key != key || !r.captured)
+                continue;
             for (int i = 0; i < report_len; ++i) {
-                if (motion_bytes.count(i)) continue;
+                if (motion_bytes.count(i))
+                    continue;
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
+                if (b.samples == 0)
+                    continue;
                 const int baseline = baseline_max[i];
-                if (b.max <= baseline) continue;
+                if (b.max <= baseline)
+                    continue;
                 const int diff = b.max & ~baseline;
-                if (diff == 0) continue;
+                if (diff == 0)
+                    continue;
                 // Lowest set bit only.
                 out.push_back({i, static_cast<uint8_t>(diff & -diff)});
             }
@@ -114,11 +131,12 @@ std::string DeriveKitToml(const KitProbeData& data) {
     // Single-button steps (Start, Select, etc.) pick the cleanest candidate:
     // the source byte with the lowest baseline value. Avoids latching onto a
     // byte that already has unrelated flags set (e.g. HAT low nibble).
-    auto detectFlagByteAndBit =
-        [&](const std::string& key) -> std::pair<int, uint8_t> {
+    auto detectFlagByteAndBit = [&](const std::string& key) -> std::pair<int, uint8_t> {
         auto cands = detectAllFlagCandidates(key);
-        if (cands.empty()) cands = detectMultiBitFallback(key);
-        if (cands.empty()) return {-1, 0};
+        if (cands.empty())
+            cands = detectMultiBitFallback(key);
+        if (cands.empty())
+            return {-1, 0};
         auto best = cands.front();
         int best_baseline = baseline_max[best.first];
         for (std::size_t k = 1; k < cands.size(); ++k) {
@@ -131,16 +149,19 @@ std::string DeriveKitToml(const KitProbeData& data) {
         return best;
     };
     auto detectHatByte = [&]() -> int {
-        static const std::vector<std::string> keys = {
-            "dpad_up", "dpad_down", "dpad_left", "dpad_right",
-            "strum_up", "strum_down"};
+        static const std::vector<std::string> keys = {"dpad_up",    "dpad_down", "dpad_left",
+                                                      "dpad_right", "strum_up",  "strum_down"};
         for (const auto& r : results) {
-            if (!r.captured) continue;
-            if (std::find(keys.begin(), keys.end(), r.key) == keys.end()) continue;
+            if (!r.captured)
+                continue;
+            if (std::find(keys.begin(), keys.end(), r.key) == keys.end())
+                continue;
             for (int i = 0; i < report_len; ++i) {
-                if (motion_bytes.count(i)) continue;
+                if (motion_bytes.count(i))
+                    continue;
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
+                if (b.samples == 0)
+                    continue;
                 if (b.min <= 7 && b.max <= 0x0F && (b.max - b.min) > 0) {
                     return i;
                 }
@@ -151,14 +172,29 @@ std::string DeriveKitToml(const KitProbeData& data) {
     const int hatByte = detectHatByte();
     auto [selByte, b_sel] = detectFlagByteAndBit("button_select");
     auto [staByte, b_sta] = detectFlagByteAndBit("button_start");
-    if (selByte < 0) selByte = 1;
-    if (staByte < 0) staByte = 1;
+    if (selByte < 0)
+        selByte = 1;
+    if (staByte < 0)
+        staByte = 1;
 
-    struct DudEntry { int idx; int rawByte; const char* comment; };
+    struct DudEntry {
+        int idx;
+        int rawByte;
+        const char* comment;
+    };
     std::vector<DudEntry> dudPlan;
-    struct ButtonBit { int byte; uint8_t mask; const char* name; const char* origin; };
+    struct ButtonBit {
+        int byte;
+        uint8_t mask;
+        const char* name;
+        const char* origin;
+    };
     std::vector<ButtonBit> button_bits;
-    struct ScaleEntry { int dudIdx; const char* stepKey; const char* comment; };
+    struct ScaleEntry {
+        int dudIdx;
+        const char* stepKey;
+        const char* comment;
+    };
     std::vector<ScaleEntry> scalePlan;
     const char* deviceClass = "drum";
 
@@ -168,12 +204,14 @@ std::string DeriveKitToml(const KitProbeData& data) {
             {2, velByte("whammy_bar"), "whammy bar"},
             {3, velByte("touch_slider"), "touch slider"},
         };
-        struct FretMap { const char* step; const char* name; const char* origin; };
+        struct FretMap {
+            const char* step;
+            const char* name;
+            const char* origin;
+        };
         const FretMap fretMaps[] = {
-            {"green_fret", "cross", "green fret"},
-            {"red_fret", "circle", "red fret"},
-            {"yellow_fret", "triangle", "yellow fret"},
-            {"blue_fret", "square", "blue fret"},
+            {"green_fret", "cross", "green fret"},      {"red_fret", "circle", "red fret"},
+            {"yellow_fret", "triangle", "yellow fret"}, {"blue_fret", "square", "blue fret"},
             {"orange_fret", "l1", "orange fret"},
         };
         std::array<std::vector<std::pair<int, uint8_t>>, 5> fretCandidates;
@@ -187,17 +225,26 @@ std::string DeriveKitToml(const KitProbeData& data) {
         auto comboBitsForByte = [&](int byte) -> std::pair<uint8_t, uint8_t> {
             uint8_t g = 0, b = 0;
             for (const auto& [bb, mm] : fretCandidates[0])
-                if (bb == byte) { g = mm; break; }
+                if (bb == byte) {
+                    g = mm;
+                    break;
+                }
             for (const auto& [bb, mm] : fretCandidates[3])
-                if (bb == byte) { b = mm; break; }
+                if (bb == byte) {
+                    b = mm;
+                    break;
+                }
             return {g, b};
         };
         auto byteValidatesCombo = [&](int byte) -> bool {
             auto [g, b] = comboBitsForByte(byte);
-            if (g == 0 || b == 0) return false;
+            if (g == 0 || b == 0)
+                return false;
             for (const auto& r : results) {
-                if (r.key != "green_blue" || !r.captured) continue;
-                if (byte < 0 || byte >= report_len) return false;
+                if (r.key != "green_blue" || !r.captured)
+                    continue;
+                if (byte < 0 || byte >= report_len)
+                    return false;
                 const int max = r.bytes[byte].max;
                 const int baseline = baseline_max[byte];
                 return (max & ~baseline) == (g | b);
@@ -223,9 +270,9 @@ std::string DeriveKitToml(const KitProbeData& data) {
         if (chosenByte >= 0) {
             for (int i = 0; i < 5; ++i) {
                 for (const auto& [byte, mask] : fretCandidates[i]) {
-                    if (byte != chosenByte) continue;
-                    button_bits.push_back({byte, mask, fretMaps[i].name,
-                                           fretMaps[i].origin});
+                    if (byte != chosenByte)
+                        continue;
+                    button_bits.push_back({byte, mask, fretMaps[i].name, fretMaps[i].origin});
                     break;
                 }
             }
@@ -235,12 +282,9 @@ std::string DeriveKitToml(const KitProbeData& data) {
         deviceClass = "drum";
         // 5-lane GH kits expose orange as a PAD (lower lane); RB kits expose
         // it as a cymbal. Either step can fill the orange velocity slot.
-        const int orange_byte = (velByte("orange_pad") >= 0)
-                                    ? velByte("orange_pad")
-                                    : velByte("orange_cymbal");
-        const char* orange_step = (velByte("orange_pad") >= 0)
-                                      ? "orange_pad"
-                                      : "orange_cymbal";
+        const int orange_byte =
+            (velByte("orange_pad") >= 0) ? velByte("orange_pad") : velByte("orange_cymbal");
+        const char* orange_step = (velByte("orange_pad") >= 0) ? "orange_pad" : "orange_cymbal";
         dudPlan = {
             {2, velByte("yellow_cymbal"), "yellow velocity"},
             {3, velByte("red_pad"), "red velocity"},
@@ -262,14 +306,12 @@ std::string DeriveKitToml(const KitProbeData& data) {
         // Strip face-button bits that also lit up the kick/orange step, so we
         // don't double-map the same bit (PS3 RB drums fire face button +
         // pad flag together when you hit a pad).
-        const uint8_t face_on_kick = (kickByte == sqByte ? b_sq : 0) |
-                                      (kickByte == crByte ? b_cr : 0) |
-                                      (kickByte == ciByte ? b_ci : 0) |
-                                      (kickByte == trByte ? b_tr : 0);
-        const uint8_t face_on_orange = (orByte == sqByte ? b_sq : 0) |
-                                        (orByte == crByte ? b_cr : 0) |
-                                        (orByte == ciByte ? b_ci : 0) |
-                                        (orByte == trByte ? b_tr : 0);
+        const uint8_t face_on_kick =
+            (kickByte == sqByte ? b_sq : 0) | (kickByte == crByte ? b_cr : 0) |
+            (kickByte == ciByte ? b_ci : 0) | (kickByte == trByte ? b_tr : 0);
+        const uint8_t face_on_orange =
+            (orByte == sqByte ? b_sq : 0) | (orByte == crByte ? b_cr : 0) |
+            (orByte == ciByte ? b_ci : 0) | (orByte == trByte ? b_tr : 0);
         const uint8_t b_kick = b_kick_raw & ~face_on_kick;
         const uint8_t b_orange = b_or_raw & ~face_on_orange;
         button_bits = {
@@ -281,20 +323,18 @@ std::string DeriveKitToml(const KitProbeData& data) {
             {orByte, b_orange, "r1", "orange pad/cymbal (5th lane in GH-mode)"},
         };
         scalePlan = {
-            {2, "yellow_cymbal", "yellow"},
-            {3, "red_pad", "red"},
-            {4, "green_pad", "green"},
-            {5, "blue_pad", "blue"},
-            {6, "kick_pedal", "kick"},
-            {7, orange_step, "orange"},
+            {2, "yellow_cymbal", "yellow"}, {3, "red_pad", "red"},     {4, "green_pad", "green"},
+            {5, "blue_pad", "blue"},        {6, "kick_pedal", "kick"}, {7, orange_step, "orange"},
         };
     }
 
     int dud[12];
     dud[0] = 0;
     dud[1] = 1;
-    for (int i = 2; i <= 7; ++i) dud[i] = -1;
-    for (const auto& e : dudPlan) dud[e.idx] = e.rawByte;
+    for (int i = 2; i <= 7; ++i)
+        dud[i] = -1;
+    for (const auto& e : dudPlan)
+        dud[e.idx] = e.rawByte;
     dud[8] = hatByte;
     dud[9] = -1;
     dud[10] = -1;
@@ -308,24 +348,26 @@ std::string DeriveKitToml(const KitProbeData& data) {
     os << std::dec;
     os << "name         = \"" << data.device_name << "\"\n";
     os << "device_class = \"" << deviceClass << "\"\n";
-    if (data.is_xinput) os << "source       = \"xinput\"\n";
+    if (data.is_xinput)
+        os << "source       = \"xinput\"\n";
     os << "report_length = " << report_len << "\n";
     // The runtime ignores `device_unique_data` when `guitar_ps4_layout` or
     // `drum_ps4_layout` is set — the wire-format byte order is hardcoded
     // there. Emitting it for those kits just confuses hand-editing.
-    const bool ps4_layout = (IsGuitarType(data.device_type)) ||
-                            (data.device_type == ProbeDeviceType::ProDrum);
+    const bool ps4_layout =
+        (IsGuitarType(data.device_type)) || (data.device_type == ProbeDeviceType::ProDrum);
     if (!ps4_layout) {
         os << "device_unique_data = [";
         for (int i = 0; i < 12; ++i) {
-            if (i) os << ", ";
+            if (i)
+                os << ", ";
             os << dud[i];
         }
         os << "]\n";
     }
     if (selByte == 1 && staByte == 1) {
-        os << "clear_dud0_when_raw1_bits = 0x" << std::hex
-           << int(b_sel | b_sta) << std::dec << "\n";
+        os << "clear_dud0_when_raw1_bits = 0x" << std::hex << int(b_sel | b_sta) << std::dec
+           << "\n";
     }
 
     // Detect which raw byte holds the fret bitmap and whether the bit order
@@ -334,17 +376,21 @@ std::string DeriveKitToml(const KitProbeData& data) {
     int remap[8] = {0, 1, 2, 3, 4, 5, 6, 7};
     bool needs_remap = false;
     if (IsGuitarType(data.device_type)) {
-        struct FretMap { const char* step; int ps4_bit; };
+        struct FretMap {
+            const char* step;
+            int ps4_bit;
+        };
         const FretMap frets[] = {
-            {"green_fret", 0}, {"red_fret", 1}, {"yellow_fret", 2},
-            {"blue_fret", 3}, {"orange_fret", 4},
+            {"green_fret", 0}, {"red_fret", 1},    {"yellow_fret", 2},
+            {"blue_fret", 3},  {"orange_fret", 4},
         };
         uint8_t fretMaskBits = 0;
         std::map<int, int> cov;
         std::array<std::vector<std::pair<int, uint8_t>>, 5> cands;
         for (int i = 0; i < 5; ++i) {
             cands[i] = detectAllFlagCandidates(frets[i].step);
-            for (const auto& [byte, _] : cands[i]) ++cov[byte];
+            for (const auto& [byte, _] : cands[i])
+                ++cov[byte];
         }
         int chosen = -1, chosenCov = 0, chosenBase = 0x7FFFFFFF;
         for (const auto& [byte, count] : cov) {
@@ -357,12 +403,15 @@ std::string DeriveKitToml(const KitProbeData& data) {
         }
         for (int i = 0; i < 5; ++i) {
             for (const auto& [byte, mask] : cands[i]) {
-                if (byte != chosen) continue;
-                if (fretByte < 0) fretByte = byte;
+                if (byte != chosen)
+                    continue;
+                if (fretByte < 0)
+                    fretByte = byte;
                 fretMaskBits |= mask;
                 for (int b = 0; b < 8; ++b) {
                     if (mask & (1 << b)) {
-                        if (b != frets[i].ps4_bit) needs_remap = true;
+                        if (b != frets[i].ps4_bit)
+                            needs_remap = true;
                         remap[b] = frets[i].ps4_bit;
                         break;
                     }
@@ -373,14 +422,14 @@ std::string DeriveKitToml(const KitProbeData& data) {
         if (needs_remap) {
             os << "dud0_bit_remap = [";
             for (int i = 0; i < 8; ++i) {
-                if (i) os << ", ";
+                if (i)
+                    os << ", ";
                 os << remap[i];
             }
             os << "]\n";
         }
         if (fretMaskBits != 0 && fretMaskBits != 0xFF) {
-            os << "fret_mask = 0x" << std::hex << int(fretMaskBits)
-               << std::dec << "\n";
+            os << "fret_mask = 0x" << std::hex << int(fretMaskBits) << std::dec << "\n";
         }
     }
     os << "hat_byte = " << hatByte << "\n";
@@ -396,25 +445,24 @@ std::string DeriveKitToml(const KitProbeData& data) {
         const int o_cym = velByte("orange_cymbal");
         os << "drum_red_byte           = " << red_b << "\n";
         os << "drum_blue_byte          = " << blue_b << "\n";
-        os << "drum_yellow_byte        = "
-           << (yellow_b >= 0 ? yellow_b : y_cym) << "\n";
+        os << "drum_yellow_byte        = " << (yellow_b >= 0 ? yellow_b : y_cym) << "\n";
         os << "drum_green_byte         = " << green_b << "\n";
-        os << "drum_yellow_cymbal_byte = "
-           << (y_cym >= 0 ? y_cym : yellow_b) << "\n";
+        os << "drum_yellow_cymbal_byte = " << (y_cym >= 0 ? y_cym : yellow_b) << "\n";
         os << "drum_blue_cymbal_byte   = " << b_cym << "\n";
-        os << "drum_green_cymbal_byte  = "
-           << (g_cym >= 0 ? g_cym : o_cym) << "\n";
+        os << "drum_green_cymbal_byte  = " << (g_cym >= 0 ? g_cym : o_cym) << "\n";
     }
     if (IsGuitarType(data.device_type)) {
         os << "guitar_ps4_layout = true\n";
-        if (fretByte >= 0) os << "fret_byte = " << fretByte << "\n";
+        if (fretByte >= 0)
+            os << "fret_byte = " << fretByte << "\n";
         const int whammy = velByte("whammy_bar");
         const int touch = velByte("touch_slider");
         const int fx = velByte("fx_switch");
         if (whammy >= 0) {
             os << "whammy_byte = " << whammy << "\n";
             const int wb = baseline_max[whammy];
-            if (wb < 0x40) os << "whammy_baseline = 0\n";
+            if (wb < 0x40)
+                os << "whammy_baseline = 0\n";
         }
         // PS3 GH/RB guitars have a continuous touch strip (tone slider).
         // PS4 RB Mustang / PS5 Riffmaster / X360 RB guitars have a
@@ -429,31 +477,37 @@ std::string DeriveKitToml(const KitProbeData& data) {
         // (a Mustang user might have noisily brushed the touch_slider
         // step even though the kit has no strip).
         const int tone_src = (fx >= 0) ? fx : touch;
-        if (touch >= 0) os << "touch_byte  = " << touch << "\n";
-        if (tone_src >= 0) os << "tone_byte   = " << tone_src << "\n";
+        if (touch >= 0)
+            os << "touch_byte  = " << touch << "\n";
+        if (tone_src >= 0)
+            os << "tone_byte   = " << tone_src << "\n";
         // PS4/PS5 RB guitars have a second set of solo frets on the upper
         // neck — they pack into dud[4] (fretSolo). Pick the byte with max
         // coverage across all 5 solo-fret presses, same algorithm as for
         // the main fret_byte but limited to the upper-neck capture steps.
-        struct SoloMap { const char* step; const char* name; const char* origin; };
+        struct SoloMap {
+            const char* step;
+            const char* name;
+            const char* origin;
+        };
         const SoloMap solo_frets[] = {
-            {"solo_green_fret",  "cross",    "solo green fret"},
-            {"solo_red_fret",    "circle",   "solo red fret"},
+            {"solo_green_fret", "cross", "solo green fret"},
+            {"solo_red_fret", "circle", "solo red fret"},
             {"solo_yellow_fret", "triangle", "solo yellow fret"},
-            {"solo_blue_fret",   "square",   "solo blue fret"},
-            {"solo_orange_fret", "l1",       "solo orange fret"},
+            {"solo_blue_fret", "square", "solo blue fret"},
+            {"solo_orange_fret", "l1", "solo orange fret"},
         };
         std::array<std::vector<std::pair<int, uint8_t>>, 5> solo_cands;
         std::map<int, int> solo_cov;
         for (int i = 0; i < 5; ++i) {
             solo_cands[i] = detectAllFlagCandidates(solo_frets[i].step);
-            for (const auto& [byte, _] : solo_cands[i]) ++solo_cov[byte];
+            for (const auto& [byte, _] : solo_cands[i])
+                ++solo_cov[byte];
         }
         int solo_byte = -1, solo_cov_best = 0, solo_base_best = 0x7FFFFFFF;
         for (const auto& [byte, count] : solo_cov) {
             const int base = baseline_max[byte];
-            if (count > solo_cov_best ||
-                (count == solo_cov_best && base < solo_base_best)) {
+            if (count > solo_cov_best || (count == solo_cov_best && base < solo_base_best)) {
                 solo_byte = byte;
                 solo_cov_best = count;
                 solo_base_best = base;
@@ -471,9 +525,9 @@ std::string DeriveKitToml(const KitProbeData& data) {
             // fret byte got.
             for (int i = 0; i < 5; ++i) {
                 for (const auto& [byte, mask] : solo_cands[i]) {
-                    if (byte != solo_byte) continue;
-                    button_bits.push_back({byte, mask, solo_frets[i].name,
-                                           solo_frets[i].origin});
+                    if (byte != solo_byte)
+                        continue;
+                    button_bits.push_back({byte, mask, solo_frets[i].name, solo_frets[i].origin});
                     break;
                 }
             }
@@ -487,11 +541,13 @@ std::string DeriveKitToml(const KitProbeData& data) {
             std::map<std::pair<int, uint8_t>, int> mod_count;
             for (int i = 0; i < 5; ++i) {
                 for (const auto& [byte, mask] : solo_cands[i]) {
-                    if (byte == fretByte) continue;
+                    if (byte == fretByte)
+                        continue;
                     ++mod_count[{byte, mask}];
                 }
             }
-            int mod_byte = -1; uint8_t mod_mask = 0;
+            int mod_byte = -1;
+            uint8_t mod_mask = 0;
             for (const auto& [bm, count] : mod_count) {
                 // Require ALL 5 solo presses to have surfaced this same
                 // (byte, bit) — that's the modifier signature.
@@ -503,8 +559,7 @@ std::string DeriveKitToml(const KitProbeData& data) {
             }
             if (mod_byte >= 0) {
                 os << "solo_modifier_byte = " << mod_byte << "\n";
-                os << "solo_modifier_mask = 0x" << std::hex
-                   << int(mod_mask) << std::dec << "\n";
+                os << "solo_modifier_mask = 0x" << std::hex << int(mod_mask) << std::dec << "\n";
             }
         }
     }
@@ -519,8 +574,10 @@ std::string DeriveKitToml(const KitProbeData& data) {
         // get tilt working in-game.
         auto tiltUpStats = [&](int byte_idx) -> std::pair<int, int> {
             for (const auto& r : results) {
-                if (r.key != "tilt_up" || !r.captured) continue;
-                if (byte_idx < 0 || byte_idx >= report_len) break;
+                if (r.key != "tilt_up" || !r.captured)
+                    continue;
+                if (byte_idx < 0 || byte_idx >= report_len)
+                    break;
                 return {r.bytes[byte_idx].min, r.bytes[byte_idx].max};
             }
             return {-1, -1};
@@ -529,9 +586,11 @@ std::string DeriveKitToml(const KitProbeData& data) {
         int tilt_shift = -1;
         int tilt_up_min = 0, tilt_up_max = 0;
         for (int candidate : motion_bytes) {
-            if (candidate < 0 || candidate >= report_len) continue;
+            if (candidate < 0 || candidate >= report_len)
+                continue;
             auto [up_min, up_max] = tiltUpStats(candidate);
-            if (up_min < 0) continue;
+            if (up_min < 0)
+                continue;
             const int excess_high = std::max(0, up_max - baseline_max[candidate]);
             const int excess_low = std::max(0, baseline_min[candidate] - up_min);
             const int shift = excess_high + excess_low;
@@ -568,7 +627,8 @@ std::string DeriveKitToml(const KitProbeData& data) {
         os << "motion_bytes = [";
         bool first = true;
         for (int b : motion_bytes) {
-            if (!first) os << ", ";
+            if (!first)
+                os << ", ";
             os << b;
             first = false;
         }
@@ -577,23 +637,25 @@ std::string DeriveKitToml(const KitProbeData& data) {
 
     // Fold Start/Select into the per-byte map so each TOML section gets
     // emitted exactly once.
-    const char* selName =
-        (IsGuitarType(data.device_type)) ? "left" : "touchpad";
-    const char* selOrigin = (IsGuitarType(data.device_type))
-                                ? "Select (Star Power)"
-                                : "Select";
-    if (b_sel) button_bits.push_back({selByte, b_sel, selName, selOrigin});
-    if (b_sta) button_bits.push_back({staByte, b_sta, "options", "Start"});
+    const char* selName = (IsGuitarType(data.device_type)) ? "left" : "touchpad";
+    const char* selOrigin = (IsGuitarType(data.device_type)) ? "Select (Star Power)" : "Select";
+    if (b_sel)
+        button_bits.push_back({selByte, b_sel, selName, selOrigin});
+    if (b_sta)
+        button_bits.push_back({staByte, b_sta, "options", "Start"});
 
     std::map<int, std::vector<ButtonBit>> by_byte;
     for (const auto& b : button_bits) {
-        if (b.mask != 0) by_byte[b.byte].push_back(b);
+        if (b.mask != 0)
+            by_byte[b.byte].push_back(b);
     }
     auto emit_bit = [&](uint8_t bit, const char* name, const char* origin) {
         os << "\"0x" << std::hex;
-        if (bit < 0x10) os << "0";
+        if (bit < 0x10)
+            os << "0";
         os << int(bit) << std::dec << "\" = \"" << name << "\"";
-        if (origin && *origin) os << "  # " << origin;
+        if (origin && *origin)
+            os << "  # " << origin;
         os << '\n';
     };
     for (const auto& [byte_idx, bits] : by_byte) {
@@ -611,11 +673,14 @@ std::string DeriveKitToml(const KitProbeData& data) {
     for (const auto& s : scalePlan) {
         int bestByte = -1, bestRange = 0;
         for (const auto& r : results) {
-            if (r.key != s.stepKey || !r.captured) continue;
+            if (r.key != s.stepKey || !r.captured)
+                continue;
             for (int i = 3; i < report_len; ++i) {
-                if (motion_bytes.count(i)) continue;
+                if (motion_bytes.count(i))
+                    continue;
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
+                if (b.samples == 0)
+                    continue;
                 const int range = b.max - b.min;
                 if (range > bestRange && b.max >= 0x10 && i != 26) {
                     bestRange = range;
@@ -623,21 +688,24 @@ std::string DeriveKitToml(const KitProbeData& data) {
                 }
             }
         }
-        if (bestByte < 0) continue;
+        if (bestByte < 0)
+            continue;
         int lo = -1, hi = -1;
         for (const auto& r : results) {
-            if (r.key != s.stepKey || !r.captured) continue;
+            if (r.key != s.stepKey || !r.captured)
+                continue;
             lo = std::max(0, baseline_max[bestByte]) + 2;
             hi = r.bytes[bestByte].max;
             break;
         }
-        if (hi <= lo) continue;
+        if (hi <= lo)
+            continue;
         if (!emitted_scaling_header) {
             os << "\n[velocity_scaling]\n";
             emitted_scaling_header = true;
         }
-        os << '"' << s.dudIdx << "\" = { lo = " << lo << ", hi = " << hi
-           << " }  # " << s.comment << '\n';
+        os << '"' << s.dudIdx << "\" = { lo = " << lo << ", hi = " << hi << " }  # " << s.comment
+           << '\n';
     }
 
     return os.str();
@@ -692,8 +760,10 @@ void DeriveBaselineAndMotion(KitProbeData& data) {
             if (r.key == "_motion_baseline" && r.captured && !r.bytes.empty()) {
                 for (int i = 0; i < data.report_length; ++i) {
                     const auto& bo = r.bytes[i];
-                    if (bo.samples == 0) continue;
-                    if ((bo.max - bo.min) <= 3) continue;
+                    if (bo.samples == 0)
+                        continue;
+                    if ((bo.max - bo.min) <= 3)
+                        continue;
                     // Mirrors the wizard's detectCrossTalkAndWarn fix:
                     // single-bit flips during the motion-baseline step
                     // are tilt FLAGS or button bits that happened to fire
@@ -705,7 +775,8 @@ void DeriveBaselineAndMotion(KitProbeData& data) {
                     // ends up with NO fret_byte).
                     const int diff = (bo.max ^ bo.min) & 0xFF;
                     const int pop = __builtin_popcount(static_cast<unsigned>(diff));
-                    if (pop <= 2) continue;
+                    if (pop <= 2)
+                        continue;
                     data.motion_bytes.insert(i);
                 }
             }
@@ -713,4 +784,4 @@ void DeriveBaselineAndMotion(KitProbeData& data) {
     }
 }
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

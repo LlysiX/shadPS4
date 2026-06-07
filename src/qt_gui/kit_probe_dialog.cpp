@@ -6,10 +6,8 @@
 
 #include <QBrush>
 #include <QColor>
-#include <QDateTime>
 #include <QCryptographicHash>
-#include <QSysInfo>
-#include <QUuid>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QHeaderView>
@@ -23,9 +21,11 @@
 #include <QPushButton>
 #include <QSet>
 #include <QStackedWidget>
+#include <QSysInfo>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
+#include <QUuid>
 
 #include <SDL3/SDL_hidapi.h>
 
@@ -38,13 +38,15 @@
 
 #include "common/path_util.h"
 #include "input/hid_instrument.h"
+#include "input/hid_kit_probe_data.h"
 #include "input/midi_input.h"
 #include "input/midi_kit_probe_data.h"
-#include "input/hid_kit_probe_data.h"
 
 namespace {
 
-SDL_hid_device* AsHidDev(void* p) { return static_cast<SDL_hid_device*>(p); }
+SDL_hid_device* AsHidDev(void* p) {
+    return static_cast<SDL_hid_device*>(p);
+}
 
 // First step for guitars only — actively shake/tilt the controller so we can
 // identify which bytes are motion-sensor noise and exclude them from later
@@ -56,31 +58,34 @@ const KitProbeDialog::StepDef& MotionStep() {
         QObject::tr("Tilt, twist and shake the guitar through its full motion "
                     "range — bytes that move now are the accelerometer / gyro "
                     "and will be ignored in the rest of the probe."),
-        "motion", false,
+        "motion",
+        false,
     };
     return s;
 }
 
 const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
     static const std::vector<KitProbeDialog::StepDef> steps = {
-        {"red_pad",         QObject::tr("Red pad — hit it lots of ways (soft, hard, edges)"), "velocity", false},
-        {"blue_pad",        QObject::tr("Blue pad — hit soft and hard"),                       "velocity", false},
-        {"green_pad",       QObject::tr("Green pad — hit soft and hard"),                      "velocity", true},
-        {"yellow_pad",      QObject::tr("Yellow pad (skip if absent)"),                        "velocity", true},
-        {"orange_pad",      QObject::tr("Orange pad (5-lane GH kits only — skip if absent)"),  "velocity", true},
-        {"kick_pedal",      QObject::tr("Kick pedal — press soft and hard"),                   "velocity", false},
-        {"kick_pedal_2",    QObject::tr("2nd kick pedal (skip if absent)"),                    "velocity", true},
-        {"button_start",    QObject::tr("Start button (tap once or twice)"),                    "digital",  false, 3000},
-        {"button_select",   QObject::tr("Select button (tap once or twice)"),                   "digital",  false, 3000},
-        {"button_ps",       QObject::tr("PS / Home button (skip if absent)"),                   "digital",  true,  3000},
-        {"button_square",   QObject::tr("Square face button"),                                  "digital",  true,  3000},
-        {"button_cross",    QObject::tr("Cross / X face button"),                               "digital",  true,  3000},
-        {"button_circle",   QObject::tr("Circle face button"),                                  "digital",  true,  3000},
-        {"button_triangle", QObject::tr("Triangle face button"),                                "digital",  true,  3000},
-        {"dpad_up",         QObject::tr("D-pad UP (hold briefly)"),                             "digital",  false, 3000},
-        {"dpad_down",       QObject::tr("D-pad DOWN (hold briefly)"),                           "digital",  false, 3000},
-        {"dpad_left",       QObject::tr("D-pad LEFT (hold briefly)"),                           "digital",  false, 3000},
-        {"dpad_right",      QObject::tr("D-pad RIGHT (hold briefly)"),                          "digital",  false, 3000},
+        {"red_pad", QObject::tr("Red pad — hit it lots of ways (soft, hard, edges)"), "velocity",
+         false},
+        {"blue_pad", QObject::tr("Blue pad — hit soft and hard"), "velocity", false},
+        {"green_pad", QObject::tr("Green pad — hit soft and hard"), "velocity", true},
+        {"yellow_pad", QObject::tr("Yellow pad (skip if absent)"), "velocity", true},
+        {"orange_pad", QObject::tr("Orange pad (5-lane GH kits only — skip if absent)"), "velocity",
+         true},
+        {"kick_pedal", QObject::tr("Kick pedal — press soft and hard"), "velocity", false},
+        {"kick_pedal_2", QObject::tr("2nd kick pedal (skip if absent)"), "velocity", true},
+        {"button_start", QObject::tr("Start button (tap once or twice)"), "digital", false, 3000},
+        {"button_select", QObject::tr("Select button (tap once or twice)"), "digital", false, 3000},
+        {"button_ps", QObject::tr("PS / Home button (skip if absent)"), "digital", true, 3000},
+        {"button_square", QObject::tr("Square face button"), "digital", true, 3000},
+        {"button_cross", QObject::tr("Cross / X face button"), "digital", true, 3000},
+        {"button_circle", QObject::tr("Circle face button"), "digital", true, 3000},
+        {"button_triangle", QObject::tr("Triangle face button"), "digital", true, 3000},
+        {"dpad_up", QObject::tr("D-pad UP (hold briefly)"), "digital", false, 3000},
+        {"dpad_down", QObject::tr("D-pad DOWN (hold briefly)"), "digital", false, 3000},
+        {"dpad_left", QObject::tr("D-pad LEFT (hold briefly)"), "digital", false, 3000},
+        {"dpad_right", QObject::tr("D-pad RIGHT (hold briefly)"), "digital", false, 3000},
     };
     return steps;
 }
@@ -88,33 +93,36 @@ const std::vector<KitProbeDialog::StepDef>& DrumSteps() {
 const std::vector<KitProbeDialog::StepDef>& GuitarSteps() {
     static const std::vector<KitProbeDialog::StepDef> steps = {
         MotionStep(),
-        {"tilt_up",        QObject::tr("Lift the guitar's neck UP (Star Power pose) — hold for the whole window. "
-                                       "We use this to figure out which direction means 'tilted up' on your kit."),
-                                                                                       "tilt_dir", false},
-        {"green_fret",     QObject::tr("GREEN fret — hold and release a few times"),  "digital",  false},
-        {"red_fret",       QObject::tr("RED fret"),                                    "digital",  false},
-        {"yellow_fret",    QObject::tr("YELLOW fret"),                                 "digital",  false},
-        {"blue_fret",      QObject::tr("BLUE fret"),                                   "digital",  false},
-        {"orange_fret",    QObject::tr("ORANGE fret"),                                 "digital",  false},
-        {"strum_up",       QObject::tr("Strum bar UP"),                                "digital",  false},
-        {"strum_down",     QObject::tr("Strum bar DOWN"),                              "digital",  false},
-        {"green_strum",    QObject::tr("Hold GREEN and strum DOWN at the same time"),  "combo",    false},
-        {"green_blue",     QObject::tr("Hold GREEN and BLUE together"),                "combo",    false},
-        {"green_blue_strum", QObject::tr("Hold GREEN + BLUE and strum DOWN"),          "combo",    false},
-        {"whammy_bar",     QObject::tr("Whammy bar — push and release through full range"), "velocity", false},
-        {"touch_slider",   QObject::tr("Touch slider — slide finger across the whole strip"), "velocity", true},
+        {"tilt_up",
+         QObject::tr("Lift the guitar's neck UP (Star Power pose) — hold for the whole window. "
+                     "We use this to figure out which direction means 'tilted up' on your kit."),
+         "tilt_dir", false},
+        {"green_fret", QObject::tr("GREEN fret — hold and release a few times"), "digital", false},
+        {"red_fret", QObject::tr("RED fret"), "digital", false},
+        {"yellow_fret", QObject::tr("YELLOW fret"), "digital", false},
+        {"blue_fret", QObject::tr("BLUE fret"), "digital", false},
+        {"orange_fret", QObject::tr("ORANGE fret"), "digital", false},
+        {"strum_up", QObject::tr("Strum bar UP"), "digital", false},
+        {"strum_down", QObject::tr("Strum bar DOWN"), "digital", false},
+        {"green_strum", QObject::tr("Hold GREEN and strum DOWN at the same time"), "combo", false},
+        {"green_blue", QObject::tr("Hold GREEN and BLUE together"), "combo", false},
+        {"green_blue_strum", QObject::tr("Hold GREEN + BLUE and strum DOWN"), "combo", false},
+        {"whammy_bar", QObject::tr("Whammy bar — push and release through full range"), "velocity",
+         false},
+        {"touch_slider", QObject::tr("Touch slider — slide finger across the whole strip"),
+         "velocity", true},
         // (No separate tilt step — tilt is already captured by the motion
         //  baseline step at the start of the walkthrough.)
-        {"button_start",   QObject::tr("Start button (tap once or twice)"),                "digital",  false, 3000},
-        {"button_select",  QObject::tr("Select button (tap once or twice)"),               "digital",  false, 3000},
-        {"button_ps",      QObject::tr("PS / Home button (skip if absent)"),               "digital",  true,  3000},
+        {"button_start", QObject::tr("Start button (tap once or twice)"), "digital", false, 3000},
+        {"button_select", QObject::tr("Select button (tap once or twice)"), "digital", false, 3000},
+        {"button_ps", QObject::tr("PS / Home button (skip if absent)"), "digital", true, 3000},
         // dpad_up / dpad_down deliberately omitted — guitar strum bars
         // wire the same HAT bits as dpad up/down, and the strum_up/
         // strum_down steps already capture them. Adding redundant dpad
         // up/down steps only created cross-talk warnings on devices
         // where the strum bar slightly bounced the dpad bit pattern.
-        {"dpad_left",      QObject::tr("D-pad LEFT (skip if absent)"),                     "digital",  true,  3000},
-        {"dpad_right",     QObject::tr("D-pad RIGHT (skip if absent)"),                    "digital",  true,  3000},
+        {"dpad_left", QObject::tr("D-pad LEFT (skip if absent)"), "digital", true, 3000},
+        {"dpad_right", QObject::tr("D-pad RIGHT (skip if absent)"), "digital", true, 3000},
     };
     return steps;
 }
@@ -131,34 +139,42 @@ const std::vector<KitProbeDialog::StepDef>& GuitarSoloSteps() {
         // `fx_switch`). Skip the touch_slider step for this device type so
         // users don't waste a slot on something that doesn't exist on
         // their kit.
-        v.erase(std::remove_if(v.begin(), v.end(),
-                               [](const KitProbeDialog::StepDef& s) {
-                                   return s.key == "touch_slider";
-                               }),
+        v.erase(std::remove_if(
+                    v.begin(), v.end(),
+                    [](const KitProbeDialog::StepDef& s) { return s.key == "touch_slider"; }),
                 v.end());
         auto insertAt = v.begin();
         for (auto it = v.begin(); it != v.end(); ++it) {
-            if (it->key == "strum_up") { insertAt = it; break; }
+            if (it->key == "strum_up") {
+                insertAt = it;
+                break;
+            }
         }
-        v.insert(insertAt, {
-            {"solo_green_fret",  QObject::tr("UPPER solo GREEN fret — hold and release"),    "digital", false},
-            {"solo_red_fret",    QObject::tr("UPPER solo RED fret"),                          "digital", false},
-            {"solo_yellow_fret", QObject::tr("UPPER solo YELLOW fret"),                       "digital", false},
-            {"solo_blue_fret",   QObject::tr("UPPER solo BLUE fret"),                         "digital", false},
-            {"solo_orange_fret", QObject::tr("UPPER solo ORANGE fret"),                       "digital", false},
-            // Solo-frets combo — analogue of green_blue for the main
-            // neck. Catches kits where solo bits land on the same byte
-            // but a single press fires multiple bits (broken bit mask)
-            // or where two simultaneous solo bits get swallowed
-            // (button-bytes section missing).
-            {"solo_green_blue",  QObject::tr("Hold UPPER solo GREEN and UPPER solo BLUE together"), "combo", false},
-            // PS4 RB Mustang / PS5 Riffmaster / X360 RB all ship a
-            // discrete pickup/FX switch (the only guitars that DO);
-            // capture it here instead of in the standard walkthrough.
-            // Optional so kits with a broken or missing switch can move
-            // on — the rest of the kit still functions without it.
-            {"fx_switch",        QObject::tr("FX / pickup switch — sweep through every position (skip if absent)"), "velocity", true},
-        });
+        v.insert(
+            insertAt,
+            {
+                {"solo_green_fret", QObject::tr("UPPER solo GREEN fret — hold and release"),
+                 "digital", false},
+                {"solo_red_fret", QObject::tr("UPPER solo RED fret"), "digital", false},
+                {"solo_yellow_fret", QObject::tr("UPPER solo YELLOW fret"), "digital", false},
+                {"solo_blue_fret", QObject::tr("UPPER solo BLUE fret"), "digital", false},
+                {"solo_orange_fret", QObject::tr("UPPER solo ORANGE fret"), "digital", false},
+                // Solo-frets combo — analogue of green_blue for the main
+                // neck. Catches kits where solo bits land on the same byte
+                // but a single press fires multiple bits (broken bit mask)
+                // or where two simultaneous solo bits get swallowed
+                // (button-bytes section missing).
+                {"solo_green_blue",
+                 QObject::tr("Hold UPPER solo GREEN and UPPER solo BLUE together"), "combo", false},
+                // PS4 RB Mustang / PS5 Riffmaster / X360 RB all ship a
+                // discrete pickup/FX switch (the only guitars that DO);
+                // capture it here instead of in the standard walkthrough.
+                // Optional so kits with a broken or missing switch can move
+                // on — the rest of the kit still functions without it.
+                {"fx_switch",
+                 QObject::tr("FX / pickup switch — sweep through every position (skip if absent)"),
+                 "velocity", true},
+            });
         return v;
     }();
     return steps;
@@ -169,14 +185,19 @@ const std::vector<KitProbeDialog::StepDef>& ProDrumSteps() {
         std::vector<KitProbeDialog::StepDef> v = DrumSteps();
         auto insertAt = v.begin();
         for (auto it = v.begin(); it != v.end(); ++it) {
-            if (it->key == "button_start") { insertAt = it; break; }
+            if (it->key == "button_start") {
+                insertAt = it;
+                break;
+            }
         }
-        v.insert(insertAt, {
-            {"yellow_cymbal",   QObject::tr("Yellow cymbal"),                                       "velocity", true},
-            {"orange_cymbal",   QObject::tr("Orange cymbal (skip if absent)"),                      "velocity", true},
-            {"blue_cymbal",     QObject::tr("Blue cymbal (skip if absent)"),                       "velocity", true},
-            {"green_cymbal",    QObject::tr("Green cymbal (skip if absent)"),                      "velocity", true},
-        });
+        v.insert(
+            insertAt,
+            {
+                {"yellow_cymbal", QObject::tr("Yellow cymbal"), "velocity", true},
+                {"orange_cymbal", QObject::tr("Orange cymbal (skip if absent)"), "velocity", true},
+                {"blue_cymbal", QObject::tr("Blue cymbal (skip if absent)"), "velocity", true},
+                {"green_cymbal", QObject::tr("Green cymbal (skip if absent)"), "velocity", true},
+            });
         return v;
     }();
     return steps;
@@ -185,42 +206,43 @@ const std::vector<KitProbeDialog::StepDef>& ProDrumSteps() {
 const std::vector<KitProbeDialog::StepDef>& Steps(KitProbeDialog::DeviceType t) {
     using DT = KitProbeDialog::DeviceType;
     switch (t) {
-    case DT::Guitar:     return GuitarSteps();
-    case DT::GuitarSolo: return GuitarSoloSteps();
-    case DT::ProDrum:    return ProDrumSteps();
-    default:             return DrumSteps();
+    case DT::Guitar:
+        return GuitarSteps();
+    case DT::GuitarSolo:
+        return GuitarSoloSteps();
+    case DT::ProDrum:
+        return ProDrumSteps();
+    default:
+        return DrumSteps();
     }
 }
 
-QString hexByte(uint8_t v) { return QStringLiteral("%1").arg(v, 2, 16, QChar('0')); }
+QString hexByte(uint8_t v) {
+    return QStringLiteral("%1").arg(v, 2, 16, QChar('0'));
+}
 
-}  // namespace
+} // namespace
 
-KitProbeDialog::KitProbeDialog(QWidget* parent)
-    : QDialog(parent), ui(new Ui::KitProbeDialog) {
+KitProbeDialog::KitProbeDialog(QWidget* parent) : QDialog(parent), ui(new Ui::KitProbeDialog) {
     ui->setupUi(this);
 
     m_tick = new QTimer(this);
-    m_tick->setInterval(33);  // ~30 Hz UI refresh
+    m_tick->setInterval(33); // ~30 Hz UI refresh
 
-    connect(ui->refreshBtn, &QPushButton::clicked, this,
-            &KitProbeDialog::onDeviceListRefresh);
+    connect(ui->refreshBtn, &QPushButton::clicked, this, &KitProbeDialog::onDeviceListRefresh);
     connect(ui->deviceList, &QListWidget::itemSelectionChanged, this,
             &KitProbeDialog::onDeviceSelected);
-    connect(ui->startBtn, &QPushButton::clicked, this,
-            &KitProbeDialog::onStartProbe);
-    connect(ui->nextBtn, &QPushButton::clicked, this,
-            &KitProbeDialog::onNextStep);
+    connect(ui->startBtn, &QPushButton::clicked, this, &KitProbeDialog::onStartProbe);
+    connect(ui->nextBtn, &QPushButton::clicked, this, &KitProbeDialog::onNextStep);
     connect(ui->beginBtn, &QPushButton::clicked, this,
-            &KitProbeDialog::onRedoStep);  // begin & redo do the same thing
+            &KitProbeDialog::onRedoStep); // begin & redo do the same thing
     connect(ui->skipBtn, &QPushButton::clicked, this, [this]() {
         if (m_currentStep >= 0 && m_currentStep < (int)m_results.size()) {
             m_results[m_currentStep].captured = false;
         }
         onNextStep();
     });
-    connect(ui->saveBtn, &QPushButton::clicked, this,
-            &KitProbeDialog::onSaveResults);
+    connect(ui->saveBtn, &QPushButton::clicked, this, &KitProbeDialog::onSaveResults);
     connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::close);
     connect(m_tick, &QTimer::timeout, this, &KitProbeDialog::onTickTimer);
 
@@ -244,9 +266,8 @@ void KitProbeDialog::onDeviceListRefresh() {
 
 void KitProbeDialog::enumerateHidrawDevices() {
     if (SDL_hid_init() != 0) {
-        auto* item = new QListWidgetItem(
-            tr("SDL_hid_init failed — HID enumeration unavailable"),
-            ui->deviceList);
+        auto* item = new QListWidgetItem(tr("SDL_hid_init failed — HID enumeration unavailable"),
+                                         ui->deviceList);
         item->setFlags(Qt::ItemIsEnabled);
         return;
     }
@@ -256,25 +277,24 @@ void KitProbeDialog::enumerateHidrawDevices() {
     QSet<QString> seenKey;
     for (auto* d = head; d; d = d->next) {
         const QString key = QStringLiteral("%1:%2:%3")
-            .arg(d->vendor_id, 4, 16, QChar('0'))
-            .arg(d->product_id, 4, 16, QChar('0'))
-            .arg(QString::fromUtf8(d->path));
-        if (seenKey.contains(key)) continue;
+                                .arg(d->vendor_id, 4, 16, QChar('0'))
+                                .arg(d->product_id, 4, 16, QChar('0'))
+                                .arg(QString::fromUtf8(d->path));
+        if (seenKey.contains(key))
+            continue;
         seenKey.insert(key);
         const QString vid = QString::number(d->vendor_id, 16).rightJustified(4, '0');
         const QString pid = QString::number(d->product_id, 16).rightJustified(4, '0');
-        const QString manufacturer =
-            d->manufacturer_string
-                ? QString::fromWCharArray(d->manufacturer_string).trimmed()
-                : QString();
+        const QString manufacturer = d->manufacturer_string
+                                         ? QString::fromWCharArray(d->manufacturer_string).trimmed()
+                                         : QString();
         const QString product =
-            d->product_string
-                ? QString::fromWCharArray(d->product_string).trimmed()
-                : QString();
+            d->product_string ? QString::fromWCharArray(d->product_string).trimmed() : QString();
         const QString label = QStringLiteral("%1:%2  %3 %4")
-            .arg(vid).arg(pid)
-            .arg(manufacturer.isEmpty() ? QStringLiteral("?") : manufacturer)
-            .arg(product);
+                                  .arg(vid)
+                                  .arg(pid)
+                                  .arg(manufacturer.isEmpty() ? QStringLiteral("?") : manufacturer)
+                                  .arg(product);
         auto* item = new QListWidgetItem(label, ui->deviceList);
         item->setData(Qt::UserRole + 0, QString::fromUtf8(d->path));
         item->setData(Qt::UserRole + 1, vid);
@@ -290,13 +310,15 @@ void KitProbeDialog::enumerateHidrawDevices() {
         const QString vid = QString::number(xi.vendor_id, 16).rightJustified(4, '0');
         const QString pid = QString::number(xi.product_id, 16).rightJustified(4, '0');
         const QString label = QStringLiteral("[XInput] %1:%2  %3")
-            .arg(vid).arg(pid).arg(QString::fromStdString(xi.name));
+                                  .arg(vid)
+                                  .arg(pid)
+                                  .arg(QString::fromStdString(xi.name));
         auto* item = new QListWidgetItem(label, ui->deviceList);
         item->setData(Qt::UserRole + 0, QStringLiteral("xinput:%1").arg(xi.instance_id));
         item->setData(Qt::UserRole + 1, vid);
         item->setData(Qt::UserRole + 2, pid);
         item->setData(Qt::UserRole + 3, QString::fromStdString(xi.name));
-        item->setData(Qt::UserRole + 4, true);  // marks as XInput source
+        item->setData(Qt::UserRole + 4, true); // marks as XInput source
     }
     // MIDI input ports. Path uses "midi:<id>" so openDevice can route to MidiInput.
     for (const auto& port : Input::MidiInput::EnumerateInputPorts()) {
@@ -309,12 +331,11 @@ void KitProbeDialog::enumerateHidrawDevices() {
         item->setData(Qt::UserRole + 2, QStringLiteral("0000"));
         item->setData(Qt::UserRole + 3, port_name);
         item->setData(Qt::UserRole + 4, false);
-        item->setData(Qt::UserRole + 5, QStringLiteral("midi"));  // source kind marker
+        item->setData(Qt::UserRole + 5, QStringLiteral("midi")); // source kind marker
     }
     if (ui->deviceList->count() == 0) {
         auto* item = new QListWidgetItem(
-            tr("(no devices found — plug your instrument in and click Refresh)"),
-            ui->deviceList);
+            tr("(no devices found — plug your instrument in and click Refresh)"), ui->deviceList);
         item->setFlags(Qt::ItemIsEnabled);
     }
 }
@@ -333,7 +354,7 @@ bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
         m_midiDev = Input::MidiInput::OpenInputPort(port_id.toStdString());
         if (!m_midiDev) {
             QMessageBox::warning(this, tr("Open failed"),
-                tr("Could not open MIDI port %1.").arg(port_id));
+                                 tr("Could not open MIDI port %1.").arg(port_id));
             return false;
         }
         m_devicePath = path;
@@ -357,7 +378,7 @@ bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
         m_xinputDev = Input::HidInstrument::OpenXInputGamepad(id);
         if (!m_xinputDev) {
             QMessageBox::warning(this, tr("Open failed"),
-                tr("SDL_OpenGamepad failed for instance %1.").arg(id));
+                                 tr("SDL_OpenGamepad failed for instance %1.").arg(id));
             return false;
         }
         m_devicePath = path;
@@ -385,47 +406,45 @@ bool KitProbeDialog::openDevice(const QString& path, uint16_t vid, uint16_t pid,
                        "add a udev rule so this device is readable without "
                        "sudo? (You'll be asked for your password, then need "
                        "to unplug and replug.)")
-                       .arg(vid, 4, 16, QChar('0'))
-                       .arg(pid, 4, 16, QChar('0')));
-        auto* grant = box.addButton(tr("Grant access (one-time)"),
-                                    QMessageBox::AcceptRole);
+                        .arg(vid, 4, 16, QChar('0'))
+                        .arg(pid, 4, 16, QChar('0')));
+        auto* grant = box.addButton(tr("Grant access (one-time)"), QMessageBox::AcceptRole);
         box.addButton(QMessageBox::Cancel);
         box.exec();
         if (box.clickedButton() == grant) {
-            const QString line = QStringLiteral(
-                "SUBSYSTEM==\"hidraw\", "
-                "ATTRS{idVendor}==\"%1\", ATTRS{idProduct}==\"%2\", "
-                "TAG+=\"uaccess\", MODE=\"0666\"")
-                .arg(vid, 4, 16, QChar('0'))
-                .arg(pid, 4, 16, QChar('0'));
+            const QString line =
+                QStringLiteral("SUBSYSTEM==\"hidraw\", "
+                               "ATTRS{idVendor}==\"%1\", ATTRS{idProduct}==\"%2\", "
+                               "TAG+=\"uaccess\", MODE=\"0666\"")
+                    .arg(vid, 4, 16, QChar('0'))
+                    .arg(pid, 4, 16, QChar('0'));
             QProcess proc;
             proc.setProgram("pkexec");
-            proc.setArguments({
-                "sh", "-c",
-                QStringLiteral(
-                    "touch /etc/udev/rules.d/99-shadps4-instruments.rules && "
-                    "if ! grep -q 'idVendor==\"%1\".*idProduct==\"%2\"' "
-                    "/etc/udev/rules.d/99-shadps4-instruments.rules; then "
-                    "echo '%3' >> /etc/udev/rules.d/99-shadps4-instruments.rules; "
-                    "fi && udevadm control --reload-rules && udevadm trigger")
-                    .arg(vid, 4, 16, QChar('0'))
-                    .arg(pid, 4, 16, QChar('0'))
-                    .arg(line)
-            });
+            proc.setArguments(
+                {"sh", "-c",
+                 QStringLiteral("touch /etc/udev/rules.d/99-shadps4-instruments.rules && "
+                                "if ! grep -q 'idVendor==\"%1\".*idProduct==\"%2\"' "
+                                "/etc/udev/rules.d/99-shadps4-instruments.rules; then "
+                                "echo '%3' >> /etc/udev/rules.d/99-shadps4-instruments.rules; "
+                                "fi && udevadm control --reload-rules && udevadm trigger")
+                     .arg(vid, 4, 16, QChar('0'))
+                     .arg(pid, 4, 16, QChar('0'))
+                     .arg(line)});
             if (proc.startDetached()) {
                 QMessageBox::information(this, tr("Rule added"),
-                    tr("Rule added. Unplug and replug the device, then "
-                       "click Refresh and try again."));
+                                         tr("Rule added. Unplug and replug the device, then "
+                                            "click Refresh and try again."));
             } else {
                 QMessageBox::warning(this, tr("Install failed"),
-                    tr("Could not launch pkexec. Is polkit installed?"));
+                                     tr("Could not launch pkexec. Is polkit installed?"));
             }
         }
 #else
         QMessageBox::warning(this, tr("Open failed"),
-            tr("SDL_hid_open failed for %1:%2. The device may be claimed by "
-               "another application.")
-                .arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0')));
+                             tr("SDL_hid_open failed for %1:%2. The device may be claimed by "
+                                "another application.")
+                                 .arg(vid, 4, 16, QChar('0'))
+                                 .arg(pid, 4, 16, QChar('0')));
 #endif
         return false;
     }
@@ -482,7 +501,8 @@ void KitProbeDialog::setState(State s) {
 
 void KitProbeDialog::onStartProbe() {
     auto* item = ui->deviceList->currentItem();
-    if (!item) return;
+    if (!item)
+        return;
     const QString path = item->data(Qt::UserRole + 0).toString();
     const QString vidStr = item->data(Qt::UserRole + 1).toString();
     const QString pidStr = item->data(Qt::UserRole + 2).toString();
@@ -496,7 +516,8 @@ void KitProbeDialog::onStartProbe() {
                              tr("Could not parse %1:%2.").arg(vidStr, pidStr));
         return;
     }
-    if (!openDevice(path, vid, pid, name, is_xinput)) return;
+    if (!openDevice(path, vid, pid, name, is_xinput))
+        return;
 
     // Init step results table
     m_results.clear();
@@ -504,18 +525,25 @@ void KitProbeDialog::onStartProbe() {
     // to pick one before the walkthrough starts, so we don't silently
     // capture a guitar fixture as if it were a drum kit.
     switch (ui->deviceTypeCombo->currentIndex()) {
-        case 1:  m_deviceType = DeviceType::Drum;       break;  // 5-lane / no cymbals
-        case 2:  m_deviceType = DeviceType::ProDrum;    break;  // Pro drums
-        case 3:  m_deviceType = DeviceType::Guitar;     break;
-        case 4:  m_deviceType = DeviceType::GuitarSolo; break;  // PS4/PS5 RB solo frets
-        default:
-            QMessageBox::information(
-                this, tr("Pick an instrument type"),
-                tr("Pick an instrument type from the dropdown on the left "
-                   "before starting the probe."));
-            closeDevice();
-            setState(State::SelectDevice);
-            return;
+    case 1:
+        m_deviceType = DeviceType::Drum;
+        break; // 5-lane / no cymbals
+    case 2:
+        m_deviceType = DeviceType::ProDrum;
+        break; // Pro drums
+    case 3:
+        m_deviceType = DeviceType::Guitar;
+        break;
+    case 4:
+        m_deviceType = DeviceType::GuitarSolo;
+        break; // PS4/PS5 RB solo frets
+    default:
+        QMessageBox::information(this, tr("Pick an instrument type"),
+                                 tr("Pick an instrument type from the dropdown on the left "
+                                    "before starting the probe."));
+        closeDevice();
+        setState(State::SelectDevice);
+        return;
     }
     for (const auto& s : Steps(m_deviceType)) {
         // MIDI drum kits / Python senders / electronic kits don't have
@@ -526,7 +554,8 @@ void KitProbeDialog::onStartProbe() {
         // combo step for MIDI captures; the velocity (pad) and tilt
         // motion steps are still kept because some e-drum modules
         // emit those as continuous controllers.
-        if (m_isMidi && (s.kind == "digital" || s.kind == "combo")) continue;
+        if (m_isMidi && (s.kind == "digital" || s.kind == "combo"))
+            continue;
         m_results.push_back({s, {}, {}, false});
     }
     // Parallel MIDI event buffer — same length as m_results so indices
@@ -541,11 +570,10 @@ void KitProbeDialog::onStartProbe() {
 
     // Baseline: 1.5s of quiet sampling so we know idle noise band.
     ui->stepHeader->setText(tr("Baseline (1/%1)").arg(Steps(m_deviceType).size() + 1));
-    ui->stepPrompt->setText(
-        tr("Don't touch the kit. Capturing idle noise for ~1.5 s...\n\n"
-           "If your kit only sends data when something changes (custom "
-           "firmware like Santroller, some wireless kits), tap and release "
-           "any button now so we can read its idle state."));
+    ui->stepPrompt->setText(tr("Don't touch the kit. Capturing idle noise for ~1.5 s...\n\n"
+                               "If your kit only sends data when something changes (custom "
+                               "firmware like Santroller, some wireless kits), tap and release "
+                               "any button now so we can read its idle state."));
     ui->stepProgress->setMaximum(kBaselineDurationMs);
     ui->stepProgress->setValue(0);
     ui->crossTalkLabel->clear();
@@ -560,7 +588,8 @@ void KitProbeDialog::onStartProbe() {
 }
 
 void KitProbeDialog::startStep(int idx) {
-    if (idx < 0 || idx >= (int)m_results.size()) return;
+    if (idx < 0 || idx >= (int)m_results.size())
+        return;
     m_currentStep = idx;
     auto& r = m_results[idx];
     r.bytes = {};
@@ -572,17 +601,15 @@ void KitProbeDialog::startStep(int idx) {
         m_midi_results[idx].captured = false;
         m_midi_results[idx].step_started = std::chrono::steady_clock::now();
     }
-    ui->stepHeader->setText(tr("Step %1/%2 — %3")
-                                .arg(idx + 2)
-                                .arg(Steps(m_deviceType).size() + 1)
-                                .arg(r.def.key));
+    ui->stepHeader->setText(
+        tr("Step %1/%2 — %3").arg(idx + 2).arg(Steps(m_deviceType).size() + 1).arg(r.def.key));
     const int dur_ms = r.def.duration_ms > 0 ? r.def.duration_ms : kStepDurationMs;
     const int dur_s = (dur_ms + 500) / 1000;
-    ui->stepPrompt->setText(
-        r.def.prompt +
-        tr("\n\nRead the prompt, get ready, then click \"Begin sampling\". "
-           "You'll have %1 s to wail on it lots of ways. Click Begin again "
-           "to redo if needed.").arg(dur_s));
+    ui->stepPrompt->setText(r.def.prompt +
+                            tr("\n\nRead the prompt, get ready, then click \"Begin sampling\". "
+                               "You'll have %1 s to wail on it lots of ways. Click Begin again "
+                               "to redo if needed.")
+                                .arg(dur_s));
     ui->stepProgress->setMaximum(dur_ms);
     ui->stepProgress->setValue(0);
     ui->crossTalkLabel->clear();
@@ -597,7 +624,8 @@ void KitProbeDialog::startStep(int idx) {
 // Actually start (or restart) the 5 s capture window for the current step.
 // Called both for the first attempt and for redos — same behaviour.
 void KitProbeDialog::onRedoStep() {
-    if (m_state != State::Step || m_currentStep < 0) return;
+    if (m_state != State::Step || m_currentStep < 0)
+        return;
     auto& r = m_results[m_currentStep];
     r.bytes = {};
     r.raw.clear();
@@ -612,7 +640,8 @@ void KitProbeDialog::onRedoStep() {
 }
 
 void KitProbeDialog::finishStep() {
-    if (m_currentStep < 0 || m_currentStep >= (int)m_results.size()) return;
+    if (m_currentStep < 0 || m_currentStep >= (int)m_results.size())
+        return;
     auto& r = m_results[m_currentStep];
     r.captured = true;
     if (m_currentStep < (int)m_midi_results.size()) {
@@ -625,7 +654,8 @@ void KitProbeDialog::finishStep() {
     ui->nextBtn->setEnabled(true);
     ui->skipBtn->setEnabled(false);
     // Cross-talk detection is byte-grid based, irrelevant to MIDI captures.
-    if (!m_isMidi) detectCrossTalkAndWarn();
+    if (!m_isMidi)
+        detectCrossTalkAndWarn();
 }
 
 void KitProbeDialog::detectCrossTalkAndWarn() {
@@ -639,8 +669,10 @@ void KitProbeDialog::detectCrossTalkAndWarn() {
             int counted = 0;
             for (int i = 0; i < m_reportLen; ++i) {
                 const auto& b = r.bytes[i];
-                if (b.samples == 0) continue;
-                if ((b.max - b.min) <= 3) continue;
+                if (b.samples == 0)
+                    continue;
+                if ((b.max - b.min) <= 3)
+                    continue;
                 // A byte that only flips one or two bits across the whole
                 // motion-baseline step is a tilt FLAG or button bit that
                 // happened to fire while the user was tilting — not an
@@ -654,38 +686,46 @@ void KitProbeDialog::detectCrossTalkAndWarn() {
                 // 0..0xFF; flag-bytes touch <= 2.
                 const int diff = (b.max ^ b.min) & 0xFF;
                 const int popcount = __builtin_popcount(static_cast<unsigned>(diff));
-                if (popcount <= 2) continue;
+                if (popcount <= 2)
+                    continue;
                 m_motionBytes.insert(i);
                 ++counted;
             }
             ui->crossTalkLabel->setText(
                 tr("Flagged %1 byte(s) as motion sensor — they will be ignored "
-                   "in the remaining steps.").arg(counted));
+                   "in the remaining steps.")
+                    .arg(counted));
             return;
         }
     }
     // For each step, bytes that moved are "expected" if their value range is
     // wide (real input). Bytes that moved a tiny amount are bleed-through.
     // Motion bytes (flagged at baseline) are skipped — they jitter naturally.
-    if (m_currentStep < 0) return;
+    if (m_currentStep < 0)
+        return;
     const auto& r = m_results[m_currentStep];
     QStringList warnings;
     for (int i = 0; i < m_reportLen; ++i) {
-        if (m_motionBytes.count(i)) continue;
+        if (m_motionBytes.count(i))
+            continue;
         const auto& b = r.bytes[i];
-        if (b.samples == 0) continue;
+        if (b.samples == 0)
+            continue;
         const int range = b.max - b.min;
-        if (range >= 0x40) continue;  // real input — large swing
-        if (b.max <= m_baselineMax[i] + 1) continue;  // within noise
-        if (b.max < 0x10) continue;  // too tiny to call bleed
+        if (range >= 0x40)
+            continue; // real input — large swing
+        if (b.max <= m_baselineMax[i] + 1)
+            continue; // within noise
+        if (b.max < 0x10)
+            continue; // too tiny to call bleed
         warnings << tr("byte %1 jittered up to 0x%2 (baseline max 0x%3)")
-                        .arg(i).arg(b.max, 2, 16, QChar('0'))
+                        .arg(i)
+                        .arg(b.max, 2, 16, QChar('0'))
                         .arg(m_baselineMax[i], 2, 16, QChar('0'));
     }
     if (!warnings.isEmpty()) {
-        ui->crossTalkLabel->setText(
-            tr("⚠ Possible cross-talk / bleed: %1. Redo if it looked off.")
-                .arg(warnings.join("; ")));
+        ui->crossTalkLabel->setText(tr("⚠ Possible cross-talk / bleed: %1. Redo if it looked off.")
+                                        .arg(warnings.join("; ")));
     }
 }
 
@@ -708,7 +748,6 @@ void KitProbeDialog::onNextStep() {
     }
 }
 
-
 // ============================================================================
 // HID reading & live byte grid
 // ============================================================================
@@ -720,9 +759,11 @@ void KitProbeDialog::onHidReadable() {
         constexpr int kNoteCount = 64;
         for (const auto& ev : events) {
             const int col = static_cast<int>(ev.note) - kFirstNote;
-            if (col < 0 || col >= kNoteCount) continue;
+            if (col < 0 || col >= kNoteCount)
+                continue;
             auto* cell = ui->byteGrid->item(1, col);
-            if (!cell) continue;
+            if (!cell)
+                continue;
             if (ev.on) {
                 cell->setText(QString::number(ev.velocity));
                 cell->setForeground(QBrush(QColor("#fff")));
@@ -732,17 +773,16 @@ void KitProbeDialog::onHidReadable() {
             }
         }
         if (m_state == State::Idle && !events.empty()) {
-            ui->stepPrompt->setText(
-                tr("MIDI input detected (%1 event%2). Click Next to begin "
-                   "the walk-through.")
-                    .arg(events.size())
-                    .arg(events.size() == 1 ? "" : "s"));
+            ui->stepPrompt->setText(tr("MIDI input detected (%1 event%2). Click Next to begin "
+                                       "the walk-through.")
+                                        .arg(events.size())
+                                        .arg(events.size() == 1 ? "" : "s"));
             ui->nextBtn->setEnabled(true);
             ui->stepProgress->setValue(ui->stepProgress->maximum());
             return;
         }
-        if (m_state == State::Step && m_sampling &&
-            m_currentStep >= 0 && m_currentStep < (int)m_midi_results.size()) {
+        if (m_state == State::Step && m_sampling && m_currentStep >= 0 &&
+            m_currentStep < (int)m_midi_results.size()) {
             auto& buf = m_midi_results[m_currentStep];
             const auto step_start = buf.step_started;
             for (const auto& ev : events) {
@@ -784,20 +824,25 @@ void KitProbeDialog::onHidReadable() {
         if (m_state == State::Idle) {
             m_idleRaw.emplace_back(buf, buf + n);
             for (int i = 0; i < n; ++i) {
-                if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
-                if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
+                if (buf[i] > m_baselineMax[i])
+                    m_baselineMax[i] = buf[i];
+                if (buf[i] < m_baselineMin[i])
+                    m_baselineMin[i] = buf[i];
             }
         } else if (m_state == State::Step && m_sampling) {
             appendReportToCurrentStep(buf, (std::size_t)n);
         }
         return;
     }
-    if (!m_hidDev) return;
+    if (!m_hidDev)
+        return;
     uint8_t buf[64];
     while (true) {
         int n = SDL_hid_read_timeout(AsHidDev(m_hidDev), buf, sizeof(buf), 0);
-        if (n <= 0) break;
-        if (n > (int)m_lastReport.size()) n = (int)m_lastReport.size();
+        if (n <= 0)
+            break;
+        if (n > (int)m_lastReport.size())
+            n = (int)m_lastReport.size();
 
         if (m_reportLen < (int)n) {
             m_reportLen = (int)n;
@@ -813,8 +858,10 @@ void KitProbeDialog::onHidReadable() {
         if (m_state == State::Idle) {
             m_idleRaw.emplace_back(buf, buf + n);
             for (int i = 0; i < n; ++i) {
-                if (buf[i] > m_baselineMax[i]) m_baselineMax[i] = buf[i];
-                if (buf[i] < m_baselineMin[i]) m_baselineMin[i] = buf[i];
+                if (buf[i] > m_baselineMax[i])
+                    m_baselineMax[i] = buf[i];
+                if (buf[i] < m_baselineMin[i])
+                    m_baselineMin[i] = buf[i];
             }
         } else if (m_state == State::Step && m_sampling) {
             appendReportToCurrentStep(buf, (std::size_t)n);
@@ -823,13 +870,16 @@ void KitProbeDialog::onHidReadable() {
 }
 
 void KitProbeDialog::appendReportToCurrentStep(const uint8_t* data, std::size_t len) {
-    if (m_currentStep < 0 || m_currentStep >= (int)m_results.size()) return;
+    if (m_currentStep < 0 || m_currentStep >= (int)m_results.size())
+        return;
     auto& r = m_results[m_currentStep];
     r.raw.emplace_back(data, data + len);
     for (std::size_t i = 0; i < len; ++i) {
         auto& b = r.bytes[i];
-        if (data[i] < b.min) b.min = data[i];
-        if (data[i] > b.max) b.max = data[i];
+        if (data[i] < b.min)
+            b.min = data[i];
+        if (data[i] > b.max)
+            b.max = data[i];
         if (data[i] != 0 && (b.min_nonzero < 0 || data[i] < b.min_nonzero))
             b.min_nonzero = data[i];
         ++b.transitions;
@@ -876,9 +926,11 @@ void KitProbeDialog::resetByteGrid(int reportLen) {
 
 void KitProbeDialog::updateByteGridCell(int idx, uint8_t value, bool changed) {
     auto* g = ui->byteGrid;
-    if (idx >= g->columnCount()) return;
+    if (idx >= g->columnCount())
+        return;
     auto* cell = g->item(1, idx);
-    if (!cell) return;
+    if (!cell)
+        return;
     cell->setText(hexByte(value));
     if (changed) {
         cell->setBackground(QBrush(QColor(value ? "#5a7a3a" : "#3a3a5a")));
@@ -894,8 +946,7 @@ void KitProbeDialog::onTickTimer() {
 
     using clock = std::chrono::steady_clock;
     const int elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            clock::now() - m_stepStart).count();
+        std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - m_stepStart).count();
     if (m_state == State::Idle) {
         ui->stepProgress->setValue(std::min(elapsed, kBaselineDurationMs));
         if (elapsed >= kBaselineDurationMs) {
@@ -907,16 +958,14 @@ void KitProbeDialog::onTickTimer() {
             } else {
                 // Santroller-style firmware only sends on state change — if baseline is
                 // empty the sentinels (min=0xFF, max=0) will misfire the step detector.
-                const bool received_anything = std::any_of(
-                    m_baselineMin.begin(),
-                    m_baselineMin.begin() + m_reportLen,
-                    [](int v) { return v != 0xFF; });
+                const bool received_anything =
+                    std::any_of(m_baselineMin.begin(), m_baselineMin.begin() + m_reportLen,
+                                [](int v) { return v != 0xFF; });
                 if (!received_anything) {
-                    ui->stepPrompt->setText(
-                        tr("⚠ No data received during baseline. Hold any "
-                           "button now to wake the kit, then release. The "
-                           "wizard will continue once it sees its first "
-                           "report."));
+                    ui->stepPrompt->setText(tr("⚠ No data received during baseline. Hold any "
+                                               "button now to wake the kit, then release. The "
+                                               "wizard will continue once it sees its first "
+                                               "report."));
                 } else {
                     ui->stepPrompt->setText(
                         tr("Baseline captured. Click Next to begin the walk-through."));
@@ -925,8 +974,7 @@ void KitProbeDialog::onTickTimer() {
             }
         }
     } else if (m_state == State::Step && m_sampling) {
-        const int dur_ms = (m_currentStep >= 0 &&
-                            m_results[m_currentStep].def.duration_ms > 0)
+        const int dur_ms = (m_currentStep >= 0 && m_results[m_currentStep].def.duration_ms > 0)
                                ? m_results[m_currentStep].def.duration_ms
                                : kStepDurationMs;
         ui->stepProgress->setValue(std::min(elapsed, dur_ms));
@@ -947,9 +995,8 @@ QString KitProbeDialog::deriveKitToml() const {
         MidiKitProbeData md;
         md.device_name = m_deviceName.toStdString();
         md.port_id = m_midiPortId.toStdString();
-        md.device_type = (m_deviceType == DeviceType::ProDrum)
-                             ? MidiDeviceType::ProDrum
-                             : MidiDeviceType::Drum;
+        md.device_type =
+            (m_deviceType == DeviceType::ProDrum) ? MidiDeviceType::ProDrum : MidiDeviceType::Drum;
         md.results.reserve(m_midi_results.size());
         for (std::size_t i = 0; i < m_midi_results.size(); ++i) {
             const auto& src = m_midi_results[i];
@@ -970,8 +1017,8 @@ QString KitProbeDialog::deriveKitToml() const {
         return QString::fromStdString(DeriveMidiKitToml(md));
     }
     using Input::HidInstrument::KitProbeData;
-    using Input::HidInstrument::StepResultData;
     using Input::HidInstrument::ProbeDeviceType;
+    using Input::HidInstrument::StepResultData;
 
     KitProbeData data;
     data.vid = m_vid;
@@ -980,10 +1027,18 @@ QString KitProbeDialog::deriveKitToml() const {
     data.is_xinput = m_isXInput;
     data.report_length = m_reportLen;
     switch (m_deviceType) {
-    case DeviceType::Drum:       data.device_type = ProbeDeviceType::Drum;       break;
-    case DeviceType::ProDrum:    data.device_type = ProbeDeviceType::ProDrum;    break;
-    case DeviceType::Guitar:     data.device_type = ProbeDeviceType::Guitar;     break;
-    case DeviceType::GuitarSolo: data.device_type = ProbeDeviceType::GuitarSolo; break;
+    case DeviceType::Drum:
+        data.device_type = ProbeDeviceType::Drum;
+        break;
+    case DeviceType::ProDrum:
+        data.device_type = ProbeDeviceType::ProDrum;
+        break;
+    case DeviceType::Guitar:
+        data.device_type = ProbeDeviceType::Guitar;
+        break;
+    case DeviceType::GuitarSolo:
+        data.device_type = ProbeDeviceType::GuitarSolo;
+        break;
     }
     data.results.reserve(m_results.size() + 1);
 
@@ -992,12 +1047,14 @@ QString KitProbeDialog::deriveKitToml() const {
     idle_res.kind = "baseline";
     idle_res.captured = true;
     idle_res.raw = m_idleRaw;
-    for (int i = 0; i < 64; ++i) idle_res.bytes[i].min = 0xFF;
+    for (int i = 0; i < 64; ++i)
+        idle_res.bytes[i].min = 0xFF;
     for (const auto& raw_bytes : m_idleRaw) {
         for (std::size_t i = 0; i < raw_bytes.size() && i < 64; ++i) {
             idle_res.bytes[i].max = std::max<int>(idle_res.bytes[i].max, raw_bytes[i]);
             idle_res.bytes[i].min = std::min<int>(idle_res.bytes[i].min, raw_bytes[i]);
-            if (raw_bytes[i] != 0 && (idle_res.bytes[i].min_nonzero < 0 || raw_bytes[i] < idle_res.bytes[i].min_nonzero))
+            if (raw_bytes[i] != 0 &&
+                (idle_res.bytes[i].min_nonzero < 0 || raw_bytes[i] < idle_res.bytes[i].min_nonzero))
                 idle_res.bytes[i].min_nonzero = raw_bytes[i];
             idle_res.bytes[i].samples++;
         }
@@ -1024,7 +1081,6 @@ QString KitProbeDialog::deriveKitToml() const {
     return QString::fromStdString(Input::HidInstrument::DeriveKitToml(data));
 }
 
-
 void KitProbeDialog::onSaveResults() {
     // Always write into <user>/kits/ so the C++ runtime loader picks the
     // new kit up on next launch. No file picker — the filename is derived
@@ -1036,9 +1092,9 @@ void KitProbeDialog::onSaveResults() {
         dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "kits";
         fs::create_directories(dir);
     } catch (const std::exception& e) {
-        QMessageBox::warning(this, tr("Save failed"),
-                             tr("Could not access user kits directory: %1")
-                                 .arg(QString::fromUtf8(e.what())));
+        QMessageBox::warning(
+            this, tr("Save failed"),
+            tr("Could not access user kits directory: %1").arg(QString::fromUtf8(e.what())));
         return;
     }
 
@@ -1046,23 +1102,29 @@ void KitProbeDialog::onSaveResults() {
         // Filename: midi_<slug>_<hash>  (no VID:PID for MIDI; slug from device name)
         QString slug = m_deviceName.toLower();
         for (QChar& c : slug)
-            if (!c.isLetterOrNumber()) c = '_';
+            if (!c.isLetterOrNumber())
+                c = '_';
         while (slug.contains(QStringLiteral("__")))
             slug.replace(QStringLiteral("__"), QStringLiteral("_"));
-        if (slug.startsWith('_')) slug.remove(0, 1);
-        if (slug.endsWith('_')) slug.chop(1);
-        if (slug.size() > 32) slug.truncate(32);
-        if (slug.isEmpty()) slug = QStringLiteral("midi");
-        const QByteArray name_hash = QCryptographicHash::hash(
-            (m_deviceName + m_midiPortId).toUtf8(),
-            QCryptographicHash::Sha1).toHex().left(8);
-        const QString base = QStringLiteral("midi_%1_%2")
-                                  .arg(slug)
-                                  .arg(QString::fromLatin1(name_hash));
-        const QString tomlPath = QString::fromStdString(
-            (dir / (base.toStdString() + ".toml")).string());
-        const QString rawPath = QString::fromStdString(
-            (dir / (base.toStdString() + ".midi.jsonl")).string());
+        if (slug.startsWith('_'))
+            slug.remove(0, 1);
+        if (slug.endsWith('_'))
+            slug.chop(1);
+        if (slug.size() > 32)
+            slug.truncate(32);
+        if (slug.isEmpty())
+            slug = QStringLiteral("midi");
+        const QByteArray name_hash =
+            QCryptographicHash::hash((m_deviceName + m_midiPortId).toUtf8(),
+                                     QCryptographicHash::Sha1)
+                .toHex()
+                .left(8);
+        const QString base =
+            QStringLiteral("midi_%1_%2").arg(slug).arg(QString::fromLatin1(name_hash));
+        const QString tomlPath =
+            QString::fromStdString((dir / (base.toStdString() + ".toml")).string());
+        const QString rawPath =
+            QString::fromStdString((dir / (base.toStdString() + ".midi.jsonl")).string());
 
         QFile f(tomlPath);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -1075,39 +1137,37 @@ void KitProbeDialog::onSaveResults() {
 
         QFile rf(rawPath);
         if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            const QString capture_uuid =
-                QUuid::createUuid().toString(QUuid::WithoutBraces);
+            const QString capture_uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
             QByteArray host_seed("shadps4-kit-probe-v6:");
             host_seed += QSysInfo::machineUniqueId();
             const QString host_hash = QString::fromLatin1(
-                QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256)
-                    .toHex().left(16));
-            const char* dtStr =
-                (m_deviceType == DeviceType::ProDrum) ? "pro_drum" : "drum";
-            QString meta = QStringLiteral(
-                "{\"type\":\"meta\",\"schema\":\"shadps4-midi-instrument/v1\","
-                "\"version\":1,"
-                "\"device_name\":\"%1\",\"port_id\":\"%2\","
-                "\"source\":\"midi\",\"device_type\":\"%3\","
-                "\"timestamp\":\"%4\","
-                "\"capture_uuid\":\"%5\",\"host_hash\":\"%6\"}\n")
-                .arg(QString(m_deviceName).replace('"', '\''))
-                .arg(QString(m_midiPortId).replace('"', '\''))
-                .arg(QString::fromLatin1(dtStr))
-                .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
-                .arg(capture_uuid)
-                .arg(host_hash);
+                QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256).toHex().left(16));
+            const char* dtStr = (m_deviceType == DeviceType::ProDrum) ? "pro_drum" : "drum";
+            QString meta =
+                QStringLiteral("{\"type\":\"meta\",\"schema\":\"shadps4-midi-instrument/v1\","
+                               "\"version\":1,"
+                               "\"device_name\":\"%1\",\"port_id\":\"%2\","
+                               "\"source\":\"midi\",\"device_type\":\"%3\","
+                               "\"timestamp\":\"%4\","
+                               "\"capture_uuid\":\"%5\",\"host_hash\":\"%6\"}\n")
+                    .arg(QString(m_deviceName).replace('"', '\''))
+                    .arg(QString(m_midiPortId).replace('"', '\''))
+                    .arg(QString::fromLatin1(dtStr))
+                    .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
+                    .arg(capture_uuid)
+                    .arg(host_hash);
             rf.write(meta.toUtf8());
             rf.write("{\"step\":\"_idle_baseline\",\"events\":[]}\n");
             for (std::size_t i = 0; i < m_midi_results.size(); ++i) {
                 const auto& buf = m_midi_results[i];
-                if (!buf.captured) continue;
-                QString line = QStringLiteral("{\"step\":\"%1\",\"events\":[")
-                                   .arg(m_results[i].def.key);
+                if (!buf.captured)
+                    continue;
+                QString line =
+                    QStringLiteral("{\"step\":\"%1\",\"events\":[").arg(m_results[i].def.key);
                 for (std::size_t j = 0; j < buf.events.size(); ++j) {
-                    if (j) line += ',';
-                    line += QStringLiteral(
-                                "{\"on\":%1,\"note\":%2,\"vel\":%3,\"t_ms\":%4}")
+                    if (j)
+                        line += ',';
+                    line += QStringLiteral("{\"on\":%1,\"note\":%2,\"vel\":%3,\"t_ms\":%4}")
                                 .arg(buf.events[j].on ? "true" : "false")
                                 .arg(buf.events[j].note)
                                 .arg(buf.events[j].velocity)
@@ -1124,26 +1184,30 @@ void KitProbeDialog::onSaveResults() {
         // against the just-written TOML on its next tick. Without this
         // the user has to close + reopen the game to pick up changes.
         Input::HidInstrument::LoadKitFile(tomlPath.toStdString());
-        QMessageBox::information(this, tr("Saved"),
+        QMessageBox::information(
+            this, tr("Saved"),
             tr("Saved into your shadPS4 user folder:\n\n"
                "  %1   (runtime kit definition)\n"
                "  %2   (raw MIDI event capture, for re-deriving later)\n\n"
                "Re-binding live — your kit's new note map is active immediately.")
-                .arg(tomlPath).arg(rawPath));
+                .arg(tomlPath)
+                .arg(rawPath));
         accept();
         return;
     }
 
     // Hash the device name into the filename — two Santroller devices with the same
     // VID:PID but different firmware types would otherwise overwrite each other.
-    const QByteArray name_hash = QCryptographicHash::hash(
-        m_deviceName.toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    const QByteArray name_hash =
+        QCryptographicHash::hash(m_deviceName.toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
     const QString base = QStringLiteral("kit_%1_%2_%3")
-        .arg(m_vid, 4, 16, QChar('0'))
-        .arg(m_pid, 4, 16, QChar('0'))
-        .arg(QString::fromLatin1(name_hash));
-    const QString tomlPath = QString::fromStdString((dir / (base.toStdString() + ".toml")).string());
-    const QString rawPath  = QString::fromStdString((dir / (base.toStdString() + ".raw.jsonl")).string());
+                             .arg(m_vid, 4, 16, QChar('0'))
+                             .arg(m_pid, 4, 16, QChar('0'))
+                             .arg(QString::fromLatin1(name_hash));
+    const QString tomlPath =
+        QString::fromStdString((dir / (base.toStdString() + ".toml")).string());
+    const QString rawPath =
+        QString::fromStdString((dir / (base.toStdString() + ".raw.jsonl")).string());
 
     QFile f(tomlPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -1177,10 +1241,18 @@ void KitProbeDialog::onSaveResults() {
     if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
         const char* deviceTypeStr = "guitar";
         switch (m_deviceType) {
-        case DeviceType::Drum:       deviceTypeStr = "drum"; break;
-        case DeviceType::ProDrum:    deviceTypeStr = "drum_pro"; break;
-        case DeviceType::Guitar:     deviceTypeStr = "guitar"; break;
-        case DeviceType::GuitarSolo: deviceTypeStr = "guitar_solo"; break;
+        case DeviceType::Drum:
+            deviceTypeStr = "drum";
+            break;
+        case DeviceType::ProDrum:
+            deviceTypeStr = "drum_pro";
+            break;
+        case DeviceType::Guitar:
+            deviceTypeStr = "guitar";
+            break;
+        case DeviceType::GuitarSolo:
+            deviceTypeStr = "guitar_solo";
+            break;
         }
         // "source" distinguishes raw HID dumps from SDL_GameController/XInput
         // taps. The test harness uses it to decide whether report[0] is a HID
@@ -1188,8 +1260,7 @@ void KitProbeDialog::onSaveResults() {
         const char* sourceStr = m_isXInput ? "xinput" : "hid";
         // capture_uuid: random per-capture id so two probes of the same
         // device on the same PC can still be told apart in shared logs.
-        const QString capture_uuid =
-            QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QString capture_uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
         // host_hash: stable per-machine hash so multiple captures from the
         // same PC group together, but reversible-to-real-machine info
         // (hostname, MAC) is not exposed. SHA-256 of machineUniqueId with
@@ -1198,41 +1269,41 @@ void KitProbeDialog::onSaveResults() {
         QByteArray host_seed("shadps4-kit-probe-v6:");
         host_seed += QSysInfo::machineUniqueId();
         const QString host_hash = QString::fromLatin1(
-            QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256)
-                .toHex().left(16));
-        QString meta = QStringLiteral(
-            "{\"type\":\"meta\",\"version\":6,"
-            "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
-            "\"device_name\":\"%3\",\"device_type\":\"%4\","
-            "\"source\":\"%5\","
-            "\"report_length\":%6,\"timestamp\":\"%7\","
-            "\"capture_uuid\":\"%8\",\"host_hash\":\"%9\"}\n")
-            .arg(m_vid, 4, 16, QChar('0'))
-            .arg(m_pid, 4, 16, QChar('0'))
-            .arg(QString(m_deviceName).replace('"', '\''))
-            .arg(QString::fromLatin1(deviceTypeStr))
-            .arg(QString::fromLatin1(sourceStr))
-            .arg(m_reportLen)
-            .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
-            .arg(capture_uuid)
-            .arg(host_hash);
+            QCryptographicHash::hash(host_seed, QCryptographicHash::Sha256).toHex().left(16));
+        QString meta = QStringLiteral("{\"type\":\"meta\",\"version\":6,"
+                                      "\"vendor_id\":\"0x%1\",\"product_id\":\"0x%2\","
+                                      "\"device_name\":\"%3\",\"device_type\":\"%4\","
+                                      "\"source\":\"%5\","
+                                      "\"report_length\":%6,\"timestamp\":\"%7\","
+                                      "\"capture_uuid\":\"%8\",\"host_hash\":\"%9\"}\n")
+                           .arg(m_vid, 4, 16, QChar('0'))
+                           .arg(m_pid, 4, 16, QChar('0'))
+                           .arg(QString(m_deviceName).replace('"', '\''))
+                           .arg(QString::fromLatin1(deviceTypeStr))
+                           .arg(QString::fromLatin1(sourceStr))
+                           .arg(m_reportLen)
+                           .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate))
+                           .arg(capture_uuid)
+                           .arg(host_hash);
         rf.write(meta.toUtf8());
         for (const auto& report : m_idleRaw) {
             QString line = QStringLiteral("{\"step\":\"_idle_baseline\",\"bytes\":[");
             for (std::size_t i = 0; i < report.size(); ++i) {
-                if (i) line += ',';
+                if (i)
+                    line += ',';
                 line += QString::number(report[i]);
             }
             line += "]}\n";
             rf.write(line.toUtf8());
         }
         for (const auto& step : m_results) {
-            if (!step.captured) continue;
+            if (!step.captured)
+                continue;
             for (const auto& report : step.raw) {
-                QString line = QStringLiteral("{\"step\":\"%1\",\"bytes\":[")
-                                   .arg(step.def.key);
+                QString line = QStringLiteral("{\"step\":\"%1\",\"bytes\":[").arg(step.def.key);
                 for (std::size_t i = 0; i < report.size(); ++i) {
-                    if (i) line += ',';
+                    if (i)
+                        line += ',';
                     line += QString::number(report[i]);
                 }
                 line += "]}\n";
@@ -1245,7 +1316,8 @@ void KitProbeDialog::onSaveResults() {
     QString msg = tr("Saved into your shadPS4 user folder:\n\n"
                      "  %1   (runtime kit definition, auto-loaded at next launch)\n"
                      "  %2   (raw HID captures, for re-deriving the mapping later)")
-                      .arg(tomlPath).arg(rawPath);
+                      .arg(tomlPath)
+                      .arg(rawPath);
 
     if (seems_off) {
         msg += tr("\n\nWARNING: It seems something is off with the generated mapping! "

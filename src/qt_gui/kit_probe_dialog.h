@@ -32,10 +32,10 @@ public:
     ~KitProbeDialog() override;
 
     struct StepDef {
-        QString key;       // json key (e.g. "red_pad")
-        QString prompt;    // user-facing prompt
-        QString kind;      // "velocity", "digital", or "motion"
-        bool optional;     // user can skip
+        QString key;    // json key (e.g. "red_pad")
+        QString prompt; // user-facing prompt
+        QString kind;   // "velocity", "digital", or "motion"
+        bool optional;  // user can skip
         // Per-step sample window length, in ms. Digital button steps
         // (start/select/dpad-left/right) only need a couple of taps so
         // they default to 3 s; fret/velocity/motion need the full 5 s
@@ -70,22 +70,22 @@ private:
     };
     struct StepResult {
         StepDef def;
-        std::array<ByteObs, 64> bytes{};         // per-byte stats
-        std::vector<std::vector<uint8_t>> raw;   // every observed report
+        std::array<ByteObs, 64> bytes{};       // per-byte stats
+        std::vector<std::vector<uint8_t>> raw; // every observed report
         bool captured = false;
     };
 
     enum class State {
         SelectDevice,
-        Idle,        // baseline / "don't touch anything"
-        Step,        // sampling current step
+        Idle, // baseline / "don't touch anything"
+        Step, // sampling current step
         Review,
     };
 
     void setState(State s);
     void enumerateHidrawDevices();
-    bool openDevice(const QString& path, uint16_t vid, uint16_t pid,
-                    const QString& name, bool is_xinput);
+    bool openDevice(const QString& path, uint16_t vid, uint16_t pid, const QString& name,
+                    bool is_xinput);
     void closeDevice();
     void resetByteGrid(int reportLen);
     void updateByteGridCell(int idx, uint8_t value, bool changed);
@@ -132,9 +132,9 @@ private:
     std::vector<std::vector<uint8_t>> m_idleRaw;
     std::array<uint8_t, 64> m_lastReport{};
     int m_lastReportLen = 0;
-    std::array<int, 64> m_baselineMax{};   // per-byte max observed at idle
-    std::array<int, 64> m_baselineMin{};   // per-byte min observed at idle
-    std::set<int> m_motionBytes;           // bytes flagged as motion sensors
+    std::array<int, 64> m_baselineMax{}; // per-byte max observed at idle
+    std::array<int, 64> m_baselineMin{}; // per-byte min observed at idle
+    std::set<int> m_motionBytes;         // bytes flagged as motion sensors
     // Parallel to m_results: MIDI captures store raw events (note,
     // velocity, on/off, ms since step start) instead of per-byte
     // statistics. Encoded as 4-tuples to dodge a heavier include here.

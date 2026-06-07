@@ -67,7 +67,8 @@ void CloseSlot(SlotState& s) {
 } // namespace
 
 bool LoadKitFile(const std::string& toml_path) {
-    if (!LoadKitFromToml(toml_path)) return false;
+    if (!LoadKitFromToml(toml_path))
+        return false;
     u16 new_vid = 0, new_pid = 0;
     {
         std::lock_guard<std::mutex> lk(g_kits_mu);
@@ -79,7 +80,8 @@ bool LoadKitFile(const std::string& toml_path) {
             }
         }
     }
-    if (new_vid == 0 && new_pid == 0) return true;
+    if (new_vid == 0 && new_pid == 0)
+        return true;
     // Close any open slot whose vid:pid matches the just-loaded kit so
     // PollLoop re-binds against the fresh KitDef on its next tick. Both
     // s.kit pointer and the SDL / MIDI handle get dropped — the kit
@@ -117,20 +119,22 @@ namespace {
 //   15-16 Right stick Y as int16 LE     ← orange vel (low), kick vel (high)
 void FillXInputReport(SDL_Gamepad* gp, u8* out) {
     std::memset(out, 0, kXInputReportLen);
-    if (!gp) return;
-    auto btn = [&](SDL_GamepadButton b) {
-        return SDL_GetGamepadButton(gp, b) ? 1 : 0;
-    };
+    if (!gp)
+        return;
+    auto btn = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(gp, b) ? 1 : 0; };
     auto axis_u8 = [&](SDL_GamepadAxis a) -> u8 {
         const int v = SDL_GetGamepadAxis(gp, a);
         int u = (v + 32768) >> 8;
-        if (u < 0) u = 0;
-        if (u > 255) u = 255;
+        if (u < 0)
+            u = 0;
+        if (u > 255)
+            u = 255;
         return static_cast<u8>(u);
     };
     auto trig_u8 = [&](SDL_GamepadAxis a) -> u8 {
         int v = SDL_GetGamepadAxis(gp, a);
-        if (v < 0) v = 0;
+        if (v < 0)
+            v = 0;
         return static_cast<u8>(v >> 7);
     };
     auto axis_i16 = [&](SDL_GamepadAxis a, u8* dst) {
@@ -138,29 +142,23 @@ void FillXInputReport(SDL_Gamepad* gp, u8* out) {
         dst[0] = static_cast<u8>(v & 0xFF);
         dst[1] = static_cast<u8>((v >> 8) & 0xFF);
     };
-    out[0] = (btn(SDL_GAMEPAD_BUTTON_SOUTH)          << 0) |
-             (btn(SDL_GAMEPAD_BUTTON_EAST)           << 1) |
-             (btn(SDL_GAMEPAD_BUTTON_WEST)           << 2) |
-             (btn(SDL_GAMEPAD_BUTTON_NORTH)          << 3) |
-             (btn(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)  << 4) |
+    out[0] = (btn(SDL_GAMEPAD_BUTTON_SOUTH) << 0) | (btn(SDL_GAMEPAD_BUTTON_EAST) << 1) |
+             (btn(SDL_GAMEPAD_BUTTON_WEST) << 2) | (btn(SDL_GAMEPAD_BUTTON_NORTH) << 3) |
+             (btn(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) << 4) |
              (btn(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) << 5);
-    out[1] = (btn(SDL_GAMEPAD_BUTTON_START)          << 0) |
-             (btn(SDL_GAMEPAD_BUTTON_BACK)           << 1) |
-             (btn(SDL_GAMEPAD_BUTTON_GUIDE)          << 2) |
-             (btn(SDL_GAMEPAD_BUTTON_LEFT_STICK)     << 3) |
-             (btn(SDL_GAMEPAD_BUTTON_RIGHT_STICK)    << 4);
-    out[2] = (btn(SDL_GAMEPAD_BUTTON_DPAD_UP)        << 0) |
-             (btn(SDL_GAMEPAD_BUTTON_DPAD_DOWN)      << 1) |
-             (btn(SDL_GAMEPAD_BUTTON_DPAD_LEFT)      << 2) |
-             (btn(SDL_GAMEPAD_BUTTON_DPAD_RIGHT)     << 3);
+    out[1] = (btn(SDL_GAMEPAD_BUTTON_START) << 0) | (btn(SDL_GAMEPAD_BUTTON_BACK) << 1) |
+             (btn(SDL_GAMEPAD_BUTTON_GUIDE) << 2) | (btn(SDL_GAMEPAD_BUTTON_LEFT_STICK) << 3) |
+             (btn(SDL_GAMEPAD_BUTTON_RIGHT_STICK) << 4);
+    out[2] = (btn(SDL_GAMEPAD_BUTTON_DPAD_UP) << 0) | (btn(SDL_GAMEPAD_BUTTON_DPAD_DOWN) << 1) |
+             (btn(SDL_GAMEPAD_BUTTON_DPAD_LEFT) << 2) | (btn(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) << 3);
     out[3] = axis_u8(SDL_GAMEPAD_AXIS_LEFTX);
     out[4] = axis_u8(SDL_GAMEPAD_AXIS_LEFTY);
     out[5] = axis_u8(SDL_GAMEPAD_AXIS_RIGHTX);
     out[6] = axis_u8(SDL_GAMEPAD_AXIS_RIGHTY);
     out[7] = trig_u8(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
     out[8] = trig_u8(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
-    axis_i16(SDL_GAMEPAD_AXIS_LEFTX,  out + 9);
-    axis_i16(SDL_GAMEPAD_AXIS_LEFTY,  out + 11);
+    axis_i16(SDL_GAMEPAD_AXIS_LEFTX, out + 9);
+    axis_i16(SDL_GAMEPAD_AXIS_LEFTY, out + 11);
     axis_i16(SDL_GAMEPAD_AXIS_RIGHTX, out + 13);
     axis_i16(SDL_GAMEPAD_AXIS_RIGHTY, out + 15);
 }
@@ -173,7 +171,8 @@ bool GamepadMatchesKit(const KitDef& kd, SDL_JoystickID gpid) {
     }
     if (!kd.match_name.empty()) {
         const char* n = SDL_GetGamepadNameForID(gpid);
-        if (!n) return false;
+        if (!n)
+            return false;
         std::string name(n);
         std::transform(name.begin(), name.end(), name.begin(),
                        [](unsigned char c) { return std::tolower(c); });
@@ -197,10 +196,12 @@ bool SlotAcceptsKit(int slot, const KitDef& kd) {
     for (const auto& dev : devices) {
         if (dev.kind == Config::PlayerDeviceKind::Kit) {
             any_binding = true;
-            if (dev.vid == kd.vid && dev.pid == kd.pid) return true;
+            if (dev.vid == kd.vid && dev.pid == kd.pid)
+                return true;
         } else if (dev.kind == Config::PlayerDeviceKind::Midi) {
             any_binding = true;
-            if (kd.source == "midi" && dev.guid == kd.midi_port_id) return true;
+            if (kd.source == "midi" && dev.guid == kd.midi_port_id)
+                return true;
         }
     }
     return !any_binding;
@@ -215,8 +216,7 @@ void PollLoop() {
 
             if (!enabled) {
                 if (s.dev || s.gamepad || s.midi) {
-                    LOG_INFO(Input, "HID instrument slot {}: flag disabled, closing device",
-                             slot);
+                    LOG_INFO(Input, "HID instrument slot {}: flag disabled, closing device", slot);
                     CloseSlot(s);
                 }
                 continue;
@@ -234,22 +234,24 @@ void PollLoop() {
                     // Other kits are skipped here so they can land in
                     // whichever (other) slot they were bound to in a
                     // later iteration.
-                    if (!SlotAcceptsKit(slot, kd)) continue;
+                    if (!SlotAcceptsKit(slot, kd))
+                        continue;
                     if (kd.source == "midi") {
                         // Resolve port_id → current handle. Subscribe via
                         // Input::MidiInput, install the kit's note→byte
                         // map, and the per-tick snapshot fills last_report.
-                        if (kd.midi_port_id.empty()) continue;
+                        if (kd.midi_port_id.empty())
+                            continue;
                         void* port = Input::MidiInput::OpenInputPort(kd.midi_port_id);
-                        if (!port) continue;
+                        if (!port)
+                            continue;
                         Input::MidiInput::ConfigurePadMap(port, kd.midi_pad_map);
                         LOG_INFO(Input,
                                  "HID instrument slot {}: MIDI ConfigurePadMap "
                                  "applied {} note->byte entries (drum_red_byte={} "
                                  "drum_blue_byte={} drum_yellow_byte={} "
                                  "drum_green_byte={})",
-                                 slot, kd.midi_pad_map.size(),
-                                 kd.drum_red_byte, kd.drum_blue_byte,
+                                 slot, kd.midi_pad_map.size(), kd.drum_red_byte, kd.drum_blue_byte,
                                  kd.drum_yellow_byte, kd.drum_green_byte);
                         std::lock_guard<std::mutex> lk(s.mu);
                         s.midi = port;
@@ -258,18 +260,20 @@ void PollLoop() {
                         s.device_path = "midi:" + kd.midi_port_id;
                         s.kit = FindKit(kd.vid, kd.pid);
                         s.open_failed_logged = false;
-                        LOG_INFO(Input,
-                                 "HID instrument slot {}: opened MIDI port {} ({})",
-                                 slot, kd.midi_port_id, kd.name);
+                        LOG_INFO(Input, "HID instrument slot {}: opened MIDI port {} ({})", slot,
+                                 kd.midi_port_id, kd.name);
                     } else if (kd.source == "xinput") {
                         int gpcount = 0;
                         SDL_JoystickID* gps = SDL_GetGamepads(&gpcount);
                         for (int gi = 0; gi < gpcount && !s.gamepad; ++gi) {
-                            if (!GamepadMatchesKit(kd, gps[gi])) continue;
+                            if (!GamepadMatchesKit(kd, gps[gi]))
+                                continue;
                             const std::string path = "xinput:" + std::to_string(gps[gi]);
-                            if (PathInUseByOtherSlot(path, i)) continue;
+                            if (PathInUseByOtherSlot(path, i))
+                                continue;
                             SDL_Gamepad* g = SDL_OpenGamepad(gps[gi]);
-                            if (!g) continue;
+                            if (!g)
+                                continue;
                             std::lock_guard<std::mutex> lk(s.mu);
                             s.gamepad = g;
                             s.vid = SDL_GetGamepadVendor(g);
@@ -287,10 +291,13 @@ void PollLoop() {
                         SDL_hid_device_info* head = SDL_hid_enumerate(kd.vid, kd.pid);
                         for (auto* dn = head; dn && !s.dev; dn = dn->next) {
                             const std::string path = dn->path ? dn->path : "";
-                            if (path.empty()) continue;
-                            if (PathInUseByOtherSlot(path, i)) continue;
+                            if (path.empty())
+                                continue;
+                            if (PathInUseByOtherSlot(path, i))
+                                continue;
                             SDL_hid_device* d = SDL_hid_open_path(path.c_str());
-                            if (!d) continue;
+                            if (!d)
+                                continue;
                             SDL_hid_set_nonblocking(d, 1);
                             std::lock_guard<std::mutex> lk(s.mu);
                             s.dev = d;
@@ -306,7 +313,8 @@ void PollLoop() {
                         }
                         SDL_hid_free_enumeration(head);
                     }
-                    if (s.dev || s.gamepad || s.midi) break;
+                    if (s.dev || s.gamepad || s.midi)
+                        break;
                 }
                 if (!s.dev && !s.gamepad && !s.midi && !s.open_failed_logged) {
                     LOG_WARNING(Input,
@@ -338,9 +346,8 @@ void PollLoop() {
                 SDL_UpdateGamepads();
                 u8 buf[kXInputReportLen];
                 FillXInputReport(static_cast<SDL_Gamepad*>(s.gamepad), buf);
-                const bool changed =
-                    s.last_report_len != kXInputReportLen ||
-                    std::memcmp(s.last_report, buf, kXInputReportLen) != 0;
+                const bool changed = s.last_report_len != kXInputReportLen ||
+                                     std::memcmp(s.last_report, buf, kXInputReportLen) != 0;
                 std::memcpy(s.last_report, buf, kXInputReportLen);
                 s.last_report_len = kXInputReportLen;
                 s.has_data = true;
@@ -350,12 +357,11 @@ void PollLoop() {
                 }
             } else if (s.dev) {
                 u8 buf[kMaxRawReport];
-                int n = SDL_hid_read_timeout(
-                    static_cast<SDL_hid_device*>(s.dev), buf, kMaxRawReport, 0);
+                int n = SDL_hid_read_timeout(static_cast<SDL_hid_device*>(s.dev), buf,
+                                             kMaxRawReport, 0);
                 if (n > 0) {
-                    const bool changed =
-                        s.last_report_len != static_cast<std::size_t>(n) ||
-                        std::memcmp(s.last_report, buf, n) != 0;
+                    const bool changed = s.last_report_len != static_cast<std::size_t>(n) ||
+                                         std::memcmp(s.last_report, buf, n) != 0;
                     std::memcpy(s.last_report, buf, n);
                     s.last_report_len = static_cast<std::size_t>(n);
                     s.has_data = true;
@@ -364,8 +370,7 @@ void PollLoop() {
                         Input::GameControllers::EnsureLoggedIn(slot - 1);
                     }
                 } else if (n < 0) {
-                    LOG_WARNING(Input,
-                                "HID instrument slot {}: read error, closing & will retry",
+                    LOG_WARNING(Input, "HID instrument slot {}: read error, closing & will retry",
                                 slot);
                     SDL_hid_close(static_cast<SDL_hid_device*>(s.dev));
                     s.dev = nullptr;
@@ -382,7 +387,7 @@ void PollLoop() {
     }
 }
 
-}  // namespace
+} // namespace
 
 void RescanKits() {
     {
@@ -436,7 +441,8 @@ std::vector<XInputDeviceInfo> EnumerateXInputDevices() {
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
     int n = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&n);
-    if (!ids) return out;
+    if (!ids)
+        return out;
     for (int i = 0; i < n; ++i) {
         XInputDeviceInfo info;
         info.instance_id = ids[i];
@@ -456,7 +462,8 @@ void* OpenXInputGamepad(int instance_id) {
 }
 
 void CloseXInputGamepad(void* gamepad) {
-    if (gamepad) SDL_CloseGamepad(static_cast<SDL_Gamepad*>(gamepad));
+    if (gamepad)
+        SDL_CloseGamepad(static_cast<SDL_Gamepad*>(gamepad));
 }
 
 void PollXInputGamepad(void* gamepad, u8* out) {
@@ -464,4 +471,4 @@ void PollXInputGamepad(void* gamepad, u8* out) {
     FillXInputReport(static_cast<SDL_Gamepad*>(gamepad), out);
 }
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

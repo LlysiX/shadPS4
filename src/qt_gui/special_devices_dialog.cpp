@@ -70,11 +70,10 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
         statusLbl(slot)->setVisible(false);
     }
     // The grid container is unnamed in the .ui, so walk by child name.
-    for (const QString name : {QStringLiteral("h0"), QStringLiteral("h1"), QStringLiteral("h2"),
-                                QStringLiteral("h3"), QStringLiteral("h4"),
-                                QStringLiteral("h5"), QStringLiteral("p1Lbl"),
-                                QStringLiteral("p2Lbl"), QStringLiteral("p3Lbl"),
-                                QStringLiteral("p4Lbl")}) {
+    for (const QString name :
+         {QStringLiteral("h0"), QStringLiteral("h1"), QStringLiteral("h2"), QStringLiteral("h3"),
+          QStringLiteral("h4"), QStringLiteral("h5"), QStringLiteral("p1Lbl"),
+          QStringLiteral("p2Lbl"), QStringLiteral("p3Lbl"), QStringLiteral("p4Lbl")}) {
         if (auto* w = findChild<QWidget*>(name))
             w->setVisible(false);
     }
@@ -132,7 +131,8 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
 SpecialDevicesDialog::~SpecialDevicesDialog() = default;
 
 void SpecialDevicesDialog::rebuildKitLibrary() {
-    if (!m_kit_list) return;
+    if (!m_kit_list)
+        return;
     m_kit_list->clear();
 
     // Make sure the on-disk kits actually live in g_kits before we
@@ -143,7 +143,10 @@ void SpecialDevicesDialog::rebuildKitLibrary() {
 
     // Snapshot loaded kits — pair the (vid,pid) key with the kit's
     // human-readable name + device_class so the row can show both.
-    struct LoadedInfo { std::string name; std::string device_class; };
+    struct LoadedInfo {
+        std::string name;
+        std::string device_class;
+    };
     std::map<std::pair<u16, u16>, LoadedInfo> loaded;
     {
         std::lock_guard<std::mutex> lk(Input::HidInstrument::g_kits_mu);
@@ -166,16 +169,15 @@ void SpecialDevicesDialog::rebuildKitLibrary() {
 
             const auto it = loaded.find(key);
             const bool probed = it != loaded.end();
-            if (probed) ++probed_count;
+            if (probed)
+                ++probed_count;
 
-            const QString hex =
-                QStringLiteral("%1:%2")
-                    .arg(d->vendor_id, 4, 16, QChar('0'))
-                    .arg(d->product_id, 4, 16, QChar('0'));
-            const QString hwName =
-                d->product_string
-                    ? QString::fromWCharArray(d->product_string).trimmed()
-                    : QStringLiteral("?");
+            const QString hex = QStringLiteral("%1:%2")
+                                    .arg(d->vendor_id, 4, 16, QChar('0'))
+                                    .arg(d->product_id, 4, 16, QChar('0'));
+            const QString hwName = d->product_string
+                                       ? QString::fromWCharArray(d->product_string).trimmed()
+                                       : QStringLiteral("?");
             QString label;
             if (probed) {
                 label = QStringLiteral("✓ %1   %2  →  %3 (%4)")

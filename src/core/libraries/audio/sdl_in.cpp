@@ -145,7 +145,8 @@ int SDLAudioIn::AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_
                         // fall through
                     }
                 }
-                if (!resolved) nullDevice = true;
+                if (!resolved)
+                    nullDevice = true;
             }
 
             // Request a small capture buffer so the very first chunk
@@ -284,7 +285,7 @@ int SDLAudioIn::AudioInInput(int handle, void* out_buffer) {
     // cross-thread sceAudioInGetSilentState query. Enable + threshold
     // are per-user-slot so harmony singers can tune their own gate;
     // hold is shared because the tail-decay feel rarely varies per mic.
-    const int slot = port_ptr->user_id - 1;  // Config clamps OOB internally
+    const int slot = port_ptr->user_id - 1; // Config clamps OOB internally
     // Update the VU peak unconditionally for any S16 chunk so the
     // Player Assignment dialog's meter reflects mic activity even
     // when the gate is disabled.
@@ -344,7 +345,7 @@ bool SDLAudioIn::IsSilent(int handle) {
     // sceAudioInGetSilentState keeps polling the mic.
     std::scoped_lock lock{m_mutex};
     if (handle < 1 || handle > static_cast<int>(portsIn.size()))
-        return false;  // unknown handle: report active, never block reads
+        return false; // unknown handle: report active, never block reads
     auto& port = portsIn[handle - 1];
     if (!port.isOpen)
         return false;

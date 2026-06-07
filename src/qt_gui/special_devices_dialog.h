@@ -49,9 +49,9 @@ private:
     QCheckBox* useSpecialPadCb(int slot) const;
     QComboBox* specialPadClassCb(int slot) const;
     QCheckBox* legacyCb(int slot) const;
-    QLabel*    statusLbl(int slot) const;
+    QLabel* statusLbl(int slot) const;
     QPushButton* probeBtn(int slot) const;
-    QLabel*    udevWarn(int slot) const;
+    QLabel* udevWarn(int slot) const;
 
     // Kit-library section. Built programmatically into the existing
     // root layout (the .ui file's per-player grid is hidden). One row

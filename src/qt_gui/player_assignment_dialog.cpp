@@ -14,8 +14,8 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMessageBox>
-#include <QPainter>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QPen>
 #include <QPushButton>
 #include <QSlider>
@@ -156,6 +156,7 @@ public:
             update();
         }
     }
+
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -165,14 +166,14 @@ protected:
         p.drawRect(r.adjusted(0, 0, -1, -1));
         const int fillW = static_cast<int>(r.width() * m_level);
         if (fillW > 0) {
-            const QColor fill = m_gate_open ? QColor(0x4c, 0xc2, 0x5a)
-                                            : QColor(0x66, 0x66, 0x66);
+            const QColor fill = m_gate_open ? QColor(0x4c, 0xc2, 0x5a) : QColor(0x66, 0x66, 0x66);
             p.fillRect(QRect(0, 0, fillW, r.height()), fill);
         }
         const int threshX = static_cast<int>(r.width() * m_threshold);
         p.setPen(QPen(QColor(0xff, 0xc0, 0x40), 2));
         p.drawLine(threshX, 1, threshX, r.height() - 2);
     }
+
 private:
     float m_level = 0.0f;
     float m_threshold = 0.0f;
@@ -201,10 +202,14 @@ std::string DeriveKitClassFromSlotDevices(int slot) {
 }
 
 int KitClassStringToInt(const std::string& s) {
-    if (s == "guitar")       return 1;
-    if (s == "drum")         return 2;
-    if (s == "dj_turntable" || s == "turntable") return 3;
-    if (s == "dance_mat"  || s == "dancemat")    return 4;
+    if (s == "guitar")
+        return 1;
+    if (s == "drum")
+        return 2;
+    if (s == "dj_turntable" || s == "turntable")
+        return 3;
+    if (s == "dance_mat" || s == "dancemat")
+        return 4;
     return 0;
 }
 
@@ -247,8 +252,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
         buildSlotTab(slot);
     }
 
-    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-                                    Qt::Horizontal, this);
+    auto* bb =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, this);
     root->addWidget(bb);
     connect(bb, &QDialogButtonBox::accepted, this, &PlayerAssignmentDialog::onAccept);
     connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -264,7 +269,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
         }
         SDL_free(ids);
     }
-    for (int slot = 1; slot <= 4; ++slot) refreshPolledMidi(slot);
+    for (int slot = 1; slot <= 4; ++slot)
+        refreshPolledMidi(slot);
     installEventFilter(this);
 
     auto* timer = new QTimer(this);
@@ -282,12 +288,17 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
             SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
         };
         for (auto& [id, gp] : m_polled_pads) {
-            if (!gp) continue;
+            if (!gp)
+                continue;
             bool any = false;
             for (auto b : kButtons) {
-                if (SDL_GetGamepadButton(gp, b)) { any = true; break; }
+                if (SDL_GetGamepadButton(gp, b)) {
+                    any = true;
+                    break;
+                }
             }
-            if (!any) continue;
+            if (!any)
+                continue;
             // FindBoundSlotForGamepad is the runtime's placement source
             // of truth — using it here keeps the dialog's glow agreeing
             // with where input will land in-game. SDL_GetGamepadPlayerIndex
@@ -306,7 +317,8 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
             }
         }
         for (int slot = 0; slot < 4; ++slot) {
-            if (!m_polled_midi[slot]) continue;
+            if (!m_polled_midi[slot])
+                continue;
             auto evs = Input::MidiInput::DrainEvents(m_polled_midi[slot]);
             if (!evs.empty()) {
                 Input::NoteInputOnSlot(slot);
@@ -315,15 +327,18 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
         }
 
         const auto now = std::chrono::steady_clock::now().time_since_epoch();
-        const u64 now_ns =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+        const u64 now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         constexpr u64 kFadeNs = 300'000'000ull; // 300 ms
         std::set<std::string> pressed_pad_guids;
         for (auto& [id, gp] : m_polled_pads) {
-            if (!gp) continue;
+            if (!gp)
+                continue;
             bool any = false;
             for (auto b : kButtons) {
-                if (SDL_GetGamepadButton(gp, b)) { any = true; break; }
+                if (SDL_GetGamepadButton(gp, b)) {
+                    any = true;
+                    break;
+                }
             }
             if (any) {
                 char buf[33];
@@ -336,8 +351,7 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
         for (int slot = 0; slot < 4; ++slot) {
             const u64 last = Input::GetLastInputNs(slot);
             const bool active = last != 0 && (now_ns - last) < kFadeNs;
-            m_tabs->tabBar()->setTabTextColor(
-                slot, active ? QColor(0x4c, 0xc2, 0x5a) : QColor());
+            m_tabs->tabBar()->setTabTextColor(slot, active ? QColor(0x4c, 0xc2, 0x5a) : QColor());
 
             // Drain the dialog-local preview stream — the runtime
             // GetMicPeakDbfs is only populated after a game opens
@@ -359,27 +373,23 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                         }
                         const double rms = count > 0 ? std::sqrt(sum_sq / count) : 0.0;
                         const double dbfs = rms > 1e-7 ? 20.0 * std::log10(rms) : -120.0;
-                        lvl = static_cast<float>(
-                            std::clamp((dbfs + 60.0) / 60.0, 0.0, 1.0));
+                        lvl = static_cast<float>(std::clamp((dbfs + 60.0) / 60.0, 0.0, 1.0));
                     }
                 }
             }
             if (auto* vu = static_cast<MicVuBar*>(m_slots[slot].micVu)) {
                 vu->setLevel(lvl);
-                const int thr_db = m_slots[slot].micGateDb
-                                       ? m_slots[slot].micGateDb->value()
-                                       : -60;
+                const int thr_db = m_slots[slot].micGateDb ? m_slots[slot].micGateDb->value() : -60;
                 vu->setThreshold(std::clamp((thr_db + 60.0f) / 60.0f, 0.0f, 1.0f));
                 // Gate-open / closed colour: fill stays green for the
                 // hold window after the last above-threshold sample;
                 // grey when below + hold-decayed or when gate disabled.
-                const bool gate_enabled = m_slots[slot].micGateCb &&
-                                          m_slots[slot].micGateCb->isChecked();
+                const bool gate_enabled =
+                    m_slots[slot].micGateCb && m_slots[slot].micGateCb->isChecked();
                 if (!gate_enabled) {
                     vu->setGateOpen(true);
                 } else {
-                    const float thr_lvl =
-                        std::clamp((thr_db + 60.0f) / 60.0f, 0.0f, 1.0f);
+                    const float thr_lvl = std::clamp((thr_db + 60.0f) / 60.0f, 0.0f, 1.0f);
                     const auto now_tp = std::chrono::steady_clock::now();
                     if (lvl >= thr_lvl) {
                         m_slots[slot].lastAboveThreshold = now_tp;
@@ -388,22 +398,25 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                         const int hold_ms = m_slots[slot].micGateHoldMs
                                                 ? m_slots[slot].micGateHoldMs->value()
                                                 : 300;
-                        const auto since = std::chrono::duration_cast<
-                            std::chrono::milliseconds>(
-                            now_tp - m_slots[slot].lastAboveThreshold).count();
-                        if (since > hold_ms) m_slots[slot].gateOpen = false;
+                        const auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               now_tp - m_slots[slot].lastAboveThreshold)
+                                               .count();
+                        if (since > hold_ms)
+                            m_slots[slot].gateOpen = false;
                     }
                     vu->setGateOpen(m_slots[slot].gateOpen);
                 }
             }
 
             auto* list = m_slots[slot].list;
-            if (!list) continue;
+            if (!list)
+                continue;
             for (int i = 0; i < list->count(); ++i) {
                 auto* item = list->item(i);
                 const QString enc = item->data(Qt::UserRole).toString();
                 Config::PlayerDevice dev;
-                if (!Config::decodePlayerDevice(enc.toStdString(), dev)) continue;
+                if (!Config::decodePlayerDevice(enc.toStdString(), dev))
+                    continue;
                 bool glow = false;
                 using Kind = Config::PlayerDeviceKind;
                 switch (dev.kind) {
@@ -416,10 +429,9 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                 case Kind::Midi: {
                     // Use per-slot MIDI timestamp so gamepad presses on the
                     // same slot don't falsely light the MIDI row.
-                    const auto since = std::chrono::duration_cast<
-                        std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - m_last_midi_ns[slot])
-                                            .count();
+                    const auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now() - m_last_midi_ns[slot])
+                                           .count();
                     glow = since < 300;
                     break;
                 }
@@ -436,11 +448,13 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
 
 PlayerAssignmentDialog::~PlayerAssignmentDialog() {
     for (auto& [id, gp] : m_polled_pads) {
-        if (gp) SDL_CloseGamepad(gp);
+        if (gp)
+            SDL_CloseGamepad(gp);
     }
     m_polled_pads.clear();
     for (auto& port : m_polled_midi) {
-        if (port) Input::MidiInput::CloseInputPort(port);
+        if (port)
+            Input::MidiInput::CloseInputPort(port);
         port = nullptr;
     }
     for (int slot = 1; slot <= 4; ++slot) {
@@ -492,8 +506,7 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     connect(addKit, &QPushButton::clicked, this, [this, slot]() { addKitDevice(slot); });
     connect(addKbd, &QPushButton::clicked, this, [this, slot]() { addKeyboardDevice(slot); });
     connect(addMidi, &QPushButton::clicked, this, [this, slot]() { addMidiDevice(slot); });
-    connect(remove, &QPushButton::clicked, this,
-            [this, slot]() { removeSelectedDevice(slot); });
+    connect(remove, &QPushButton::clicked, this, [this, slot]() { removeSelectedDevice(slot); });
     root->addWidget(devicesBox);
 
     auto* sysBox = new QGroupBox(tr("Game-visible device class"), tab);
@@ -566,7 +579,7 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     auto* gateRow = new QHBoxLayout();
     w.micGateCb = new QCheckBox(tr("Noise gate"), micBox);
     w.micGateCb->setToolTip(tr("Drops sub-threshold audio to silence so the game doesn't "
-                                "score background noise as vocals."));
+                               "score background noise as vocals."));
     w.micGateDb = new QSlider(Qt::Horizontal, micBox);
     w.micGateDb->setRange(-60, 0);
     w.micGateDb->setSingleStep(1);
@@ -621,8 +634,7 @@ void PlayerAssignmentDialog::buildSlotTab(int slot) {
     // Load current state for this slot.
     refreshSlotList(slot);
 
-    const int currentClass =
-        Config::getUseSpecialPad(slot) ? Config::getSpecialPadClass(slot) : 0;
+    const int currentClass = Config::getUseSpecialPad(slot) ? Config::getSpecialPadClass(slot) : 0;
     w.lastUserClass = currentClass;
     for (int i = 0; i < w.classCombo->count(); ++i) {
         if (w.classCombo->itemData(i).toInt() == currentClass) {
@@ -682,8 +694,7 @@ void PlayerAssignmentDialog::refreshClassRow(int slot) {
         kitClass = DeriveKitClassFromSlotDevices(slot);
     const bool automatic = legacyOn && !kitClass.empty();
 
-    const bool hasSentinel =
-        w.classCombo->count() > 0 && w.classCombo->itemData(0).toInt() == -1;
+    const bool hasSentinel = w.classCombo->count() > 0 && w.classCombo->itemData(0).toInt() == -1;
     if (automatic) {
         if (!hasSentinel) {
             const QString label =
@@ -718,7 +729,8 @@ void PlayerAssignmentDialog::refreshLegacyVisuals(int slot) {
     for (int i = 0; i < w.list->count(); ++i) {
         const QString enc = w.list->item(i)->data(Qt::UserRole).toString();
         Config::PlayerDevice dev;
-        if (!Config::decodePlayerDevice(enc.toStdString(), dev)) continue;
+        if (!Config::decodePlayerDevice(enc.toStdString(), dev))
+            continue;
         if (dev.kind == Config::PlayerDeviceKind::Kit ||
             dev.kind == Config::PlayerDeviceKind::Midi) {
             legacyOn = true;
@@ -726,9 +738,10 @@ void PlayerAssignmentDialog::refreshLegacyVisuals(int slot) {
         }
     }
     w.legacyCb->setChecked(legacyOn);
-    auto* statusLabel = w.legacyCb->parentWidget()
-        ? w.legacyCb->parentWidget()->findChild<QLabel*>(QStringLiteral("legacyStatus"))
-        : nullptr;
+    auto* statusLabel =
+        w.legacyCb->parentWidget()
+            ? w.legacyCb->parentWidget()->findChild<QLabel*>(QStringLiteral("legacyStatus"))
+            : nullptr;
     if (statusLabel) {
         if (legacyOn) {
             statusLabel->setText(tr("Legacy raw-HID pass-through: <b>on</b> "
@@ -744,8 +757,7 @@ void PlayerAssignmentDialog::refreshLegacyVisuals(int slot) {
     w.probeBtn->setVisible(true); // Probe wizard always reachable
     if (legacyOn && !udevOk) {
         w.udevWarn->setVisible(true);
-        w.udevWarn->setText(
-            tr("⚠ install udev rules first (Configure Special Devices)"));
+        w.udevWarn->setText(tr("⚠ install udev rules first (Configure Special Devices)"));
     } else {
         w.udevWarn->setVisible(false);
         w.udevWarn->clear();
@@ -831,8 +843,7 @@ struct PickRow {
 
 QDialog* makeTwoSectionPicker(QWidget* parent, const QString& title, const QString& help,
                               const std::vector<PickRow>& rows,
-                              std::function<void()> on_probe_clicked,
-                              QString* out_encoded) {
+                              std::function<void()> on_probe_clicked, QString* out_encoded) {
     auto* dlg = new QDialog(parent);
     dlg->setWindowTitle(title);
     dlg->setModal(true);
@@ -894,20 +905,20 @@ QDialog* makeTwoSectionPicker(QWidget* parent, const QString& title, const QStri
         item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
     }
 
-    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-                                    Qt::Horizontal, dlg);
+    auto* bb =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, dlg);
     auto* okBtn = bb->button(QDialogButtonBox::Ok);
     okBtn->setEnabled(false);
-    QObject::connect(probedList, &QListWidget::itemSelectionChanged, dlg,
-                     [probedList, okBtn]() {
-                         okBtn->setEnabled(!probedList->selectedItems().isEmpty() &&
-                                           probedList->selectedItems().front()->flags() &
-                                               Qt::ItemIsSelectable);
-                     });
+    QObject::connect(probedList, &QListWidget::itemSelectionChanged, dlg, [probedList, okBtn]() {
+        okBtn->setEnabled(!probedList->selectedItems().isEmpty() &&
+                          probedList->selectedItems().front()->flags() & Qt::ItemIsSelectable);
+    });
     QObject::connect(bb, &QDialogButtonBox::accepted, dlg, [dlg, probedList, out_encoded]() {
-        if (probedList->selectedItems().isEmpty()) return;
+        if (probedList->selectedItems().isEmpty())
+            return;
         auto* item = probedList->selectedItems().front();
-        if (out_encoded) *out_encoded = item->data(Qt::UserRole).toString();
+        if (out_encoded)
+            *out_encoded = item->data(Qt::UserRole).toString();
         dlg->accept();
     });
     QObject::connect(bb, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
@@ -932,17 +943,20 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
         if (auto* head = SDL_hid_enumerate(0, 0)) {
             for (auto* d = head; d; d = d->next) {
                 const std::pair<u16, u16> key{d->vendor_id, d->product_id};
-                if (seen.count(key)) continue;
+                if (seen.count(key))
+                    continue;
                 seen.insert(key);
-                const std::string mfr = d->manufacturer_string
-                    ? QString::fromWCharArray(d->manufacturer_string).trimmed().toStdString()
-                    : "";
-                const std::string prod = d->product_string
-                    ? QString::fromWCharArray(d->product_string).trimmed().toStdString()
-                    : "";
+                const std::string mfr =
+                    d->manufacturer_string
+                        ? QString::fromWCharArray(d->manufacturer_string).trimmed().toStdString()
+                        : "";
+                const std::string prod =
+                    d->product_string
+                        ? QString::fromWCharArray(d->product_string).trimmed().toStdString()
+                        : "";
                 char buf[128];
-                std::snprintf(buf, sizeof(buf), "%04x:%04x  %s %s", d->vendor_id,
-                              d->product_id, mfr.empty() ? "?" : mfr.c_str(), prod.c_str());
+                std::snprintf(buf, sizeof(buf), "%04x:%04x  %s %s", d->vendor_id, d->product_id,
+                              mfr.empty() ? "?" : mfr.c_str(), prod.c_str());
                 PickRow r;
                 r.label = QString::fromStdString(buf);
                 Config::PlayerDevice dev;
@@ -971,7 +985,8 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
     auto on_probe = [this, &dlgPtr]() {
         KitProbeDialog wiz(this);
         wiz.exec();
-        if (dlgPtr) dlgPtr->done(kProbeDone);
+        if (dlgPtr)
+            dlgPtr->done(kProbeDone);
     };
     while (true) {
         dlgPtr = makeTwoSectionPicker(this, tr("Add Kit"),
@@ -982,7 +997,8 @@ void PlayerAssignmentDialog::addKitDevice(int slot) {
         const int result = dlgPtr->exec();
         delete dlgPtr;
         dlgPtr = nullptr;
-        if (result == QDialog::Accepted && !chosen.isEmpty()) break;
+        if (result == QDialog::Accepted && !chosen.isEmpty())
+            break;
         if (result == kProbeDone) {
             rows = buildRows();
             continue;
@@ -1028,8 +1044,7 @@ void PlayerAssignmentDialog::addMidiDevice(int slot) {
         for (const auto& p : Input::MidiInput::EnumerateInputPorts()) {
             PickRow r;
             r.label = QStringLiteral("%1  [port %2]")
-                          .arg(QString::fromStdString(p.name),
-                               QString::fromStdString(p.id));
+                          .arg(QString::fromStdString(p.name), QString::fromStdString(p.id));
             Config::PlayerDevice dev;
             dev.kind = Config::PlayerDeviceKind::Midi;
             dev.guid = p.id;
@@ -1053,20 +1068,22 @@ void PlayerAssignmentDialog::addMidiDevice(int slot) {
     auto on_probe = [this, &dlgPtr]() {
         KitProbeDialog wiz(this);
         wiz.exec();
-        if (dlgPtr) dlgPtr->done(kProbeDone);
+        if (dlgPtr)
+            dlgPtr->done(kProbeDone);
     };
     while (true) {
-        dlgPtr = makeTwoSectionPicker(
-            this, tr("Add MIDI"),
-            tr("Pick a probed MIDI port to bind to Player %1, or click Probe… "
-               "next to an unconfigured port to map its notes through the kit "
-               "wizard.")
-                .arg(slot),
-            rows, on_probe, &chosen);
+        dlgPtr =
+            makeTwoSectionPicker(this, tr("Add MIDI"),
+                                 tr("Pick a probed MIDI port to bind to Player %1, or click Probe… "
+                                    "next to an unconfigured port to map its notes through the kit "
+                                    "wizard.")
+                                     .arg(slot),
+                                 rows, on_probe, &chosen);
         const int result = dlgPtr->exec();
         delete dlgPtr;
         dlgPtr = nullptr;
-        if (result == QDialog::Accepted && !chosen.isEmpty()) break;
+        if (result == QDialog::Accepted && !chosen.isEmpty())
+            break;
         if (result == kProbeDone) {
             rows = buildRows();
             continue;
@@ -1105,7 +1122,8 @@ void PlayerAssignmentDialog::refreshPolledMidi(int slot) {
         for (int i = 0; i < list->count(); ++i) {
             const QString enc = list->item(i)->data(Qt::UserRole).toString();
             Config::PlayerDevice dev;
-            if (!Config::decodePlayerDevice(enc.toStdString(), dev)) continue;
+            if (!Config::decodePlayerDevice(enc.toStdString(), dev))
+                continue;
             if (dev.kind == Config::PlayerDeviceKind::Midi) {
                 port_id = dev.guid;
                 break;
@@ -1119,23 +1137,26 @@ void PlayerAssignmentDialog::refreshPolledMidi(int slot) {
             }
         }
     }
-    if (port_id.empty()) return;
+    if (port_id.empty())
+        return;
     port = Input::MidiInput::OpenInputPort(port_id);
     if (port) {
-        LOG_INFO(Input, "PlayerAssignment: opened MIDI port '{}' for slot {}",
-                 port_id, slot);
+        LOG_INFO(Input, "PlayerAssignment: opened MIDI port '{}' for slot {}", port_id, slot);
     } else {
-        LOG_WARNING(Input, "PlayerAssignment: failed to open MIDI port '{}' for slot {}",
-                    port_id, slot);
+        LOG_WARNING(Input, "PlayerAssignment: failed to open MIDI port '{}' for slot {}", port_id,
+                    slot);
     }
 }
 
 void PlayerAssignmentDialog::openMicPreview(int slot) {
     auto& w = m_slots[slot - 1];
-    if (!w.micCombo) return;
-    if (w.previewStream) closeMicPreview(slot);
+    if (!w.micCombo)
+        return;
+    if (w.previewStream)
+        closeMicPreview(slot);
     const QString dev_data = w.micCombo->currentData().toString();
-    if (dev_data == "None" || dev_data.isEmpty()) return;
+    if (dev_data == "None" || dev_data.isEmpty())
+        return;
     SDL_AudioDeviceID dev_id = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
     if (dev_data != "Default Device") {
         // Same name-lookup path as sdl_in.cpp's runtime AudioInOpen.
@@ -1165,7 +1186,8 @@ void PlayerAssignmentDialog::openMicPreview(int slot) {
                 resolved = true;
             }
         }
-        if (!resolved) return;
+        if (!resolved)
+            return;
     }
     SDL_AudioSpec spec;
     SDL_zero(spec);
@@ -1212,7 +1234,8 @@ void PlayerAssignmentDialog::onAccept() {
         if (cls == -1) {
             const std::string kit_cls = DeriveKitClassFromSlotDevices(slot);
             cls = KitClassStringToInt(kit_cls);
-            if (cls == 0) cls = w.lastUserClass; // probed but unrecognised class
+            if (cls == 0)
+                cls = w.lastUserClass; // probed but unrecognised class
         }
         Config::setUseSpecialPad(slot, cls != 0);
         Config::setSpecialPadClass(slot, cls);

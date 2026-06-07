@@ -61,13 +61,13 @@ struct KitDef {
     u8 solo_modifier_mask = 0;
     bool guitar_ps4_layout = false;
     bool drum_ps4_layout = false;
-    int drum_red_byte           = -1;
-    int drum_blue_byte          = -1;
-    int drum_yellow_byte        = -1;
-    int drum_green_byte         = -1;
+    int drum_red_byte = -1;
+    int drum_blue_byte = -1;
+    int drum_yellow_byte = -1;
+    int drum_green_byte = -1;
     int drum_yellow_cymbal_byte = -1;
-    int drum_blue_cymbal_byte   = -1;
-    int drum_green_cymbal_byte  = -1;
+    int drum_blue_cymbal_byte = -1;
+    int drum_green_cymbal_byte = -1;
     std::vector<int> motion_bytes;
     u8 clear_dud0_when_raw1_bits = 0;
     bool has_dud0_remap = false;
@@ -133,4 +133,4 @@ constexpr u8 ScaleVel7to8(u8 v) {
     return static_cast<u8>((v7 << 1) | (v7 >> 6));
 }
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

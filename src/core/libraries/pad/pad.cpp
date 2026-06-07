@@ -49,15 +49,15 @@ OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
         const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);
         if (!kit_cls.empty()) {
             result = KitClassFromString(kit_cls);
-            LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (kit-toml, cls='{}')",
-                      handle, static_cast<int>(result), kit_cls);
+            LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (kit-toml, cls='{}')", handle,
+                      static_cast<int>(result), kit_cls);
             return result;
         }
     }
     if (Config::getUseSpecialPad(handle)) {
         result = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-        LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (Config::useSpecialPad)",
-                  handle, static_cast<int>(result));
+        LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (Config::useSpecialPad)", handle,
+                  static_cast<int>(result));
         return result;
     }
     auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
@@ -179,8 +179,7 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     if (pInfo->deviceClass != OrbisPadDeviceClass::Standard) {
         pInfo->connectionType = ORBIS_PAD_PORT_TYPE_SPECIAL;
     }
-    LOG_DEBUG(Lib_Pad,
-              "scePadGetControllerInformation returning handle={} class={} connType={}",
+    LOG_DEBUG(Lib_Pad, "scePadGetControllerInformation returning handle={} class={} connType={}",
               handle, static_cast<int>(pInfo->deviceClass),
               static_cast<int>(pInfo->connectionType));
     return 0;
@@ -396,14 +395,10 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
     const bool xinput_source = (kit_source == "xinput");
     const bool nav_passthrough = !xinput_source;
     if (nav_passthrough) {
-        pData->leftStick.x =
-            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftX)]);
-        pData->leftStick.y =
-            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftY)]);
-        pData->rightStick.x =
-            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightX)]);
-        pData->rightStick.y =
-            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightY)]);
+        pData->leftStick.x = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftX)]);
+        pData->leftStick.y = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftY)]);
+        pData->rightStick.x = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightX)]);
+        pData->rightStick.y = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightY)]);
         pData->analogButtons.l2 =
             static_cast<u8>(state.axes[static_cast<int>(Input::Axis::TriggerLeft)]);
         pData->analogButtons.r2 =
@@ -457,13 +452,13 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
         // bits (Options, Touchpad, Share, PS) through SDL. The dpad
         // stays masked because RB4 treats the kit's HAT decoding as
         // authoritative for the player.
-        constexpr u32 kInstrumentBtnMask = static_cast<u32>(
-            OrbisPadButtonDataOffset::Square   | OrbisPadButtonDataOffset::Cross    |
-            OrbisPadButtonDataOffset::Circle   | OrbisPadButtonDataOffset::Triangle |
-            OrbisPadButtonDataOffset::L1       | OrbisPadButtonDataOffset::R1       |
-            OrbisPadButtonDataOffset::L2       | OrbisPadButtonDataOffset::R2       |
-            OrbisPadButtonDataOffset::Up       | OrbisPadButtonDataOffset::Down     |
-            OrbisPadButtonDataOffset::Left     | OrbisPadButtonDataOffset::Right);
+        constexpr u32 kInstrumentBtnMask =
+            static_cast<u32>(OrbisPadButtonDataOffset::Square | OrbisPadButtonDataOffset::Cross |
+                             OrbisPadButtonDataOffset::Circle | OrbisPadButtonDataOffset::Triangle |
+                             OrbisPadButtonDataOffset::L1 | OrbisPadButtonDataOffset::R1 |
+                             OrbisPadButtonDataOffset::L2 | OrbisPadButtonDataOffset::R2 |
+                             OrbisPadButtonDataOffset::Up | OrbisPadButtonDataOffset::Down |
+                             OrbisPadButtonDataOffset::Left | OrbisPadButtonDataOffset::Right);
         // The instrument-bit mask only applies to XInput-source kits.
         // For HID and MIDI sources the navigation gamepad is a separate
         // device — the user wants pressing X / dpad / etc. to land as
@@ -473,11 +468,9 @@ static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
             xinput_source ? (sdl_buttons & ~kInstrumentBtnMask) : sdl_buttons;
         pData->buttons = static_cast<OrbisPadButtonDataOffset>(
             sdl_for_buttons | Input::HidInstrument::PackButtons(handle, raw, raw_len, cls));
-        pData->deviceUniqueDataLen = static_cast<u8>(
-            Input::HidInstrument::PackDeviceUniqueData(handle, raw, raw_len, cls,
-                                                       pData->deviceUniqueData));
+        pData->deviceUniqueDataLen = static_cast<u8>(Input::HidInstrument::PackDeviceUniqueData(
+            handle, raw, raw_len, cls, pData->deviceUniqueData));
     }
-
 }
 
 int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
@@ -871,16 +864,14 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("Uq6LgTJEmQs", "libScePad", 1, "libScePad", scePadGetDataInternal);
     LIB_FUNCTION("hDgisSGkOgw", "libScePad", 1, "libScePad", scePadGetDeviceId);
     LIB_FUNCTION("4rS5zG7RFaM", "libScePad", 1, "libScePad", scePadGetDeviceInfo);
-    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad",
-                 scePadGetExtControllerInformation);
+    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad", scePadGetExtControllerInformation);
     LIB_FUNCTION("1DmZjZAuzEM", "libScePad", 1, "libScePad", scePadGetExtensionUnitInfo);
     LIB_FUNCTION("PZSoY8j0Pko", "libScePad", 1, "libScePad", scePadGetFeatureReport);
     LIB_FUNCTION("u1GRHp+oWoY", "libScePad", 1, "libScePad", scePadGetHandle);
     LIB_FUNCTION("kiA9bZhbnAg", "libScePad", 1, "libScePad", scePadGetIdleCount);
     LIB_FUNCTION("1Odcw19nADw", "libScePad", 1, "libScePad", scePadGetInfo);
     LIB_FUNCTION("4x5Im8pr0-4", "libScePad", 1, "libScePad", scePadGetInfoByPortType);
-    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad",
-                 scePadGetLicenseControllerInformation);
+    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad", scePadGetLicenseControllerInformation);
     LIB_FUNCTION("WPIB7zBWxVE", "libScePad", 1, "libScePad", scePadGetMotionSensorPosition);
     LIB_FUNCTION("k4+nDV9vbT0", "libScePad", 1, "libScePad", scePadGetMotionTimerUnit);
     LIB_FUNCTION("do-JDWX+zRs", "libScePad", 1, "libScePad", scePadGetSphereRadius);
@@ -908,13 +899,10 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("5Wf4q349s+Q", "libScePad", 1, "libScePad", scePadReadStateExt);
     LIB_FUNCTION("DscD1i9HX1w", "libScePad", 1, "libScePad", scePadResetLightBar);
     LIB_FUNCTION("+4c9xRLmiXQ", "libScePad", 1, "libScePad", scePadResetLightBarAll);
-    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad",
-                 scePadResetLightBarAllByPortType);
+    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad", scePadResetLightBarAllByPortType);
     LIB_FUNCTION("rIZnR6eSpvk", "libScePad", 1, "libScePad", scePadResetOrientation);
-    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad",
-                 scePadResetOrientationForTracker);
-    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad",
-                 scePadSetAngularVelocityDeadbandState);
+    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad", scePadResetOrientationForTracker);
+    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad", scePadSetAngularVelocityDeadbandState);
     LIB_FUNCTION("ew647HuKi2Y", "libScePad", 1, "libScePad", scePadSetAutoPowerOffCount);
     LIB_FUNCTION("MbTt1EHYCTg", "libScePad", 1, "libScePad", scePadSetButtonRemappingInfo);
     LIB_FUNCTION("MLA06oNfF+4", "libScePad", 1, "libScePad", scePadSetConnection);
@@ -931,8 +919,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("DmBx8K+jDWw", "libScePad", 1, "libScePad", scePadSetProcessPrivilege);
     LIB_FUNCTION("FbxEpTRDou8", "libScePad", 1, "libScePad",
                  scePadSetProcessPrivilegeOfButtonRemapping);
-    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad",
-                 scePadSetShareButtonMaskForRemotePlay);
+    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad", scePadSetShareButtonMaskForRemotePlay);
     LIB_FUNCTION("vDLMoJLde8I", "libScePad", 1, "libScePad", scePadSetTiltCorrectionState);
     LIB_FUNCTION("z+GEemoTxOo", "libScePad", 1, "libScePad", scePadSetUserColor);
     LIB_FUNCTION("yFVnOdGxvZY", "libScePad", 1, "libScePad", scePadSetVibration);
@@ -947,8 +934,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("PFec14-UhEQ", "libScePad", 1, "libScePad", scePadVirtualDeviceDeleteDevice);
     LIB_FUNCTION("pjPCronWdxI", "libScePad", 1, "libScePad",
                  scePadVirtualDeviceDisableButtonRemapping);
-    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad",
-                 scePadVirtualDeviceGetRemoteSetting);
+    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad", scePadVirtualDeviceGetRemoteSetting);
     LIB_FUNCTION("IWOyO5jKuZg", "libScePad", 1, "libScePad", scePadVirtualDeviceInsertData);
     LIB_FUNCTION("KLmYx9ij2h0", "libScePad", 1, "libScePad", Func_28B998C7D8A3DA1D);
     LIB_FUNCTION("KY0hSB+Uyfo", "libScePad", 1, "libScePad", Func_298D21481F94C9FA);

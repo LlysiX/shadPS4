@@ -24,7 +24,8 @@ float GetMicPeakDbfs(int slot) {
 // "Automatic" mode (useSpecialPad=false but kit declares drum) still
 // register as an instrument.
 static bool SlotIsInstrument(int userId) {
-    if (userId < 1 || userId > 4) return false;
+    if (userId < 1 || userId > 4)
+        return false;
     using Libraries::Pad::OrbisPadDeviceClass;
     auto is_instrument = [](int cls) {
         return cls == static_cast<int>(OrbisPadDeviceClass::Guitar) ||
@@ -128,7 +129,7 @@ s32 PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle) {
     // always-active stub, so behaviour is unchanged while the gate is off),
     // non-zero when the gate has muted it.
     if (handle < 1 || handle > 8) {
-        return ORBIS_OK;  // unknown handle: report active, never error here
+        return ORBIS_OK; // unknown handle: report active, never error here
     }
     return audio->IsSilent(handle) ? 1 : 0;
 }

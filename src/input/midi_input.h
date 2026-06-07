@@ -56,10 +56,10 @@ void CloseInputPort(void* handle);
 // the port's open time, useful for replaying captures at the right speed
 // and for detecting modules that never send Note Off.
 struct NoteEvent {
-    bool on;              // true = Note On (with velocity > 0); false = Note Off
-    std::uint8_t note;    // MIDI note number 0..127
+    bool on;               // true = Note On (with velocity > 0); false = Note Off
+    std::uint8_t note;     // MIDI note number 0..127
     std::uint8_t velocity; // 0..127 (7-bit, as the device sent it)
-    std::uint32_t t_ms;   // milliseconds since OpenInputPort returned
+    std::uint32_t t_ms;    // milliseconds since OpenInputPort returned
 };
 
 // Drain every MIDI event the kernel has queued for `handle` since the
@@ -91,15 +91,15 @@ constexpr std::size_t kSnapshotBytes = 16;
 // picks each drum_*_byte by finding the byte with maximum range during
 // the corresponding probe step, so this layout is implementation
 // detail — callers that care use the offsets here directly.
-constexpr int kSnapByteFaceFlags  = 0;   // pad-press bitmap (bit per slot)
-constexpr int kSnapByteKick       = 1;
-constexpr int kSnapByteSnareRed   = 3;
+constexpr int kSnapByteFaceFlags = 0; // pad-press bitmap (bit per slot)
+constexpr int kSnapByteKick = 1;
+constexpr int kSnapByteSnareRed = 3;
 constexpr int kSnapByteTomHighYel = 4;
 constexpr int kSnapByteTomMidBlue = 5;
-constexpr int kSnapByteTomLowGrn  = 6;
-constexpr int kSnapByteCymYellow  = 8;
-constexpr int kSnapByteCymBlue    = 9;
-constexpr int kSnapByteCymGreen   = 10;
+constexpr int kSnapByteTomLowGrn = 6;
+constexpr int kSnapByteCymYellow = 8;
+constexpr int kSnapByteCymBlue = 9;
+constexpr int kSnapByteCymGreen = 10;
 
 std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_len);
 
@@ -107,4 +107,4 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
 // client. Called on emulator exit.
 void Shutdown();
 
-}  // namespace Input::MidiInput
+} // namespace Input::MidiInput

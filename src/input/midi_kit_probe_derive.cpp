@@ -22,19 +22,15 @@ struct PadDef {
     bool optional;
 };
 const PadDef kDrumPads[] = {
-    {"red_pad",         "red",          false},
-    {"blue_pad",        "blue",         false},
-    {"yellow_pad",      "yellow",       true},
-    {"green_pad",       "green",        true},
-    {"orange_pad",      "orange",       true},
-    {"kick_pedal",      "kick",         false},
-    {"kick_pedal_2",    "kick2",        true},
+    {"red_pad", "red", false},       {"blue_pad", "blue", false},    {"yellow_pad", "yellow", true},
+    {"green_pad", "green", true},    {"orange_pad", "orange", true}, {"kick_pedal", "kick", false},
+    {"kick_pedal_2", "kick2", true},
 };
 const PadDef kProCymbals[] = {
-    {"yellow_cymbal",   "yellow_cymbal", true},
-    {"orange_cymbal",   "orange_cymbal", true},
-    {"blue_cymbal",     "blue_cymbal",   true},
-    {"green_cymbal",    "green_cymbal",  true},
+    {"yellow_cymbal", "yellow_cymbal", true},
+    {"orange_cymbal", "orange_cymbal", true},
+    {"blue_cymbal", "blue_cymbal", true},
+    {"green_cymbal", "green_cymbal", true},
 };
 
 // Pick the top-N MIDI notes from a step's event list, ranked by peak
@@ -51,56 +47,63 @@ struct NoteStats {
     std::uint8_t peak_vel;
     int count;
 };
-std::vector<NoteStats> RankNotesForStep(const MidiStepResult& step,
-                                        int max_notes = 4) {
+std::vector<NoteStats> RankNotesForStep(const MidiStepResult& step, int max_notes = 4) {
     std::map<std::uint8_t, NoteStats> by_note;
     for (const auto& ev : step.events) {
-        if (!ev.on) continue;
+        if (!ev.on)
+            continue;
         auto& s = by_note[ev.note];
         s.note = ev.note;
-        if (ev.velocity > s.peak_vel) s.peak_vel = ev.velocity;
+        if (ev.velocity > s.peak_vel)
+            s.peak_vel = ev.velocity;
         s.count++;
     }
     std::vector<NoteStats> all;
     all.reserve(by_note.size());
-    for (auto& [n, s] : by_note) all.push_back(s);
-    std::sort(all.begin(), all.end(),
-              [](const NoteStats& a, const NoteStats& b) {
-                  // Higher peak velocity wins; ties broken by frequency.
-                  if (a.peak_vel != b.peak_vel) return a.peak_vel > b.peak_vel;
-                  return a.count > b.count;
-              });
-    if ((int)all.size() > max_notes) all.resize(max_notes);
+    for (auto& [n, s] : by_note)
+        all.push_back(s);
+    std::sort(all.begin(), all.end(), [](const NoteStats& a, const NoteStats& b) {
+        // Higher peak velocity wins; ties broken by frequency.
+        if (a.peak_vel != b.peak_vel)
+            return a.peak_vel > b.peak_vel;
+        return a.count > b.count;
+    });
+    if ((int)all.size() > max_notes)
+        all.resize(max_notes);
     return all;
 }
 
 const MidiStepResult* FindStep(const MidiKitProbeData& data, const std::string& key) {
     for (const auto& s : data.results) {
-        if (s.key == key && s.captured) return &s;
+        if (s.key == key && s.captured)
+            return &s;
     }
     return nullptr;
 }
 
-void EmitPadMap(std::ostringstream& os, const MidiKitProbeData& data,
-                const PadDef& pad) {
+void EmitPadMap(std::ostringstream& os, const MidiKitProbeData& data, const PadDef& pad) {
     const auto* step = FindStep(data, pad.step);
-    if (!step) return;
+    if (!step)
+        return;
     const auto notes = RankNotesForStep(*step);
-    if (notes.empty()) return;
+    if (notes.empty())
+        return;
     os << pad.toml_key << " = [";
     for (std::size_t i = 0; i < notes.size(); ++i) {
-        if (i) os << ", ";
+        if (i)
+            os << ", ";
         os << static_cast<int>(notes[i].note);
     }
     os << "]\n";
 }
 
-void EmitVelocityScale(std::ostringstream& os, const MidiKitProbeData& data,
-                       const PadDef& pad) {
+void EmitVelocityScale(std::ostringstream& os, const MidiKitProbeData& data, const PadDef& pad) {
     const auto* step = FindStep(data, pad.step);
-    if (!step) return;
+    if (!step)
+        return;
     const auto notes = RankNotesForStep(*step);
-    if (notes.empty()) return;
+    if (notes.empty())
+        return;
     // Use the dominant note's range. lo defaults to 1 (any hit at all
     // counts as a press); hi is the peak observed velocity. The
     // runtime maps [lo, hi] linearly onto [0, 0x7F] so a worn-pad
@@ -108,12 +111,12 @@ void EmitVelocityScale(std::ostringstream& os, const MidiKitProbeData& data,
     // in game.
     const int lo = 1;
     const int hi = (notes.front().peak_vel * 255 + 63) / 127;
-    if (hi <= lo) return;
-    os << "\"" << pad.toml_key << "\" = { lo = " << lo << ", hi = " << hi
-       << " }\n";
+    if (hi <= lo)
+        return;
+    os << "\"" << pad.toml_key << "\" = { lo = " << lo << ", hi = " << hi << " }\n";
 }
 
-}  // namespace
+} // namespace
 
 std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     std::ostringstream os;
@@ -125,8 +128,7 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     os << "device_class = \"drum\"\n";
 
     const bool is_pro = (data.device_type == MidiDeviceType::ProDrum);
-    os << "device_subclass = \""
-       << (is_pro ? "pro_drum" : "drum") << "\"\n\n";
+    os << "device_subclass = \"" << (is_pro ? "pro_drum" : "drum") << "\"\n\n";
 
     // The Note → pad map. A note that arrived during multiple steps
     // (kick echo bleeding into the red/blue/green captures, etc.) is
@@ -134,14 +136,19 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     // Without this, last-writer-wins in the loader would swap pads at
     // random — the user's red hit could land as green just because
     // kick's note 36 also appeared in the orange step.
-    struct PadEntry { const PadDef* pad; std::vector<NoteStats> notes; };
+    struct PadEntry {
+        const PadDef* pad;
+        std::vector<NoteStats> notes;
+    };
     std::vector<PadEntry> entries;
     const auto add_pad_entries = [&](const PadDef* list, std::size_t n) {
         for (std::size_t i = 0; i < n; ++i) {
             const auto* step = FindStep(data, list[i].step);
-            if (!step) continue;
+            if (!step)
+                continue;
             auto ranked = RankNotesForStep(*step);
-            if (ranked.empty()) continue;
+            if (ranked.empty())
+                continue;
             entries.push_back({&list[i], std::move(ranked)});
         }
     };
@@ -157,7 +164,11 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     // a cross-talk leak into blue-pad (5 hits of note 36 at peak 127)
     // would tie and the loader would assign by iteration order rather
     // than meaningful preference.
-    struct OwnerKey { std::size_t pad_idx; std::uint8_t peak; int count; };
+    struct OwnerKey {
+        std::size_t pad_idx;
+        std::uint8_t peak;
+        int count;
+    };
     std::map<std::uint8_t, OwnerKey> best_owner;
     for (std::size_t i = 0; i < entries.size(); ++i) {
         for (const auto& n : entries[i].notes) {
@@ -165,31 +176,33 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
             auto it = best_owner.find(n.note);
             bool replace = it == best_owner.end();
             if (!replace) {
-                if (cand.peak > it->second.peak) replace = true;
-                else if (cand.peak == it->second.peak &&
-                         cand.count > it->second.count)
+                if (cand.peak > it->second.peak)
+                    replace = true;
+                else if (cand.peak == it->second.peak && cand.count > it->second.count)
                     replace = true;
             }
-            if (replace) best_owner[n.note] = cand;
+            if (replace)
+                best_owner[n.note] = cand;
         }
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {
         auto& notes = entries[i].notes;
         notes.erase(std::remove_if(notes.begin(), notes.end(),
-                                    [&](const NoteStats& s) {
-                                        auto it = best_owner.find(s.note);
-                                        return it == best_owner.end() ||
-                                               it->second.pad_idx != i;
-                                    }),
+                                   [&](const NoteStats& s) {
+                                       auto it = best_owner.find(s.note);
+                                       return it == best_owner.end() || it->second.pad_idx != i;
+                                   }),
                     notes.end());
     }
 
     os << "[midi_pad_map]\n";
     for (const auto& e : entries) {
-        if (e.notes.empty()) continue;
+        if (e.notes.empty())
+            continue;
         os << e.pad->toml_key << " = [";
         for (std::size_t i = 0; i < e.notes.size(); ++i) {
-            if (i) os << ", ";
+            if (i)
+                os << ", ";
             os << static_cast<int>(e.notes[i].note);
         }
         os << "]\n";
@@ -204,13 +217,15 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     for (const auto& pad : kDrumPads) {
         const std::size_t before = scale_buf.tellp();
         EmitVelocityScale(scale_buf, data, pad);
-        if (static_cast<std::size_t>(scale_buf.tellp()) != before) any_scale = true;
+        if (static_cast<std::size_t>(scale_buf.tellp()) != before)
+            any_scale = true;
     }
     if (is_pro) {
         for (const auto& pad : kProCymbals) {
             const std::size_t before = scale_buf.tellp();
             EmitVelocityScale(scale_buf, data, pad);
-            if (static_cast<std::size_t>(scale_buf.tellp()) != before) any_scale = true;
+            if (static_cast<std::size_t>(scale_buf.tellp()) != before)
+                any_scale = true;
         }
     }
     if (any_scale) {
@@ -220,4 +235,4 @@ std::string DeriveMidiKitToml(const MidiKitProbeData& data) {
     return os.str();
 }
 
-}  // namespace Input::MidiInstrument
+} // namespace Input::MidiInstrument

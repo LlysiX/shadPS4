@@ -62,7 +62,8 @@ DevicePickerDialog::DevicePickerDialog(const QString& title, const QString& help
 
 DevicePickerDialog::~DevicePickerDialog() {
     for (auto& [id, row] : m_gamepad_rows) {
-        if (row.gp) SDL_CloseGamepad(row.gp);
+        if (row.gp)
+            SDL_CloseGamepad(row.gp);
     }
     m_gamepad_rows.clear();
 }
@@ -94,29 +95,35 @@ void DevicePickerDialog::addRow(const QString& label, const QString& encoded, bo
 }
 
 void DevicePickerDialog::onPollInputs() {
-    if (m_gamepad_rows.empty()) return;
+    if (m_gamepad_rows.empty())
+        return;
     SDL_UpdateGamepads();
     // Standard buttons SDL3 exposes — South / East / West / North / LB /
     // RB / Back / Start / Guide / L3 / R3 / D-Pad up..right. Tapping
     // any of them lights up the corresponding row.
     static constexpr SDL_GamepadButton kButtons[] = {
-        SDL_GAMEPAD_BUTTON_SOUTH,         SDL_GAMEPAD_BUTTON_EAST,
-        SDL_GAMEPAD_BUTTON_WEST,          SDL_GAMEPAD_BUTTON_NORTH,
-        SDL_GAMEPAD_BUTTON_BACK,          SDL_GAMEPAD_BUTTON_GUIDE,
-        SDL_GAMEPAD_BUTTON_START,         SDL_GAMEPAD_BUTTON_LEFT_STICK,
-        SDL_GAMEPAD_BUTTON_RIGHT_STICK,   SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
-        SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,SDL_GAMEPAD_BUTTON_DPAD_UP,
-        SDL_GAMEPAD_BUTTON_DPAD_DOWN,     SDL_GAMEPAD_BUTTON_DPAD_LEFT,
+        SDL_GAMEPAD_BUTTON_SOUTH,          SDL_GAMEPAD_BUTTON_EAST,
+        SDL_GAMEPAD_BUTTON_WEST,           SDL_GAMEPAD_BUTTON_NORTH,
+        SDL_GAMEPAD_BUTTON_BACK,           SDL_GAMEPAD_BUTTON_GUIDE,
+        SDL_GAMEPAD_BUTTON_START,          SDL_GAMEPAD_BUTTON_LEFT_STICK,
+        SDL_GAMEPAD_BUTTON_RIGHT_STICK,    SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
+        SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_DPAD_UP,
+        SDL_GAMEPAD_BUTTON_DPAD_DOWN,      SDL_GAMEPAD_BUTTON_DPAD_LEFT,
         SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
     };
     for (auto& [id, row] : m_gamepad_rows) {
-        if (!row.gp) continue;
+        if (!row.gp)
+            continue;
         bool any_pressed = false;
         for (auto b : kButtons) {
-            if (SDL_GetGamepadButton(row.gp, b)) { any_pressed = true; break; }
+            if (SDL_GetGamepadButton(row.gp, b)) {
+                any_pressed = true;
+                break;
+            }
         }
         auto* item = m_list->item(row.row);
-        if (!item) continue;
+        if (!item)
+            continue;
         if (any_pressed && !row.was_lit) {
             item->setBackground(QBrush(QColor(0x4c, 0xc2, 0x5a, 0x80)));
             row.was_lit = true;

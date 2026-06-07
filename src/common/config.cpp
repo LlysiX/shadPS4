@@ -137,7 +137,7 @@ static ConfigEntry<int> extraDmemInMbytes(0);
 static ConfigEntry<bool> isPSNSignedIn(false);
 static ConfigEntry<bool> isTrophyPopupDisabled(false);
 static ConfigEntry<double> trophyNotificationDuration(6.0);
-static ConfigEntry<string> logFilter("*:Debug");
+static ConfigEntry<string> logFilter("");
 static ConfigEntry<string> logType("sync");
 static ConfigEntry<string> userName("shadPS4");
 static ConfigEntry<string> chooseHomeTab("General");
@@ -1548,12 +1548,12 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
             const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
             data["Input"][key] = playerSlotDevices[i];
         }
-        // Legacy singular keys: kept in sync so older readers / community
-        // configs still see consistent values. useSpecialPad = true if any
-        // slot has a special pad; specialPadClass mirrors slot 1's class.
-        data["Input"]["useSpecialPad"] = (useSpecialPad1.base_value || useSpecialPad2.base_value ||
-                                          useSpecialPad3.base_value || useSpecialPad4.base_value);
-        data["Input"]["specialPadClass"] = specialPadClass1.base_value;
+        // Legacy no-suffix useSpecialPad / specialPadClass keys are no
+        // longer written. Every runtime reader in this fork passes a
+        // slot/handle (1..4), so the mirror was write-only — and it
+        // had a bug where specialPadClass tracked slot 1 only, masking
+        // non-Standard classes on slots 2-4 from any reader that did
+        // still consult the unsuffixed key.
         data["Input"]["useUnifiedInputConfig"] = useUnifiedInputConfig.base_value;
         data["GPU"]["internalScreenWidth"] = internalScreenWidth.base_value;
         data["GPU"]["internalScreenHeight"] = internalScreenHeight.base_value;

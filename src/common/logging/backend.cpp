@@ -143,8 +143,15 @@ public:
         // carries the full diagnostic stream we need to triage the new
         // per-player input + MIDI drum paths. Users who set logFilter
         // explicitly in config.toml keep their choice.
+        // 0.7-beta: when the user hasn't set a filter, fall back to
+        // *:Debug so any shad_log.txt they share with us carries the
+        // full diagnostic stream the new per-player + MIDI paths
+        // emit. The fallback lives in the backend (not in the Config
+        // default) so it doesn't permanently bake into config.toml on
+        // first save — users who want quieter logs can set logFilter
+        // explicitly and we honour it.
         const std::string user_filter = Config::getLogFilter();
-        filter.ParseFilterString(user_filter);
+        filter.ParseFilterString(user_filter.empty() ? "*:Debug" : user_filter);
         const auto& log_file_path = log_file.empty() ? LOG_FILE : log_file;
         instance = std::unique_ptr<Impl, decltype(&Deleter)>(
             new Impl(log_dir / log_file_path, filter), Deleter);

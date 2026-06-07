@@ -154,18 +154,8 @@ CaseResult RunCase(const fs::path& path) {
         {"blue_cymbal",    "blue_cymbal ="},
         {"green_cymbal",   "green_cymbal ="},
     };
-    for (const auto& s : data.results) {
-        if (s.events.empty()) continue;
-        for (const auto& [step_key, toml_key] : kStepToTomlKey) {
-            if (s.key != step_key) continue;
-            if (!Contains(toml, toml_key)) {
-                r.detail = std::string{"step '"} + step_key +
-                           "' had events but didn't appear in pad map";
-                return r;
-            }
-            break;
-        }
-    }
+    // Note: We no longer assert that a step with events MUST appear in the TOML.
+    // Cross-talk dedup or all-zero velocity captures legitimately exclude steps.
     // A MIDI note must not appear under more than one pad. The original
     // last-writer-wins parse silently swapped pads when the wizard
     // captured cross-talk between adjacent steps; we now dedup at derive

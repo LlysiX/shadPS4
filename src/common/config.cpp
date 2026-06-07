@@ -137,7 +137,7 @@ static ConfigEntry<int> extraDmemInMbytes(0);
 static ConfigEntry<bool> isPSNSignedIn(false);
 static ConfigEntry<bool> isTrophyPopupDisabled(false);
 static ConfigEntry<double> trophyNotificationDuration(6.0);
-static ConfigEntry<string> logFilter("");
+static ConfigEntry<string> logFilter("*:Debug");
 static ConfigEntry<string> logType("sync");
 static ConfigEntry<string> userName("shadPS4");
 static ConfigEntry<string> chooseHomeTab("General");
@@ -980,8 +980,6 @@ bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out) {
         return true;
     }
     if (kind == "midi") {
-        if (rest.empty())
-            return false;
         out.kind = PlayerDeviceKind::Midi;
         out.guid = rest;
         return true;
@@ -1234,7 +1232,9 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
             // would write back the default empty vector. Only overwrite when
             // the file actually carries the key.
             if (input.contains(key)) {
-                playerSlotDevices[i] = toml::find<std::vector<std::string>>(input, key);
+                if (!is_game_specific) {
+                    playerSlotDevices[i] = toml::find<std::vector<std::string>>(input, key);
+                }
             }
         }
         isMotionControlsEnabled.setFromToml(input, "isMotionControlsEnabled", is_game_specific);

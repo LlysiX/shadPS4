@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <list>
 #include <map>
 #include <mutex>
 #include <string>
@@ -112,7 +113,7 @@ struct SlotState {
 };
 
 // Defined in hid_packer.cpp; the IO layer reads them.
-extern std::vector<KitDef> g_kits;
+extern std::list<KitDef> g_kits;
 extern std::mutex g_kits_mu;
 extern SlotState g_slots[kNumSlots];
 

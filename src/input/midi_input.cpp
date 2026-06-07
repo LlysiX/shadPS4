@@ -141,6 +141,7 @@ void CloseInputPort(void* handle) {
         if (h->midi && h->midi->isPortOpen()) h->midi->closePort();
     } catch (...) {
     }
+    std::lock_guard lk(g_global_mu);
     delete h;
 }
 
@@ -260,17 +261,19 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out,
                                std::size_t out_len) {
     if (!handle || !out || out_len < kSnapshotBytes) return 0;
     auto* h = static_cast<PortHandle*>(handle);
-    {
-        std::lock_guard lk(g_global_mu);
-        (void)DrainAndUpdate(h);
-    }
+    std::lock_guard lk(g_global_mu);
+    (void)DrainAndUpdate(h);
     std::memset(out, 0, kSnapshotBytes);
     std::uint8_t flags = 0;
     if (!h->custom_map.empty()) {
         for (int b = 0; b < (int)kSnapshotBytes; ++b) {
             if (h->pads_by_byte[b].velocity == 0) continue;
             out[b] = h->pads_by_byte[b].velocity;
-            flags |= static_cast<std::uint8_t>(1u << (b & 7));
+            std::uint8_t mask = 0;
+            for (const auto& d : kPadDefaults) {
+                if (d.snap_byte == b) { mask = d.mask_bit; break; }
+            }
+            flags |= mask;
         }
     } else {
         for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {

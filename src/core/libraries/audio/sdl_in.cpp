@@ -135,8 +135,12 @@ int SDLAudioIn::AudioInOpen(int user_id, int type, uint32_t samples_num, uint32_
                 }
                 if (!resolved) {
                     try {
-                        devId = static_cast<uint32_t>(std::stoul(micDevStr));
-                        resolved = true;
+                        std::size_t pos = 0;
+                        unsigned long parsed = std::stoul(micDevStr, &pos);
+                        if (pos == micDevStr.length()) {
+                            devId = static_cast<uint32_t>(parsed);
+                            resolved = true;
+                        }
                     } catch (const std::exception&) {
                         // fall through
                     }

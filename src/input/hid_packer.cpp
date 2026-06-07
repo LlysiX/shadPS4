@@ -25,7 +25,7 @@ namespace OPB = Libraries::Pad;
 
 namespace Input::HidInstrument {
 
-std::vector<KitDef> g_kits;
+std::list<KitDef> g_kits;
 std::mutex g_kits_mu;
 SlotState g_slots[kNumSlots];
 

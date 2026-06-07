@@ -32,18 +32,8 @@ static bool SlotIsInstrument(int userId) {
                cls == static_cast<int>(OrbisPadDeviceClass::DjTurntable) ||
                cls == static_cast<int>(OrbisPadDeviceClass::Dancemat);
     };
-    if (Config::getSpecialPadLegacyPassUSBRawHID(userId)) {
-        const std::string kit_cls =
-            Input::HidInstrument::GetActiveKitDeviceClass(userId);
-        if (kit_cls == "guitar") return true;
-        if (kit_cls == "drum") return true;
-        if (kit_cls == "dj_turntable" || kit_cls == "turntable") return true;
-        if (kit_cls == "dance_mat" || kit_cls == "dancemat") return true;
-    }
-    if (Config::getUseSpecialPad(userId)) {
-        return is_instrument(Config::getSpecialPadClass(userId));
-    }
-    return false;
+    auto cls = Libraries::Pad::ResolveDeviceClass(userId);
+    return is_instrument(static_cast<int>(cls));
 }
 
 int PS4_SYSV_ABI sceAudioInChangeAppModuleState() {

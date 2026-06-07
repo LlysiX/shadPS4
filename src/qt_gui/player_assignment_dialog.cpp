@@ -1097,10 +1097,10 @@ void PlayerAssignmentDialog::removeSelectedDevice(int slot) {
 }
 
 void PlayerAssignmentDialog::refreshPolledMidi(int slot) {
-    void*& port = m_polled_midi[slot - 1];
+    void* port = m_polled_midi[slot - 1];
+    m_polled_midi[slot - 1] = nullptr;
     if (port) {
         Input::MidiInput::CloseInputPort(port);
-        port = nullptr;
     }
     // At constructor time tabs aren't built yet — fall back to Config.
     std::string port_id;

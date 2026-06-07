@@ -35,7 +35,7 @@ static OrbisPadDeviceClass KitClassFromString(const std::string& s) {
 //      behaviour surfaced in the Special Devices dialog.
 //   2. useSpecialPad{N} → the user-pinned class from Config.
 //   3. Otherwise → SDL's detected class (Guitar / Drum / Standard).
-static OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
+OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
     OrbisPadDeviceClass result;
     if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
         const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);

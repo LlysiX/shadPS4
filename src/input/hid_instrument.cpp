@@ -223,7 +223,7 @@ void PollLoop() {
             }
 
             if (!s.dev && !s.gamepad && !s.midi) {
-                std::vector<KitDef> snapshot;
+                std::list<KitDef> snapshot;
                 {
                     std::lock_guard<std::mutex> lk(g_kits_mu);
                     snapshot = g_kits;
@@ -251,12 +251,12 @@ void PollLoop() {
                                  slot, kd.midi_pad_map.size(),
                                  kd.drum_red_byte, kd.drum_blue_byte,
                                  kd.drum_yellow_byte, kd.drum_green_byte);
+                        std::lock_guard<std::mutex> lk(s.mu);
                         s.midi = port;
                         s.vid = kd.vid;
                         s.pid = kd.pid;
                         s.device_path = "midi:" + kd.midi_port_id;
                         s.kit = FindKit(kd.vid, kd.pid);
-                        if (!s.kit) s.kit = &kd;
                         s.open_failed_logged = false;
                         LOG_INFO(Input,
                                  "HID instrument slot {}: opened MIDI port {} ({})",
@@ -270,12 +270,12 @@ void PollLoop() {
                             if (PathInUseByOtherSlot(path, i)) continue;
                             SDL_Gamepad* g = SDL_OpenGamepad(gps[gi]);
                             if (!g) continue;
+                            std::lock_guard<std::mutex> lk(s.mu);
                             s.gamepad = g;
                             s.vid = SDL_GetGamepadVendor(g);
                             s.pid = SDL_GetGamepadProduct(g);
                             s.device_path = path;
                             s.kit = FindKit(kd.vid, kd.pid);
-                            if (!s.kit) s.kit = &kd;
                             s.open_failed_logged = false;
                             LOG_INFO(Input,
                                      "HID instrument slot {}: opened XInput "
@@ -292,6 +292,7 @@ void PollLoop() {
                             SDL_hid_device* d = SDL_hid_open_path(path.c_str());
                             if (!d) continue;
                             SDL_hid_set_nonblocking(d, 1);
+                            std::lock_guard<std::mutex> lk(s.mu);
                             s.dev = d;
                             s.vid = kd.vid;
                             s.pid = kd.pid;
@@ -317,12 +318,12 @@ void PollLoop() {
                 continue;
             }
 
+            std::lock_guard<std::mutex> lk(s.mu);
             if (s.midi) {
                 u8 buf[Input::MidiInput::kSnapshotBytes];
                 const std::size_t n = Input::MidiInput::SnapshotDrumBuffer(
                     s.midi, buf, Input::MidiInput::kSnapshotBytes);
                 if (n > 0) {
-                    std::lock_guard<std::mutex> lk(s.mu);
                     const bool changed =
                         s.last_report_len != n || std::memcmp(s.last_report, buf, n) != 0;
                     std::memcpy(s.last_report, buf, n);
@@ -337,7 +338,6 @@ void PollLoop() {
                 SDL_UpdateGamepads();
                 u8 buf[kXInputReportLen];
                 FillXInputReport(static_cast<SDL_Gamepad*>(s.gamepad), buf);
-                std::lock_guard<std::mutex> lk(s.mu);
                 const bool changed =
                     s.last_report_len != kXInputReportLen ||
                     std::memcmp(s.last_report, buf, kXInputReportLen) != 0;
@@ -353,7 +353,6 @@ void PollLoop() {
                 int n = SDL_hid_read_timeout(
                     static_cast<SDL_hid_device*>(s.dev), buf, kMaxRawReport, 0);
                 if (n > 0) {
-                    std::lock_guard<std::mutex> lk(s.mu);
                     const bool changed =
                         s.last_report_len != static_cast<std::size_t>(n) ||
                         std::memcmp(s.last_report, buf, n) != 0;
@@ -362,20 +361,20 @@ void PollLoop() {
                     s.has_data = true;
                     if (changed) {
                         Input::NoteInputOnSlot(slot - 1);
-                        // Fire the slot's Login event the first time
-                        // real instrument input arrives — same UX HID
-                        // gamepad / keyboard input gets via
-                        // FinalizeUpdate. Without this, a MIDI / raw-HID
-                        // / XInput-source kit that's the slot's ONLY
-                        // input source never reaches the game's user
-                        // list, so the game treats the slot as absent.
                         Input::GameControllers::EnsureLoggedIn(slot - 1);
                     }
                 } else if (n < 0) {
                     LOG_WARNING(Input,
                                 "HID instrument slot {}: read error, closing & will retry",
                                 slot);
-                    CloseSlot(s);
+                    SDL_hid_close(static_cast<SDL_hid_device*>(s.dev));
+                    s.dev = nullptr;
+                    s.vid = s.pid = 0;
+                    s.device_path.clear();
+                    s.kit = nullptr;
+                    s.has_data = false;
+                    s.last_report_len = 0;
+                    s.open_failed_logged = false;
                 }
             }
         }
@@ -394,18 +393,7 @@ void RescanKits() {
     // Drop any per-slot kit pointers so they get re-resolved on the next
     // poll tick (the old pointer was into the cleared g_kits vector).
     for (int i = 0; i < kNumSlots; ++i) {
-        SlotState& s = g_slots[i];
-        if (s.dev) {
-            SDL_hid_close(static_cast<SDL_hid_device*>(s.dev));
-            s.dev = nullptr;
-        }
-        s.vid = s.pid = 0;
-        s.device_path.clear();
-        s.kit = nullptr;
-        std::lock_guard<std::mutex> lk(s.mu);
-        s.has_data = false;
-        s.last_report_len = 0;
-        s.open_failed_logged = false;
+        CloseSlot(g_slots[i]);
     }
 }
 

@@ -303,6 +303,7 @@ int PS4_SYSV_ABI scePadReadBlasterForTracker();
 int PS4_SYSV_ABI scePadReadExt();
 int PS4_SYSV_ABI scePadReadForTracker();
 int PS4_SYSV_ABI scePadReadHistory();
+OrbisPadDeviceClass ResolveDeviceClass(s32 handle);
 int PS4_SYSV_ABI scePadReadState(s32 handle, OrbisPadData* pData);
 int PS4_SYSV_ABI scePadReadStateExt();
 int PS4_SYSV_ABI scePadResetLightBar(s32 handle);

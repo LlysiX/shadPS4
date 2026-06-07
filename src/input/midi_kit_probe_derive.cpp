@@ -107,7 +107,7 @@ void EmitVelocityScale(std::ostringstream& os, const MidiKitProbeData& data,
     // module with a max-velocity of e.g. 90 isn't clipped to half-power
     // in game.
     const int lo = 1;
-    const int hi = notes.front().peak_vel;
+    const int hi = (notes.front().peak_vel * 255 + 63) / 127;
     if (hi <= lo) return;
     os << "\"" << pad.toml_key << "\" = { lo = " << lo << ", hi = " << hi
        << " }\n";

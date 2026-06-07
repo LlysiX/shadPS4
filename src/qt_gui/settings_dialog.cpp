@@ -10,14 +10,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCompleter>
-#include <QLabel>
-#include <QSlider>
-#include <QVBoxLayout>
 #include <QDirIterator>
 #include <QFileDialog>
 #include <QHoverEvent>
+#include <QLabel>
 #include <QMessageBox>
+#include <QSlider>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <SDL3/SDL.h>
 #include <fmt/format.h>
 
@@ -183,8 +183,8 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
     // Populate every per-player mic combo from the same device list, so
     // each harmony singer can pick a different physical mic from the
     // same dropdown contents.
-    const std::array<QComboBox*, 4> micCombos = {
-        ui->micComboBox, ui->micComboBox2, ui->micComboBox3, ui->micComboBox4};
+    const std::array<QComboBox*, 4> micCombos = {ui->micComboBox, ui->micComboBox2,
+                                                 ui->micComboBox3, ui->micComboBox4};
     for (QComboBox* combo : micCombos) {
         combo->addItem(micMap.key("None"), "None");
         combo->addItem(micMap.key("Default Device"), "Default Device");
@@ -314,15 +314,14 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
         // Per-player (slots 1..3, mapped to players 2..4) mic combos +
         // gate toggles + threshold sliders. Slot 0 (player 1) is the
         // existing primary mic above; these are the harmony slots.
-        const std::array<std::tuple<int, QCheckBox*, QSlider*, QLabel*>, 3>
-            harmony_rows = {
-                std::make_tuple(1, ui->micGateCheckBox2, ui->micGateThresholdSlider2,
-                                ui->micGateThresholdValueLabel2),
-                std::make_tuple(2, ui->micGateCheckBox3, ui->micGateThresholdSlider3,
-                                ui->micGateThresholdValueLabel3),
-                std::make_tuple(3, ui->micGateCheckBox4, ui->micGateThresholdSlider4,
-                                ui->micGateThresholdValueLabel4),
-            };
+        const std::array<std::tuple<int, QCheckBox*, QSlider*, QLabel*>, 3> harmony_rows = {
+            std::make_tuple(1, ui->micGateCheckBox2, ui->micGateThresholdSlider2,
+                            ui->micGateThresholdValueLabel2),
+            std::make_tuple(2, ui->micGateCheckBox3, ui->micGateThresholdSlider3,
+                            ui->micGateThresholdValueLabel3),
+            std::make_tuple(3, ui->micGateCheckBox4, ui->micGateThresholdSlider4,
+                            ui->micGateThresholdValueLabel4),
+        };
         for (const auto& [slot, checkbox, slider, value_label] : harmony_rows) {
             connect(slider, &QSlider::valueChanged, this,
                     [this, slot, value_label, slider](int value) {
@@ -331,12 +330,11 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
                         slider->setEnabled(Config::getMicGateEnabled(slot));
                     });
 #if (QT_VERSION < QT_VERSION_CHECK(6, 7, 0))
-            connect(checkbox, &QCheckBox::stateChanged, this,
-                    [this, slot, slider](int state) {
-                        const bool enabled = (state == Qt::Checked);
-                        Config::setMicGateEnabled(slot, enabled, is_game_specific);
-                        slider->setEnabled(enabled);
-                    });
+            connect(checkbox, &QCheckBox::stateChanged, this, [this, slot, slider](int state) {
+                const bool enabled = (state == Qt::Checked);
+                Config::setMicGateEnabled(slot, enabled, is_game_specific);
+                slider->setEnabled(enabled);
+            });
 #else
             connect(checkbox, &QCheckBox::checkStateChanged, this,
                     [this, slot, slider](Qt::CheckState state) {
@@ -791,17 +789,16 @@ void SettingsDialog::LoadValuesFromConfig() {
     // extraMicsGroupBox. Each slot reads from Config, which already
     // migrated legacy `micDevice` / `micGateEnabled` / `micGateThresholdDb`
     // keys into slot 0 on load.
-    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*, QLabel*>, 4>
-        mic_rows = {
-            std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox,
-                            ui->micGateThresholdSlider, ui->micGateThresholdValueLabel),
-            std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2,
-                            ui->micGateThresholdSlider2, ui->micGateThresholdValueLabel2),
-            std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3,
-                            ui->micGateThresholdSlider3, ui->micGateThresholdValueLabel3),
-            std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4,
-                            ui->micGateThresholdSlider4, ui->micGateThresholdValueLabel4),
-        };
+    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*, QLabel*>, 4> mic_rows = {
+        std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox, ui->micGateThresholdSlider,
+                        ui->micGateThresholdValueLabel),
+        std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2, ui->micGateThresholdSlider2,
+                        ui->micGateThresholdValueLabel2),
+        std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3, ui->micGateThresholdSlider3,
+                        ui->micGateThresholdValueLabel3),
+        std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4, ui->micGateThresholdSlider4,
+                        ui->micGateThresholdValueLabel4),
+    };
     for (const auto& [slot, combo, checkbox, slider, value_label] : mic_rows) {
         const QString micValue = QString::fromStdString(Config::getMicDevice(slot));
         const int idx = combo->findData(micValue);
@@ -1017,18 +1014,18 @@ struct SlotWidgets {
 static SlotWidgets ResolveSlotWidgets(Ui::SettingsDialog* ui, int slot) {
     switch (slot) {
     case 1:
-        return {ui->micComboBox2, ui->micGateCheckBox2,
-                ui->micGateThresholdSlider2, ui->micGateThresholdValueLabel2};
+        return {ui->micComboBox2, ui->micGateCheckBox2, ui->micGateThresholdSlider2,
+                ui->micGateThresholdValueLabel2};
     case 2:
-        return {ui->micComboBox3, ui->micGateCheckBox3,
-                ui->micGateThresholdSlider3, ui->micGateThresholdValueLabel3};
+        return {ui->micComboBox3, ui->micGateCheckBox3, ui->micGateThresholdSlider3,
+                ui->micGateThresholdValueLabel3};
     case 3:
-        return {ui->micComboBox4, ui->micGateCheckBox4,
-                ui->micGateThresholdSlider4, ui->micGateThresholdValueLabel4};
+        return {ui->micComboBox4, ui->micGateCheckBox4, ui->micGateThresholdSlider4,
+                ui->micGateThresholdValueLabel4};
     case 0:
     default:
-        return {ui->micComboBox, ui->micGateCheckBox,
-                ui->micGateThresholdSlider, ui->micGateThresholdValueLabel};
+        return {ui->micComboBox, ui->micGateCheckBox, ui->micGateThresholdSlider,
+                ui->micGateThresholdValueLabel};
     }
 }
 
@@ -1071,9 +1068,11 @@ void SettingsDialog::StartMicPreview() {
 }
 
 void SettingsDialog::StartMicPreview(int slot) {
-    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size())) return;
+    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size()))
+        return;
     // Don't fight a running game for the capture device.
-    if (is_game_running) return;
+    if (is_game_running)
+        return;
     StopMicPreview(slot);
 
     const auto w = ResolveSlotWidgets(ui.get(), slot);
@@ -1088,7 +1087,8 @@ void SettingsDialog::StartMicPreview(int slot) {
     if (dev_data != "Default Device") {
         bool ok = false;
         const uint dev = dev_data.toUInt(&ok);
-        if (ok) dev_id = static_cast<SDL_AudioDeviceID>(dev);
+        if (ok)
+            dev_id = static_cast<SDL_AudioDeviceID>(dev);
     }
 
     SDL_AudioSpec spec;
@@ -1098,7 +1098,8 @@ void SettingsDialog::StartMicPreview(int slot) {
     spec.freq = 44100;
     SDL_InitSubSystem(SDL_INIT_AUDIO);
     s.stream = SDL_OpenAudioDeviceStream(dev_id, &spec, nullptr, nullptr);
-    if (!s.stream) return;
+    if (!s.stream)
+        return;
     SDL_ResumeAudioStreamDevice(s.stream);
     s.gate_open = false;
     s.last_active = std::chrono::steady_clock::now();
@@ -1114,7 +1115,8 @@ void SettingsDialog::StopMicPreview() {
 }
 
 void SettingsDialog::StopMicPreview(int slot) {
-    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size())) return;
+    if (slot < 0 || slot >= static_cast<int>(m_mic_previews.size()))
+        return;
     auto& s = m_mic_previews[slot];
     if (s.stream) {
         SDL_DestroyAudioStream(s.stream);
@@ -1136,13 +1138,16 @@ void SettingsDialog::UpdateMicPreview() {
     const auto now = std::chrono::steady_clock::now();
     for (int slot = 0; slot < static_cast<int>(m_mic_previews.size()); ++slot) {
         auto& s = m_mic_previews[slot];
-        if (!s.stream) continue;
+        if (!s.stream)
+            continue;
         const int avail = SDL_GetAudioStreamAvailable(s.stream);
-        if (avail <= 0) continue;
+        if (avail <= 0)
+            continue;
         const int to_read = std::min(avail, max_bytes);
         buf.resize(to_read / sizeof(int16_t));
         const int got = SDL_GetAudioStreamData(s.stream, buf.data(), to_read);
-        if (got <= 0) continue;
+        if (got <= 0)
+            continue;
         const int count = got / static_cast<int>(sizeof(int16_t));
 
         double sum_sq = 0.0;
@@ -1394,20 +1399,14 @@ void SettingsDialog::UpdateSettings(bool is_specific) {
     // live via their valueChanged/stateChanged handlers, but UpdateSettings
     // is the only path that runs setMicDevice for the combos (no live
     // handler for those) and is what eventually triggers Config::save().
-    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*>, 4>
-        save_mic_rows = {
-            std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox,
-                            ui->micGateThresholdSlider),
-            std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2,
-                            ui->micGateThresholdSlider2),
-            std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3,
-                            ui->micGateThresholdSlider3),
-            std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4,
-                            ui->micGateThresholdSlider4),
-        };
+    const std::array<std::tuple<int, QComboBox*, QCheckBox*, QSlider*>, 4> save_mic_rows = {
+        std::make_tuple(0, ui->micComboBox, ui->micGateCheckBox, ui->micGateThresholdSlider),
+        std::make_tuple(1, ui->micComboBox2, ui->micGateCheckBox2, ui->micGateThresholdSlider2),
+        std::make_tuple(2, ui->micComboBox3, ui->micGateCheckBox3, ui->micGateThresholdSlider3),
+        std::make_tuple(3, ui->micComboBox4, ui->micGateCheckBox4, ui->micGateThresholdSlider4),
+    };
     for (const auto& [slot, combo, checkbox, slider] : save_mic_rows) {
-        Config::setMicDevice(slot, combo->currentData().toString().toStdString(),
-                             is_specific);
+        Config::setMicDevice(slot, combo->currentData().toString().toStdString(), is_specific);
         Config::setMicGateEnabled(slot, checkbox->isChecked(), is_specific);
         Config::setMicGateThresholdDb(slot, slider->value(), is_specific);
     }

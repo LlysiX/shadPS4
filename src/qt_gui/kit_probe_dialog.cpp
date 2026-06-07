@@ -1313,9 +1313,17 @@ void KitProbeDialog::onSaveResults() {
         rf.close();
     }
 
+    // Hot-reload parity with the MIDI branch: drop the kit into g_kits
+    // and close any open slot bound to its vid:pid so the runtime
+    // PollLoop rebinds against the just-written TOML on its next tick.
+    // Without this the user has to close + reopen the game to pick up
+    // the new button mapping.
+    Input::HidInstrument::LoadKitFile(tomlPath.toStdString());
+
     QString msg = tr("Saved into your shadPS4 user folder:\n\n"
-                     "  %1   (runtime kit definition, auto-loaded at next launch)\n"
-                     "  %2   (raw HID captures, for re-deriving the mapping later)")
+                     "  %1   (runtime kit definition)\n"
+                     "  %2   (raw HID captures, for re-deriving the mapping later)\n\n"
+                     "Re-binding live — your kit's new button mapping is active immediately.")
                       .arg(tomlPath)
                       .arg(rawPath);
 

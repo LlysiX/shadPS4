@@ -27,8 +27,8 @@ struct ByteObs {
 };
 
 struct StepResultData {
-    std::string key;       // e.g. "green_fret"
-    std::string kind;      // "digital" / "velocity" / "motion" / "combo" / "tilt_dir"
+    std::string key;  // e.g. "green_fret"
+    std::string kind; // "digital" / "velocity" / "motion" / "combo" / "tilt_dir"
     bool captured = false;
     std::array<ByteObs, kProbeMaxReportLen> bytes{};
     std::vector<std::vector<uint8_t>> raw;
@@ -38,7 +38,7 @@ enum class ProbeDeviceType {
     Drum,
     ProDrum,
     Guitar,
-    GuitarSolo,  // 5-fret guitar with upper-neck solo frets (PS4/PS5 RB)
+    GuitarSolo, // 5-fret guitar with upper-neck solo frets (PS4/PS5 RB)
 };
 
 struct KitProbeData {
@@ -71,4 +71,4 @@ std::string DeriveKitToml(const KitProbeData& data);
 // step frames (specifically _idle_baseline and _motion_baseline).
 void DeriveBaselineAndMotion(KitProbeData& data);
 
-}  // namespace Input::HidInstrument
+} // namespace Input::HidInstrument

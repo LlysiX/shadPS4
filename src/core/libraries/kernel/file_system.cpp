@@ -1082,7 +1082,7 @@ s32 PS4_SYSV_ABI posix_unlink(const char* path) {
         *__Error() = POSIX_EISDIR;
         return -1;
     }
-    
+
     std::filesystem::remove(src_path);
 
     return ORBIS_OK;

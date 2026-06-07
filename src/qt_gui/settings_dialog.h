@@ -93,7 +93,7 @@ private:
     // stream so all 4 can run concurrently while the dialog is open.
     struct MicPreviewSlot {
         SDL_AudioStream* stream = nullptr;
-        QString device;  // device-data string currently open
+        QString device; // device-data string currently open
         bool gate_open = false;
         std::chrono::steady_clock::time_point last_active{};
         MicLevelMeter* meter = nullptr;

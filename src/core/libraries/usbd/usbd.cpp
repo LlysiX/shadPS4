@@ -58,15 +58,14 @@ s64 PS4_SYSV_ABI sceUsbdGetDeviceList(SceUsbdDevice*** list) {
         libusb_device* dev = (*list)[i];
         libusb_device_descriptor desc{};
         const bool hide = libusb_get_device_descriptor(dev, &desc) == 0 &&
-                          Input::HidInstrument::ShouldHideFromUsbd(desc.idVendor,
-                                                                   desc.idProduct);
+                          Input::HidInstrument::ShouldHideFromUsbd(desc.idVendor, desc.idProduct);
         if (hide) {
             libusb_unref_device(dev);
         } else {
             (*list)[kept++] = dev;
         }
     }
-    (*list)[kept] = nullptr;  // libusb_free_device_list stops at the first null
+    (*list)[kept] = nullptr; // libusb_free_device_list stops at the first null
     return kept;
 }
 

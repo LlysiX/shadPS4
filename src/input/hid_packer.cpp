@@ -682,6 +682,10 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
         // pads through the typed-data API. The else-branch also handles
         // generic dud_layout[]-driven kits, where dud_layout[i] is meant to
         // align with the same per-index semantics — no special remapping.
+        // Same race avoidance as PackButtons/PackDeviceUniqueData —
+        // g_kits_mu pins the kit's std::string/std::vector members
+        // against an in-place *it = std::move(k) from LoadKitFile.
+        std::lock_guard<std::mutex> kits_lk(g_kits_mu);
         const KitDef* kit = (slot >= 1 && slot <= kNumSlots) ? g_slots[slot - 1].kit
                                                               : nullptr;
         const bool ps4 = kit && kit->drum_ps4_layout;
@@ -706,20 +710,29 @@ bool ParseTypedData(int slot, const u8* dud, std::size_t dud_len,
     return false;
 }
 
+// All three accessors return a value-copy of one of KitDef's std::string
+// fields. Hold g_kits_mu so a LoadKitFile racing on the same KitDef node
+// (*it = std::move(k)) can't tear the read mid-copy. ResolveDeviceClass
+// drives the FillLegacyInstrumentData / sceAudioInOpen hot path through
+// GetActiveKitDeviceClass at scePadRead cadence, so this lock matters in
+// practice — same race PackButtons/PackDeviceUniqueData were patched for.
 std::string GetActiveKitName(int slot) {
     if (slot < 1 || slot > kNumSlots) return {};
+    std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->name : std::string{};
 }
 
 std::string GetActiveKitSource(int slot) {
     if (slot < 1 || slot > kNumSlots) return {};
+    std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->source : std::string{};
 }
 
 std::string GetActiveKitDeviceClass(int slot) {
     if (slot < 1 || slot > kNumSlots) return {};
+    std::lock_guard<std::mutex> lk(g_kits_mu);
     const auto* k = g_slots[slot - 1].kit;
     return k ? k->device_class : std::string{};
 }

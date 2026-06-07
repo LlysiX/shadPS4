@@ -36,6 +36,14 @@ static OrbisPadDeviceClass KitClassFromString(const std::string& s) {
 //   2. useSpecialPad{N} → the user-pinned class from Config.
 //   3. Otherwise → SDL's detected class (Guitar / Drum / Standard).
 OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
+    // Guard against handle 0 / handle > 4 — every caller is supposed to
+    // pass 1..4 but a stubbed sce* path or a future caller mistakenly
+    // forwarding a sceUserServiceUserId could feed garbage in. Falling
+    // back to Standard keeps the misuse contained (no controllers[-1]
+    // UB, no kit lookup that races) until the caller is fixed.
+    if (handle < 1 || handle > 4) {
+        return OrbisPadDeviceClass::Standard;
+    }
     OrbisPadDeviceClass result;
     if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
         const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);

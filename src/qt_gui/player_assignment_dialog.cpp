@@ -288,12 +288,10 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
                 if (SDL_GetGamepadButton(gp, b)) { any = true; break; }
             }
             if (!any) continue;
-            // The runtime FindBoundSlotForGamepad is the source of
-            // truth for "which slot would this pad land on" — use it
-            // here so the green tab/row indicator reflects what RB4
-            // (and the rest of the runtime) actually sees. Falls back
-            // to SDL_GetGamepadPlayerIndex when no binding matches,
-            // which mirrors the runtime's pass-2 placement.
+            // FindBoundSlotForGamepad is the runtime's placement source
+            // of truth — using it here keeps the dialog's glow agreeing
+            // with where input will land in-game. SDL_GetGamepadPlayerIndex
+            // is the pass-2 fallback when no binding matches.
             char guid_buf[33];
             SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), guid_buf, sizeof(guid_buf));
             const char* path_c = SDL_GetJoystickPathForID(id);
@@ -341,11 +339,9 @@ PlayerAssignmentDialog::PlayerAssignmentDialog(QWidget* parent) : QDialog(parent
             m_tabs->tabBar()->setTabTextColor(
                 slot, active ? QColor(0x4c, 0xc2, 0x5a) : QColor());
 
-            // VU meter: drain the dialog-local preview stream, compute
-            // RMS → dBFS, map onto 0..1. We use the dialog's own SDL
-            // recording stream because Libraries::AudioIn::GetMicPeakDbfs
-            // is silent until a game has actually opened sceAudioIn —
-            // useless while the user is in settings.
+            // Drain the dialog-local preview stream — the runtime
+            // GetMicPeakDbfs is only populated after a game opens
+            // sceAudioIn, which is useless from the settings dialog.
             float lvl = 0.0f;
             if (auto* stream = m_slots[slot].previewStream) {
                 const int avail = SDL_GetAudioStreamAvailable(stream);

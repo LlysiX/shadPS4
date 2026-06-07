@@ -51,12 +51,9 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
     : QDialog(parent), ui(new Ui::SpecialDevicesDialog) {
     ui->setupUi(this);
 
-    // Per-player Special Pad / Class / Legacy / Probe controls all
-    // moved into Player Assignment Overrides — this dialog is now the
-    // system-wide kit library + udev installer. Populate the dropdowns
-    // we still need for loadFromConfig()/writeConfig() consistency, but
-    // hide the per-row widgets so the dialog only shows what's left
-    // (kit count, refresh, udev install, help text).
+    // The per-player widgets stay in the .ui (loadFromConfig / writeConfig
+    // still reference them) but are hidden — that config lives in
+    // Player Assignment Overrides now.
     for (int slot = 1; slot <= 4; ++slot) {
         auto* cls = specialPadClassCb(slot);
         for (const auto& item : kSpecialPadClasses) {
@@ -65,7 +62,6 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
         connect(probeBtn(slot), &QPushButton::clicked, this, [this, slot]() { onProbeKit(slot); });
         connect(legacyCb(slot), &QCheckBox::toggled, this,
                 [this, slot](bool checked) { onLegacyToggled(slot, checked); });
-        // Hide the per-row widgets — they live in Player Assignment now.
         useSpecialPadCb(slot)->setVisible(false);
         specialPadClassCb(slot)->setVisible(false);
         legacyCb(slot)->setVisible(false);
@@ -73,8 +69,7 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
         udevWarn(slot)->setVisible(false);
         statusLbl(slot)->setVisible(false);
     }
-    // Hide the per-row labels in column 0 + the column headers too. The
-    // grid widget container is unnamed, so we walk children by name.
+    // The grid container is unnamed in the .ui, so walk by child name.
     for (const QString name : {QStringLiteral("h0"), QStringLiteral("h1"), QStringLiteral("h2"),
                                 QStringLiteral("h3"), QStringLiteral("h4"),
                                 QStringLiteral("h5"), QStringLiteral("p1Lbl"),
@@ -83,17 +78,12 @@ SpecialDevicesDialog::SpecialDevicesDialog(QWidget* parent)
         if (auto* w = findChild<QWidget*>(name))
             w->setVisible(false);
     }
-    // Replace the dialog's intro help with a pointer to the new home.
     ui->helpLabel->setText(
         tr("Per-player special-device config (Special Pad, device class, Legacy raw-HID) "
            "now lives in Settings → Configure Controls → Player Assignment Overrides. "
            "This dialog is the system-wide kit library: see every detected HID device, "
            "probe new instruments, and install Linux udev rules."));
 
-    // Build the kit-library section as a sibling of the (now-hidden)
-    // per-player grid. We tack it onto the dialog's root vertical layout
-    // — the .ui already gave us a QVBoxLayout named rootLayout — so the
-    // library sits above the buttonBox.
     auto* libraryBox = new QGroupBox(tr("Detected HID instruments"), this);
     auto* libraryLayout = new QVBoxLayout(libraryBox);
     m_kit_list = new QListWidget(libraryBox);

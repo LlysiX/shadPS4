@@ -352,8 +352,18 @@ void GameControllers::ApplyAssignmentChanges() {
                          bound - 1);
                 SDL_CloseGamepad(gc->m_sdl_gamepad);
                 gc->m_sdl_gamepad = nullptr;
-                AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
-                gc->user_id = -1;
+                // Only emit Logout for a slot that actually had a Login
+                // queued. After v0.7 removed auto-Login, EnsureLoggedIn
+                // only fires on first real input — a slot that was
+                // reassigned before any input would have user_id == -1
+                // and pushing a Logout here would feed RB4 a stray
+                // "user N gone" event with no matching Login, dropping
+                // the slot in the game's accounting before the player
+                // ever pressed OPTIONS.
+                if (gc->user_id >= 0) {
+                    AddUserServiceEvent({OrbisUserServiceEventType::Logout, gc->user_id});
+                    gc->user_id = -1;
+                }
             }
         }
         auto& secs = gc->m_additional_gamepads;
@@ -434,8 +444,20 @@ void GameControllers::TryOpenSDLControllers(GameControllers& controllers) {
                              i);
                 } else {
                     slot_taken[i] = false;
-                    AddUserServiceEvent({OrbisUserServiceEventType::Logout, i + 1});
-                    gc->user_id = -1;
+                    // Same guard as ApplyAssignmentChanges: only push
+                    // Logout if the slot actually saw a Login fire.
+                    // Without this, an SDL gamepad that connects and
+                    // disconnects transiently at startup (or that the
+                    // user re-plugs after launching) sprays Logouts for
+                    // user_id == 0 into the game's event queue. RB4
+                    // reads those and decides "no user logged in";
+                    // subsequent EnsureLoggedIn → Login events arrive
+                    // too late for the game to re-recognise the slot
+                    // as a drummer.
+                    if (gc->user_id >= 0) {
+                        AddUserServiceEvent({OrbisUserServiceEventType::Logout, gc->user_id});
+                        gc->user_id = -1;
+                    }
                 }
             }
         }

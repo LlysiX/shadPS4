@@ -56,6 +56,22 @@ std::string ExtractField(const std::string &line, const std::string &key) {
     }
     return line.substr(pos, end - pos);
   }
+  if (line[pos] == '{') {
+    // Return everything from '{' through its matching '}'. Brace-depth
+    // tracked so a nested object inside the value doesn't terminate
+    // the slice early.
+    int depth = 0;
+    std::size_t end = pos;
+    for (; end < line.size(); ++end) {
+      if (line[end] == '{')
+        ++depth;
+      else if (line[end] == '}' && --depth == 0) {
+        ++end;
+        break;
+      }
+    }
+    return line.substr(pos, end - pos);
+  }
   auto end = line.find_first_of(",}", pos);
   return line.substr(pos, end - pos);
 }
@@ -95,7 +111,68 @@ std::vector<MidiEvent> ParseEvents(const std::string &arr) {
   return out;
 }
 
-bool LoadMidiCapture(const fs::path &path, MidiKitProbeData &out) {
+// Parse an inline JSON object like {"36":"red","38":"yellow",...} into
+// a (note → pad-name) vector. Tolerant of whitespace; keys may be
+// quoted strings holding decimal integers (the wizard writes them that
+// way since JSON object keys must be strings).
+std::vector<std::pair<int, std::string>>
+ParseExpectedPad(const std::string &obj) {
+  std::vector<std::pair<int, std::string>> out;
+  std::size_t i = 0;
+  while ((i = obj.find('"', i)) != std::string::npos) {
+    auto key_end = obj.find('"', i + 1);
+    if (key_end == std::string::npos)
+      break;
+    const std::string key = obj.substr(i + 1, key_end - i - 1);
+    auto colon = obj.find(':', key_end);
+    if (colon == std::string::npos)
+      break;
+    auto val_start = obj.find('"', colon);
+    if (val_start == std::string::npos)
+      break;
+    auto val_end = obj.find('"', val_start + 1);
+    if (val_end == std::string::npos)
+      break;
+    const std::string val = obj.substr(val_start + 1, val_end - val_start - 1);
+    try {
+      out.emplace_back(std::stoi(key), val);
+    } catch (...) {
+    }
+    i = val_end + 1;
+  }
+  return out;
+}
+
+// Like ParseExpectedPad but the JSON values are integers: {"red":12,...}.
+// Returns (pad-name, expected gate value) pairs.
+std::vector<std::pair<std::string, int>>
+ParseExpectedGate(const std::string &obj) {
+  std::vector<std::pair<std::string, int>> out;
+  std::size_t i = 0;
+  while ((i = obj.find('"', i)) != std::string::npos) {
+    auto key_end = obj.find('"', i + 1);
+    if (key_end == std::string::npos)
+      break;
+    const std::string key = obj.substr(i + 1, key_end - i - 1);
+    auto colon = obj.find(':', key_end);
+    if (colon == std::string::npos)
+      break;
+    auto end = obj.find_first_of(",}", colon);
+    if (end == std::string::npos)
+      end = obj.size();
+    try {
+      const int v = std::stoi(obj.substr(colon + 1, end - colon - 1));
+      out.emplace_back(key, v);
+    } catch (...) {
+    }
+    i = end + 1;
+  }
+  return out;
+}
+
+bool LoadMidiCapture(const fs::path &path, MidiKitProbeData &out,
+                     std::vector<std::pair<int, std::string>> &expected_pad,
+                     std::vector<std::pair<std::string, int>> &expected_gate) {
   std::ifstream in(path);
   if (!in)
     return false;
@@ -116,6 +193,12 @@ bool LoadMidiCapture(const fs::path &path, MidiKitProbeData &out) {
         out.version = std::stoi(ExtractField(line, "version"));
       } catch (...) {
       }
+      const std::string ep = ExtractField(line, "expected_pad");
+      if (!ep.empty())
+        expected_pad = ParseExpectedPad(ep);
+      const std::string eg = ExtractField(line, "expected_gate");
+      if (!eg.empty())
+        expected_gate = ParseExpectedGate(eg);
       continue;
     }
     const std::string step = ExtractField(line, "step");
@@ -146,7 +229,9 @@ CaseResult RunCase(const fs::path &path) {
   CaseResult r{};
   r.name = path.filename().string();
   MidiKitProbeData data;
-  if (!LoadMidiCapture(path, data)) {
+  std::vector<std::pair<int, std::string>> expected_pad;
+  std::vector<std::pair<std::string, int>> expected_gate;
+  if (!LoadMidiCapture(path, data, expected_pad, expected_gate)) {
     r.detail = "could not parse fixture";
     return r;
   }
@@ -155,7 +240,7 @@ CaseResult RunCase(const fs::path &path) {
     r.detail = "DeriveMidiKitToml returned empty";
     return r;
   }
-  if (!Contains(toml, "schema       = \"shadps4-midi-instrument/v1\"")) {
+  if (!Contains(toml, "schema       = \"shadps4-midi-instrument/v")) {
     r.detail = "missing midi schema header";
     return r;
   }
@@ -239,26 +324,77 @@ CaseResult RunCase(const fs::path &path) {
     }
   }
   // Captures with explicit "expected_pad" hints in their meta header
-  // pin the assignment: e.g. the python_fake_drum_kit fixture knows
-  // note 36 must land under "red" (the user hit "Kick" thinking it
-  // was the red pad — the wizard's job is to honour that).
-  static const std::pair<int, const char *> kExpected[] = {
-      // python_fake_drum_kit.midi.jsonl probe order. Reads as a
-      // smoke test for the best-owner dedup across cross-talk steps.
-      {36, "red"},   {38, "yellow"}, {42, "blue"},
-      {48, "green"}, {49, "orange"}, {51, "kick"},
-  };
-  if (r.name == "python_fake_drum_kit.midi.jsonl") {
-    for (const auto &[note, pad] : kExpected) {
-      auto it = note_owner.find(note);
-      if (it == note_owner.end()) {
-        r.detail = std::string{"expected note "} + std::to_string(note) +
-                   " under '" + pad + "' but it wasn't emitted";
+  // pin the assignment: each note must land under exactly the named
+  // pad in the derived TOML's [midi_pad_map]. Community captures carry
+  // hints derived from the user-confirmed TOML, and synthesised
+  // fixtures carry hints picked by the script that wrote them.
+  for (const auto &[note, pad] : expected_pad) {
+    auto it = note_owner.find(note);
+    if (it == note_owner.end()) {
+      r.detail = std::string{"expected note "} + std::to_string(note) +
+                 " under '" + pad + "' but it wasn't emitted";
+      return r;
+    }
+    if (it->second != pad) {
+      r.detail = std::string{"note "} + std::to_string(note) +
+                 " landed under '" + it->second + "', expected '" + pad + "'";
+      return r;
+    }
+  }
+
+  // /v2 [gate] assertion: parse the derived TOML's gate block and
+  // compare each pad's value against the meta's expected_gate hint.
+  // Captures without expected_gate (most existing fixtures) skip this
+  // check entirely.
+  if (!expected_gate.empty()) {
+    std::map<std::string, int> emitted_gate;
+    std::istringstream iss(toml);
+    std::string line;
+    bool in_gate = false;
+    while (std::getline(iss, line)) {
+      while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+        line.erase(line.begin());
+      while (!line.empty() &&
+             (line.back() == ' ' || line.back() == '\n' || line.back() == '\t'))
+        line.pop_back();
+      if (line.empty())
+        continue;
+      if (line == "[gate]") {
+        in_gate = true;
+        continue;
+      }
+      if (line.front() == '[') {
+        in_gate = false;
+        continue;
+      }
+      if (!in_gate)
+        continue;
+      // Lines look like:  "red" = 12
+      const auto eq = line.find('=');
+      if (eq == std::string::npos)
+        continue;
+      std::string key = line.substr(0, eq);
+      while (!key.empty() && (key.back() == ' ' || key.back() == '\t'))
+        key.pop_back();
+      if (key.size() >= 2 && key.front() == '"' && key.back() == '"')
+        key = key.substr(1, key.size() - 2);
+      try {
+        const int v = std::stoi(line.substr(eq + 1));
+        emitted_gate[key] = v;
+      } catch (...) {
+      }
+    }
+    for (const auto &[pad, expected] : expected_gate) {
+      auto it = emitted_gate.find(pad);
+      if (it == emitted_gate.end()) {
+        r.detail = "expected [gate] entry for '" + pad +
+                   "' = " + std::to_string(expected) + " but none emitted";
         return r;
       }
-      if (it->second != pad) {
-        r.detail = std::string{"note "} + std::to_string(note) +
-                   " landed under '" + it->second + "', expected '" + pad + "'";
+      if (it->second != expected) {
+        r.detail = "[gate] '" + pad + "' emitted as " +
+                   std::to_string(it->second) + ", expected " +
+                   std::to_string(expected);
         return r;
       }
     }
@@ -270,9 +406,11 @@ CaseResult RunCase(const fs::path &path) {
 } // namespace
 
 int main(int argc, char **argv) {
+  // Default fixtures root is tests/midi — the walker is recursive so it
+  // picks up both synthesised/ (Python-generated edge cases) and
+  // community/ (real-hardware captures with expected_pad hints).
   fs::path fixtures =
-      (argc > 1) ? fs::path(argv[1])
-                 : fs::current_path() / "tests" / "midi" / "synthesised";
+      (argc > 1) ? fs::path(argv[1]) : fs::current_path() / "tests" / "midi";
   if (!fs::is_directory(fixtures)) {
     std::cerr << "miditest: fixtures dir not found: " << fixtures << "\n";
     return 2;

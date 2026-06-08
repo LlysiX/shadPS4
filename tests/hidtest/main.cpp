@@ -584,7 +584,7 @@ CaseResult RunCase(const fs::path &path) {
     r.detail = "DeriveKitToml returned empty";
     return r;
   }
-  if (!TomlContains(toml, "schema       = \"shadps4-legacy-instrument/v1\"")) {
+  if (!TomlContains(toml, "schema       = \"shadps4-legacy-instrument/v")) {
     r.detail = "missing schema header";
     return r;
   }

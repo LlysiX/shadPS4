@@ -64,6 +64,60 @@ u32 ParseHexOrDec(const std::string& s) {
     }
 }
 
+// MIDI pad-name → raw snapshot byte index. The [gate] table operates
+// in raw-byte space because PackButtons and pack_vel both read raw[]
+// bytes — gating the raw byte means a sub-threshold value contributes
+// neither a face-button bit nor a velocity output.
+constexpr std::pair<const char*, int> kMidiPadNameToRawByte[] = {
+    {"red", 3},           {"blue", 5},        {"yellow", 4},
+    {"green", 6},         {"orange", 6}, // 5-lane GH alias
+    {"kick", 1},          {"kick2", 1},       {"yellow_cymbal", 8},
+    {"orange_cymbal", 8}, {"blue_cymbal", 9}, {"green_cymbal", 10},
+};
+
+// MIDI pad-name → dud slot index for the PS4 RB drum wire format
+// (the layout pack_vel writes into). No entry for kick — RB4 drums
+// have no kick velocity slot; kick is button-only via L1. The MIDI
+// wizard writes [velocity_scaling] keyed by these names; readers had
+// previously expected only numeric keys, so MIDI velocity_scaling was
+// dead code prior to /v2.
+constexpr std::pair<const char*, int> kMidiPadNameToDudIdx[] = {
+    {"red", 0},           {"blue", 1},          {"yellow", 2},      {"green", 3},
+    {"orange", 3}, // 5-lane GH alias on green
+    {"yellow_cymbal", 4}, {"orange_cymbal", 4}, {"blue_cymbal", 5}, {"green_cymbal", 6},
+};
+
+// Resolve a [gate] key. Numeric → raw byte index (HID kits). String →
+// pad name (MIDI kits) translated via kMidiPadNameToRawByte. -1 if
+// neither.
+int ResolveGateKey(const std::string& key) {
+    for (const auto& [n, b] : kMidiPadNameToRawByte) {
+        if (key == n)
+            return b;
+    }
+    try {
+        return std::stoi(key);
+    } catch (...) {
+        return -1;
+    }
+}
+
+// Resolve a [velocity_scaling] key. Numeric → dud slot index directly
+// (HID kits). String → pad name (MIDI kits) translated via
+// kMidiPadNameToDudIdx. -1 if neither, or if the pad has no dud slot
+// (kick under MIDI).
+int ResolveVelocityScalingKey(const std::string& key) {
+    for (const auto& [n, b] : kMidiPadNameToDudIdx) {
+        if (key == n)
+            return b;
+    }
+    try {
+        return std::stoi(key);
+    } catch (...) {
+        return -1;
+    }
+}
+
 // Decode tilt → acceleration.x in [-1, 1] using the given raw buffer and
 // kit parameters. The caller passes whichever frame they have; no slot
 // state involved. This is what makes the packer testable in isolation —
@@ -107,7 +161,12 @@ bool LoadKitFromToml(const std::string& file_path) {
         KitDef k;
         k.source_file = file.string();
         const std::string schema = toml::find_or<std::string>(root, "schema", "");
-        const bool is_midi = (schema == "shadps4-midi-instrument/v1");
+        // Accept /v1 and /v2 for both MIDI and HID kit schemas. /v2 added
+        // the optional [gate] table; readers tolerate either. Anything
+        // newer than /v2 is rejected so a kit written by a future shadPS4
+        // can't silently load with fields ignored.
+        const bool is_midi =
+            (schema == "shadps4-midi-instrument/v1" || schema == "shadps4-midi-instrument/v2");
         if (is_midi) {
             // MIDI kits don't have USB VID:PID — they're matched against
             // the host's MIDI ports by name. Synthesize a stable placeholder
@@ -323,12 +382,7 @@ bool LoadKitFromToml(const std::string& file_path) {
         if (root.contains("velocity_scaling")) {
             const auto& tbl = toml::find(root, "velocity_scaling").as_table();
             for (const auto& [key, val] : tbl) {
-                int idx = 0;
-                try {
-                    idx = std::stoi(key);
-                } catch (...) {
-                    continue;
-                }
+                const int idx = ResolveVelocityScalingKey(key);
                 if (idx < 0 || idx >= (int)kMaxDeviceUniqueData)
                     continue;
                 if (!val.is_table())
@@ -338,6 +392,33 @@ bool LoadKitFromToml(const std::string& file_path) {
                     k.dud_scale_lo[idx] = o.at("lo").as_integer();
                 if (o.count("hi"))
                     k.dud_scale_hi[idx] = o.at("hi").as_integer();
+            }
+        }
+        if (root.contains("gate")) {
+            // Schema /v2 noise gate. Values are stored on KitDef in
+            // 0..255 raw-byte space — the units pack_vel and
+            // PackButtons read. MIDI kits write the user-facing 0..127
+            // velocity in their TOML; convert on the way in. HID kits
+            // write raw 0..255 byte values directly.
+            const auto& tbl = toml::find(root, "gate").as_table();
+            for (const auto& [key, val] : tbl) {
+                const int raw_idx = ResolveGateKey(key);
+                if (raw_idx < 0)
+                    continue;
+                if (!val.is_integer())
+                    continue;
+                int threshold = static_cast<int>(val.as_integer());
+                if (is_midi) {
+                    // 0..127 → 0..255 with the same rounding the MIDI
+                    // snapshot writer applies to incoming velocities.
+                    threshold = (threshold * 255 + 63) / 127;
+                }
+                if (threshold < 0)
+                    threshold = 0;
+                if (threshold > 255)
+                    threshold = 255;
+                if (threshold > 0)
+                    k.raw_gate[raw_idx] = threshold;
             }
         }
         std::lock_guard<std::mutex> lk(g_kits_mu);
@@ -485,6 +566,15 @@ std::size_t PackDeviceUniqueData(int slot, const u8* raw, std::size_t raw_len,
             if (raw_idx < 0 || static_cast<std::size_t>(raw_idx) >= raw_len)
                 return;
             u8 v = raw[raw_idx];
+            // /v2 noise gate. A raw value below its per-byte threshold
+            // reads as 0 → out[dud_idx] stays at the memset default.
+            // PackButtons gates the same byte symmetrically so the
+            // face-button bit is also dropped.
+            if (auto git = kit->raw_gate.find(raw_idx); git != kit->raw_gate.end()) {
+                if (static_cast<int>(v) < git->second) {
+                    return;
+                }
+            }
             const int lo = kit->dud_scale_lo[dud_idx];
             const int hi = kit->dud_scale_hi[dud_idx];
             if (hi > lo) {
@@ -665,6 +755,16 @@ u32 PackButtons(int slot, const u8* raw, std::size_t raw_len, OPB::OrbisPadDevic
         u8 b = raw[byte_idx];
         if (suppress_frets && byte_idx == kit->fret_byte) {
             b &= ~kit->fret_mask;
+        }
+        // /v2 noise gate. The drum face-button bit mapping treats any
+        // non-zero velocity byte as a press (see fill_button at kit
+        // load), so a sub-threshold raw value would otherwise fire the
+        // face button even when pack_vel correctly silenced the dud
+        // velocity. Skip the bit-ORing here for the same reason
+        // pack_vel returns early.
+        if (auto git = kit->raw_gate.find(byte_idx); git != kit->raw_gate.end()) {
+            if (static_cast<int>(b) < git->second)
+                continue;
         }
         for (int bit = 0; bit < 8; ++bit) {
             if (b & (1u << bit))

@@ -74,6 +74,15 @@ struct KitDef {
     std::array<int, 8> dud0_bit_remap{0, 1, 2, 3, 4, 5, 6, 7};
     std::array<int, kMaxDeviceUniqueData> dud_scale_lo{};
     std::array<int, kMaxDeviceUniqueData> dud_scale_hi{};
+    // Per-raw-byte noise gate (schema /v2). Map key is the RAW byte
+    // index (same indexing PackButtons walks); value is the threshold
+    // in 0..255 native space. Any raw byte below its threshold reads
+    // as 0 to both PackButtons (no face-button bit) and pack_vel (no
+    // velocity in deviceUniqueData). Absent / 0 entries disable the
+    // gate for that byte. Pro Drum modules need this because their
+    // hi-hat pedal CC + cymbal positional aftertouch jitter into pad
+    // bytes at low velocities and would otherwise look like real hits.
+    std::map<int, int> raw_gate;
     std::string source_file;
     // MIDI-only: maps MIDI note number to a destination byte index in
     // the synthetic snapshot buffer Input::MidiInput::SnapshotDrumBuffer

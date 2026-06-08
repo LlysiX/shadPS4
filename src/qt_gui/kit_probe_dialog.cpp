@@ -5,11 +5,15 @@
 #include "ui_kit_probe_dialog.h"
 
 #include <QBrush>
+#include <QCheckBox>
 #include <QColor>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QListWidget>
@@ -19,13 +23,17 @@
 #include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSet>
+#include <QSlider>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QSysInfo>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
 #include <QUuid>
+#include <QVBoxLayout>
 
 #include <SDL3/SDL_hidapi.h>
 
@@ -494,7 +502,22 @@ void KitProbeDialog::setState(State s) {
         break;
     case State::Review:
         ui->pages->setCurrentWidget(ui->pageReview);
-        ui->reviewText->setPlainText(deriveKitToml());
+        // Show the rewritten TOML (with the user's Tune-pads overrides
+        // applied) in the review preview so what they see is what
+        // gets written to disk.
+        ui->reviewText->setPlainText(rewriteTomlWithTuneOverrides(deriveKitToml()));
+        // The Tune panel was inserted between Step and Review; hide it
+        // now that we're past it. Re-entering Tune from a future flow
+        // would rebuild it.
+        if (m_tunePanel)
+            m_tunePanel->setVisible(false);
+        break;
+    case State::Tune:
+        // The page stack stays on whatever it was (the per-step
+        // capture page); the Tune panel is overlaid into the dialog's
+        // main layout. Nothing to switch in the QStackedWidget.
+        if (m_tunePanel)
+            m_tunePanel->setVisible(true);
         break;
     }
 }
@@ -740,11 +763,29 @@ void KitProbeDialog::onNextStep() {
     if (m_state == State::Step) {
         const int next = m_currentStep + 1;
         if (next >= (int)m_results.size()) {
+            // /v2 wizard: route drum kits through the Tune-pads step
+            // before Review so the user can see + adjust the
+            // auto-derived gate/lo/hi values. Non-drum kits skip
+            // straight to Review.
+            const bool is_drum =
+                (m_deviceType == DeviceType::Drum || m_deviceType == DeviceType::ProDrum);
+            if (is_drum) {
+                setState(State::Tune);
+                enterTunePhase();
+                return;
+            }
             m_tick->stop();
             setState(State::Review);
             return;
         }
         startStep(next);
+    }
+    if (m_state == State::Tune) {
+        // "Next" from Tune phase: bank user values and proceed to
+        // Review. The actual write happens in onSaveResults via
+        // rewriteTomlWithTuneOverrides.
+        setState(State::Review);
+        return;
     }
 }
 
@@ -944,6 +985,13 @@ void KitProbeDialog::updateByteGridCell(int idx, uint8_t value, bool changed) {
 void KitProbeDialog::onTickTimer() {
     onHidReadable();
 
+    // /v2: while we're in the Tune-pads step, the same tick that
+    // drives the (otherwise idle) HID / MIDI poll feeds the live VU
+    // bars and re-colours them against the user's current gate.
+    if (m_state == State::Tune) {
+        updateTuneVuFromCurrentInputs();
+    }
+
     using clock = std::chrono::steady_clock;
     const int elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - m_stepStart).count();
@@ -1131,7 +1179,7 @@ void KitProbeDialog::onSaveResults() {
             QMessageBox::warning(this, tr("Save failed"), f.errorString());
             return;
         }
-        const QString tomlStr = deriveKitToml();
+        const QString tomlStr = rewriteTomlWithTuneOverrides(deriveKitToml());
         f.write(tomlStr.toUtf8());
         f.close();
 
@@ -1335,4 +1383,424 @@ void KitProbeDialog::onSaveResults() {
 
     QMessageBox::information(this, seems_off ? tr("Saved (with warnings)") : tr("Saved"), msg);
     accept();
+}
+
+// ============================================================================
+// /v2 Tune-pads step
+// ============================================================================
+//
+// Inserted between the last sampling step and the Review screen for drum
+// kits. Lets the user tune per-pad noise gate + lo/hi linearity values
+// from the captured data, with a live VU bar showing actual pad input
+// so they can see the gate trip in real time. Defaults are auto-derived
+// from the capture; the warning banner discourages tweaking unless the
+// user knows what they're doing.
+
+void KitProbeDialog::buildTuneRowsForKit() {
+    m_tuneRows.clear();
+    // Pad ordering follows the PS4 RB drum wire format the runtime
+    // emits. Kick has no dud slot (RB drums encode kick as L1 button
+    // only); we still show a row for it because the gate applies to
+    // the raw byte regardless of whether a velocity slot exists.
+    struct PadSpec {
+        const char* toml_key;
+        int dud_idx;   // -1 = no dud slot
+        int raw_byte;  // raw snapshot byte index
+        bool pro_only; // shown only for Pro Drum kits
+    };
+    constexpr PadSpec kSpecs[] = {
+        {"red", 0, 3, false},        {"blue", 1, 5, false},         {"yellow", 2, 4, false},
+        {"green", 3, 6, false},      {"kick", -1, 1, false},        {"yellow_cymbal", 4, 8, true},
+        {"blue_cymbal", 5, 9, true}, {"green_cymbal", 6, 10, true},
+    };
+    const bool is_pro = (m_deviceType == DeviceType::ProDrum);
+    for (const auto& s : kSpecs) {
+        if (s.pro_only && !is_pro)
+            continue;
+        PadTuneRow row;
+        row.toml_key = QString::fromLatin1(s.toml_key);
+        row.dud_idx = s.dud_idx;
+        row.raw_byte_idx = s.raw_byte;
+        m_tuneRows.push_back(row);
+    }
+}
+
+void KitProbeDialog::seedTuneDefaultsFromCapture() {
+    // Pull the same auto-derived values the toml writer would emit and
+    // pre-populate the UI with them. For MIDI: peak idle velocity per
+    // pad (scaled to 0..127). For HID: baseline_max for the raw byte
+    // (in 0..255 native). lo/hi seeded from per-step peaks.
+
+    // Build a per-byte idle peak (0..255 raw) and per-byte step peak.
+    std::array<int, 64> idle_peak{};
+    std::array<int, 64> step_peak{};
+
+    if (m_isMidi) {
+        // For MIDI the capture lives in m_midi_results parallel to
+        // m_results. We map note→byte through the same kPadDefaults
+        // RankNotesForStep would have picked.
+        // Simpler: walk every step's events; for note N find the
+        // wizard step where N had highest peak (best-owner) and
+        // attribute idle events to whichever pad ended up owning N.
+        std::map<int, int> note_to_byte;
+        // Pull best-owner mapping from m_results / m_midi_results by
+        // step-name → byte (PS4 RB drum layout):
+        static const std::map<QString, int> step_to_byte = {
+            {"red_pad", 3},    {"blue_pad", 5},      {"yellow_pad", 4},  {"green_pad", 6},
+            {"kick_pedal", 1}, {"yellow_cymbal", 8}, {"blue_cymbal", 9}, {"green_cymbal", 10},
+        };
+        // First pass: for each step's events compute per-note peak,
+        // assign that note to the step's byte with best-owner (highest
+        // peak wins, tie → highest count).
+        struct OwnerKey {
+            int byte;
+            int peak;
+            int count;
+        };
+        std::map<int, OwnerKey> best;
+        for (std::size_t i = 0; i < m_results.size() && i < m_midi_results.size(); ++i) {
+            const auto it = step_to_byte.find(m_results[i].def.key);
+            if (it == step_to_byte.end())
+                continue;
+            std::map<int, std::pair<int, int>> per_note; // note → (peak, count)
+            for (const auto& ev : m_midi_results[i].events) {
+                if (!ev.on || ev.velocity == 0)
+                    continue;
+                auto& pn = per_note[ev.note];
+                if (ev.velocity > pn.first)
+                    pn.first = ev.velocity;
+                pn.second++;
+            }
+            for (const auto& [n, pk] : per_note) {
+                OwnerKey cand{it->second, pk.first, pk.second};
+                auto bit = best.find(n);
+                if (bit == best.end() || cand.peak > bit->second.peak ||
+                    (cand.peak == bit->second.peak && cand.count > bit->second.count))
+                    best[n] = cand;
+            }
+        }
+        for (const auto& [note, ok] : best)
+            note_to_byte[note] = ok.byte;
+
+        // Second pass: walk every step (including baseline) and
+        // attribute each event's peak to its owner byte. Idle ones
+        // contribute to idle_peak; non-idle to step_peak.
+        for (std::size_t i = 0; i < m_results.size() && i < m_midi_results.size(); ++i) {
+            const bool is_idle = m_results[i].def.key.startsWith("_idle");
+            for (const auto& ev : m_midi_results[i].events) {
+                if (!ev.on || ev.velocity == 0)
+                    continue;
+                auto it = note_to_byte.find(ev.note);
+                if (it == note_to_byte.end())
+                    continue;
+                const int byte = it->second;
+                if (byte < 0 || byte >= 64)
+                    continue;
+                // Scale MIDI 0..127 → 0..255 to live in raw byte space
+                // (the runtime stores gates / scales in 0..255).
+                const int v = (int(ev.velocity) * 255 + 63) / 127;
+                if (is_idle) {
+                    if (v > idle_peak[byte])
+                        idle_peak[byte] = v;
+                } else {
+                    if (v > step_peak[byte])
+                        step_peak[byte] = v;
+                }
+            }
+        }
+    } else {
+        // HID: baseline_max[byte] is idle; per-step max is the highest
+        // observed during that pad's capture.
+        for (int b = 0; b < 64; ++b)
+            idle_peak[b] = m_baselineMax[b];
+        for (const auto& r : m_results) {
+            if (r.def.key.startsWith("_idle"))
+                continue;
+            for (int b = 0; b < 64; ++b) {
+                if (r.bytes[b].max > step_peak[b])
+                    step_peak[b] = r.bytes[b].max;
+            }
+        }
+    }
+
+    constexpr int kSafetyMargin = 4;
+    for (auto& row : m_tuneRows) {
+        const int b = row.raw_byte_idx;
+        if (b < 0 || b >= 64)
+            continue;
+        const int idle = idle_peak[b];
+        const int peak = step_peak[b];
+        int gate = (idle > 0) ? std::min(255, idle + kSafetyMargin) : 0;
+        int lo = std::max(0, idle + 2);
+        int hi = (peak > lo) ? peak : 255;
+        row.gate_slider->blockSignals(true);
+        row.gate_slider->setValue(gate);
+        row.gate_slider->blockSignals(false);
+        row.gate_value->setText(QString::number(gate));
+        row.lo_spin->blockSignals(true);
+        row.lo_spin->setValue(lo);
+        row.lo_spin->blockSignals(false);
+        row.hi_spin->blockSignals(true);
+        row.hi_spin->setValue(hi);
+        row.hi_spin->blockSignals(false);
+        row.enabled_cb->blockSignals(true);
+        row.enabled_cb->setChecked(gate > 0);
+        row.enabled_cb->blockSignals(false);
+    }
+}
+
+void KitProbeDialog::enterTunePhase() {
+    buildTuneRowsForKit();
+
+    if (m_tunePanel) {
+        delete m_tunePanel;
+        m_tunePanel = nullptr;
+    }
+    m_tunePanel = new QWidget(this);
+    auto* root = new QVBoxLayout(m_tunePanel);
+    root->setContentsMargins(8, 8, 8, 8);
+
+    auto* banner =
+        new QLabel(tr("<b>Warning:</b> Defaults are derived from your probe captures. "
+                      "<b>Don't touch these unless you know what you're doing</b> — "
+                      "wrong values will make pads miss real hits, or accept room noise as a hit. "
+                      "Live VU bars below let you watch each pad. The yellow gate line silences "
+                      "everything below it; lo/hi linearize the velocity range."),
+                   m_tunePanel);
+    banner->setWordWrap(true);
+    banner->setStyleSheet("QLabel{background:#332200;color:#ffd060;padding:6px;"
+                          "border-radius:4px;border:1px solid #886600;}");
+    root->addWidget(banner);
+
+    auto* scroll = new QScrollArea(m_tunePanel);
+    scroll->setWidgetResizable(true);
+    auto* host = new QWidget(scroll);
+    auto* grid = new QGridLayout(host);
+    grid->setHorizontalSpacing(8);
+    grid->setVerticalSpacing(4);
+
+    // Header row
+    int col = 0;
+    const auto add_header = [&](const QString& text) {
+        auto* lbl = new QLabel("<b>" + text + "</b>", host);
+        grid->addWidget(lbl, 0, col++);
+    };
+    add_header(tr("Pad"));
+    add_header(tr("Live"));
+    add_header(tr("Raw"));
+    add_header(tr("Gate"));
+    add_header(tr("Value"));
+    add_header(tr("On"));
+    add_header(tr("Lo"));
+    add_header(tr("Hi"));
+
+    int row_idx = 1;
+    for (auto& row : m_tuneRows) {
+        col = 0;
+        auto* name = new QLabel(row.toml_key, host);
+        name->setMinimumWidth(110);
+        grid->addWidget(name, row_idx, col++);
+
+        row.vu = new QProgressBar(host);
+        row.vu->setRange(0, 255);
+        row.vu->setValue(0);
+        row.vu->setTextVisible(false);
+        row.vu->setMinimumWidth(180);
+        row.vu->setMaximumHeight(14);
+        grid->addWidget(row.vu, row_idx, col++);
+
+        row.raw_label = new QLabel("0", host);
+        row.raw_label->setMinimumWidth(28);
+        grid->addWidget(row.raw_label, row_idx, col++);
+
+        row.gate_slider = new QSlider(Qt::Horizontal, host);
+        row.gate_slider->setRange(0, 255);
+        row.gate_slider->setMinimumWidth(120);
+        grid->addWidget(row.gate_slider, row_idx, col++);
+
+        row.gate_value = new QLabel("0", host);
+        row.gate_value->setMinimumWidth(28);
+        grid->addWidget(row.gate_value, row_idx, col++);
+
+        row.enabled_cb = new QCheckBox(host);
+        row.enabled_cb->setChecked(true);
+        grid->addWidget(row.enabled_cb, row_idx, col++);
+
+        row.lo_spin = new QSpinBox(host);
+        row.lo_spin->setRange(0, 255);
+        row.lo_spin->setMaximumWidth(70);
+        grid->addWidget(row.lo_spin, row_idx, col++);
+
+        row.hi_spin = new QSpinBox(host);
+        row.hi_spin->setRange(0, 255);
+        row.hi_spin->setMaximumWidth(70);
+        grid->addWidget(row.hi_spin, row_idx, col++);
+
+        // Gate slider drives the value label and recolours the VU bar
+        // to indicate the threshold visually.
+        connect(row.gate_slider, &QSlider::valueChanged, this,
+                [&row](int v) { row.gate_value->setText(QString::number(v)); });
+        ++row_idx;
+    }
+    host->setLayout(grid);
+    scroll->setWidget(host);
+    root->addWidget(scroll, 1);
+
+    // Insert the tune panel into the dialog's content area. The UI
+    // file's stacked widget gets a new last page so we just append the
+    // panel below the existing controls.
+    if (auto* dialog_layout = qobject_cast<QVBoxLayout*>(layout())) {
+        dialog_layout->insertWidget(dialog_layout->count() - 1, m_tunePanel, 1);
+    } else if (layout()) {
+        layout()->addWidget(m_tunePanel);
+    }
+
+    seedTuneDefaultsFromCapture();
+
+    // Keep the tick running — it drives MIDI/HID polling that feeds
+    // the VU bars. Switch its handler context: the existing tick
+    // already calls onHidReadable / onTickTimer; we just hook a VU
+    // update into onTickTimer (see updateTuneVuFromCurrentInputs).
+    if (m_tick && !m_tick->isActive())
+        m_tick->start(33);
+}
+
+void KitProbeDialog::updateTuneVuFromCurrentInputs() {
+    if (m_state != State::Tune || m_tuneRows.empty())
+        return;
+    // Decay all peaks by a small amount every tick so the VU bar
+    // releases visually like an audio meter.
+    for (auto& v : m_tuneVuRawPeak)
+        v = std::max(0, v - 12);
+
+    if (m_isMidi && m_midiDev) {
+        auto events = Input::MidiInput::DrainEvents(m_midiDev);
+        for (const auto& ev : events) {
+            if (!ev.on || ev.velocity == 0)
+                continue;
+            // Map note → byte via the same kPadDefaults table the
+            // runtime uses (kick=1, red=3, yellow=4, blue=5, green=6,
+            // yellow_cym=8, blue_cym=9, green_cym=10).
+            static const std::pair<int, std::initializer_list<int>> kNoteToByte[] = {
+                {1, {35, 36}},
+                {3, {38, 40}},
+                {4, {48, 50, 42, 44, 46, 51, 53}},
+                {5, {45, 47}},
+                {6, {41, 43, 49, 51, 57}},
+                {8, {42, 44, 46, 51, 53}},
+                {9, {49, 57, 55, 52}},
+                {10, {49, 51, 57}},
+            };
+            for (const auto& [byte, notes] : kNoteToByte) {
+                bool match = false;
+                for (int n : notes) {
+                    if (int(ev.note) == n) {
+                        match = true;
+                        break;
+                    }
+                }
+                if (!match)
+                    continue;
+                const int v = (int(ev.velocity) * 255 + 63) / 127;
+                if (byte >= 0 && byte < 64 && v > m_tuneVuRawPeak[byte])
+                    m_tuneVuRawPeak[byte] = v;
+                break;
+            }
+        }
+    } else if (m_lastReportLen > 0) {
+        // HID: take the current raw byte values directly. The hidReadable
+        // path already keeps m_lastReport hot.
+        for (int b = 0; b < m_lastReportLen && b < 64; ++b) {
+            if (m_lastReport[b] > m_tuneVuRawPeak[b])
+                m_tuneVuRawPeak[b] = m_lastReport[b];
+        }
+    }
+
+    for (auto& row : m_tuneRows) {
+        if (!row.vu || row.raw_byte_idx < 0 || row.raw_byte_idx >= 64)
+            continue;
+        const int v = m_tuneVuRawPeak[row.raw_byte_idx];
+        row.vu->setValue(v);
+        row.raw_label->setText(QString::number(v));
+        const bool gated = row.enabled_cb && row.enabled_cb->isChecked() && row.gate_slider &&
+                           v < row.gate_slider->value();
+        // Green when the bar is above the gate (a real hit would fire);
+        // grey when below (silenced). Stylesheet is per-row so the
+        // colour tracks the current value live.
+        row.vu->setStyleSheet(gated ? "QProgressBar{background:#202020;border:1px solid #444;}"
+                                      "QProgressBar::chunk{background:#666;}"
+                                    : "QProgressBar{background:#202020;border:1px solid #444;}"
+                                      "QProgressBar::chunk{background:#3cb443;}");
+    }
+}
+
+QString KitProbeDialog::rewriteTomlWithTuneOverrides(const QString& baseToml) const {
+    if (m_tuneRows.empty())
+        return baseToml;
+
+    // Strip any existing [gate] and [velocity_scaling] sections from
+    // baseToml — the auto-emitted defaults are now superseded by what
+    // the user finalised in the Tune step.
+    QStringList lines = baseToml.split('\n');
+    QStringList kept;
+    QString skip_section;
+    for (const auto& ln : lines) {
+        const QString t = ln.trimmed();
+        if (t == "[gate]" || t == "[velocity_scaling]") {
+            skip_section = t;
+            continue;
+        }
+        if (skip_section.isEmpty() == false) {
+            if (t.startsWith('[') && t.endsWith(']')) {
+                skip_section.clear();
+                kept.append(ln);
+                continue;
+            }
+            // Drop key-value lines of the skipped section.
+            if (t.isEmpty()) {
+                skip_section.clear(); // section terminates on blank line
+            }
+            continue;
+        }
+        kept.append(ln);
+    }
+    QString out = kept.join('\n');
+    if (!out.endsWith('\n'))
+        out += '\n';
+
+    // Re-emit [velocity_scaling] and [gate] from current UI values.
+    QString scale_block;
+    QString gate_block;
+    for (const auto& row : m_tuneRows) {
+        if (row.dud_idx >= 0 && row.lo_spin && row.hi_spin) {
+            const int lo = row.lo_spin->value();
+            const int hi = row.hi_spin->value();
+            if (hi > lo) {
+                if (scale_block.isEmpty())
+                    scale_block = "\n[velocity_scaling]\n";
+                scale_block += QStringLiteral("\"%1\" = { lo = %2, hi = %3 }\n")
+                                   .arg(row.toml_key)
+                                   .arg(lo)
+                                   .arg(hi);
+            }
+        }
+        if (row.enabled_cb && row.enabled_cb->isChecked() && row.gate_slider) {
+            const int g = row.gate_slider->value();
+            if (g > 0) {
+                if (gate_block.isEmpty())
+                    gate_block = "\n[gate]\n";
+                // MIDI native space is 0..127; HID is 0..255. The UI
+                // slider is 0..255 throughout. Convert MIDI values back
+                // before writing the toml so /v1-style readers see
+                // values in their original units.
+                int written = g;
+                if (m_isMidi)
+                    written = (g * 127 + 127) / 255;
+                gate_block += QStringLiteral("\"%1\" = %2\n").arg(row.toml_key).arg(written);
+            }
+        }
+    }
+    out += scale_block;
+    out += gate_block;
+    return out;
 }

@@ -64,3 +64,16 @@ set_tests_properties(midi_kit_synthesised PROPERTIES
     LABELS "midi"
     TIMEOUT 60
 )
+
+# Real-hardware captures with user-confirmed expected_pad hints. Kept
+# in a separate target from the synthesised edge cases so a community
+# fixture failing is loud and named, instead of getting buried in the
+# big synthesised batch.
+add_test(
+    NAME midi_kit_community
+    COMMAND miditest ${CMAKE_CURRENT_SOURCE_DIR}/midi/community
+)
+set_tests_properties(midi_kit_community PROPERTIES
+    LABELS "midi"
+    TIMEOUT 60
+)

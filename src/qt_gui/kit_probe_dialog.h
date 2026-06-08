@@ -19,7 +19,13 @@
 #include <vector>
 #include <QDialog>
 
+class QCheckBox;
+class QLabel;
+class QProgressBar;
+class QSlider;
+class QSpinBox;
 class QTableWidget;
+class QWidget;
 
 namespace Ui {
 class KitProbeDialog;
@@ -79,7 +85,23 @@ private:
         SelectDevice,
         Idle, // baseline / "don't touch anything"
         Step, // sampling current step
+        Tune, // /v2 per-pad gate + linearity tuning
         Review,
+    };
+
+    // One row in the Tune-pads step. Mirrors the toml keys
+    // [gate]/[velocity_scaling] expect plus a live VU readout.
+    struct PadTuneRow {
+        QString toml_key;      // "red", "blue", ...
+        int dud_idx = -1;      // -1 = no dud slot (kick under MIDI)
+        int raw_byte_idx = -1; // snapshot byte for VU readout / runtime gate
+        QProgressBar* vu = nullptr;
+        QSlider* gate_slider = nullptr;
+        QLabel* gate_value = nullptr;
+        QSpinBox* lo_spin = nullptr;
+        QSpinBox* hi_spin = nullptr;
+        QCheckBox* enabled_cb = nullptr;
+        QLabel* raw_label = nullptr;
     };
 
     void setState(State s);
@@ -94,6 +116,14 @@ private:
     void startStep(int idx);
     void finishStep();
     QString deriveKitToml() const;
+
+    // /v2 Tune-pads step: build a per-pad VU+threshold panel from the
+    // captured data, hand control back when the user clicks Save.
+    void enterTunePhase();
+    void buildTuneRowsForKit();
+    void seedTuneDefaultsFromCapture();
+    void updateTuneVuFromCurrentInputs();
+    QString rewriteTomlWithTuneOverrides(const QString& baseToml) const;
 
     std::unique_ptr<Ui::KitProbeDialog> ui;
 
@@ -155,4 +185,11 @@ private:
 
     // Timing
     QTimer* m_tick = nullptr;
+
+    // Tune-pads state. The container is parented to the main dialog
+    // and inserted into the existing layout when entered; everything
+    // is destroyed with the dialog.
+    QWidget* m_tunePanel = nullptr;
+    std::vector<PadTuneRow> m_tuneRows;
+    std::array<int, 64> m_tuneVuRawPeak{}; // per-byte live peak for VU
 };

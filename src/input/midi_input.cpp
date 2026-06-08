@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -51,6 +52,11 @@ struct PadState {
     std::chrono::steady_clock::time_point last_active{};
 };
 
+// Cap pending callback events to bound memory if a consumer stops
+// draining. 4096 note-on/offs is ~20 seconds of fast continuous
+// double-pedal drumming — well past any real burst.
+constexpr std::size_t kMaxPendingEvents = 4096;
+
 // One open MIDI port handle. Holds the RtMidiIn instance bound to a
 // specific port plus the per-pad state machine and (optionally) a
 // kit-specific note → byte override map.
@@ -60,6 +66,13 @@ struct PortHandle {
     PadState pads[12]{};
     PadState pads_by_byte[16]{}; // kSnapshotBytes
     std::map<std::uint8_t, int> custom_map;
+    // Filtered note-on/off events queued by the RtMidi callback for the
+    // next DrainAndUpdate. We attach a callback in OpenInputPort so
+    // RtMidi's internal message queue is bypassed entirely — Pro Drum
+    // modules stream CC4 (hi-hat pedal position) and polyphonic
+    // aftertouch continuously, and the default 1024-message queue would
+    // fill in seconds of idle time and silently drop subsequent note-ons.
+    std::deque<NoteEvent> pending;
 };
 
 std::mutex g_global_mu;
@@ -103,6 +116,39 @@ std::vector<PortInfo> EnumerateInputPorts() {
     return out;
 }
 
+namespace {
+
+// RtMidi delivers every incoming MIDI message here, on its own dispatch
+// thread. We filter to note-on / note-off at receive time and enqueue
+// only those — CC (hi-hat pedal), polyphonic / channel aftertouch, and
+// pitch-bend never take a slot in any queue. With this callback set
+// RtMidi bypasses its internal 1024-message queue entirely, so a Pro
+// Drum module idling on the hi-hat pedal can no longer flood the queue
+// and drop subsequent note-ons.
+void RtMidiCb(double /*deltatime*/, std::vector<unsigned char>* message, void* userData) {
+    if (!message || message->empty() || !userData)
+        return;
+    const unsigned char status = (*message)[0] & 0xF0;
+    if (status != 0x80 && status != 0x90)
+        return;
+    if (message->size() < 3)
+        return;
+    auto* h = static_cast<PortHandle*>(userData);
+    NoteEvent rec;
+    rec.note = static_cast<std::uint8_t>((*message)[1] & 0x7F);
+    rec.velocity = static_cast<std::uint8_t>((*message)[2] & 0x7F);
+    rec.on = (status == 0x90 && rec.velocity > 0);
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard lk(g_global_mu);
+    rec.t_ms = static_cast<std::uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - h->opened_at).count());
+    h->pending.push_back(rec);
+    if (h->pending.size() > kMaxPendingEvents)
+        h->pending.pop_front();
+}
+
+} // namespace
+
 void* OpenInputPort(const std::string& id) {
     int idx = -1;
     try {
@@ -116,17 +162,22 @@ void* OpenInputPort(const std::string& id) {
     }
     try {
         auto handle = std::make_unique<PortHandle>();
-        handle->midi = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kClientName);
+        // Third arg is queueSizeLimit — a generous safety net. With the
+        // callback set below RtMidi bypasses the queue, but the limit
+        // protects us if a future change ever removes the callback.
+        handle->midi = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, kClientName, 16384);
         if (idx >= (int)handle->midi->getPortCount()) {
             LOG_WARNING(Input, "MIDI: port index {} out of range ({} available)", idx,
                         handle->midi->getPortCount());
             return nullptr;
         }
-        handle->midi->openPort(static_cast<unsigned int>(idx), "shadPS4 MIDI in");
-        // Ignore SysEx, timing, and active-sensing — we only care about
-        // Note On / Off.
+        // Filter SysEx / Time / Active-Sensing at the RtMidi level.
         handle->midi->ignoreTypes(true, true, true);
         handle->opened_at = std::chrono::steady_clock::now();
+        // Register callback before openPort so the first inbound message
+        // after the port is hot lands in our deque, not RtMidi's queue.
+        handle->midi->setCallback(&RtMidiCb, handle.get());
+        handle->midi->openPort(static_cast<unsigned int>(idx), "shadPS4 MIDI in");
         LOG_INFO(Input, "MIDI: opened port {} ({})", idx, handle->midi->getPortName(idx));
         return handle.release();
     } catch (const RtMidiError& e) {
@@ -140,8 +191,14 @@ void CloseInputPort(void* handle) {
         return;
     auto* h = static_cast<PortHandle*>(handle);
     try {
-        if (h->midi && h->midi->isPortOpen())
-            h->midi->closePort();
+        if (h->midi) {
+            // Cancel the user-data callback before closePort so a tail
+            // dispatch can't fire after we release g_global_mu and
+            // delete h.
+            h->midi->cancelCallback();
+            if (h->midi->isPortOpen())
+                h->midi->closePort();
+        }
     } catch (...) {
     }
     std::lock_guard lk(g_global_mu);
@@ -150,58 +207,21 @@ void CloseInputPort(void* handle) {
 
 namespace {
 
-// Drain RtMidi's queue of pending messages into both the caller's event
-// vector AND the per-pad / per-byte state arrays on the handle. RtMidi's
-// getMessage returns one message at a time and returns the delta time
-// since the previous message, in seconds — we ignore that and use
-// our own wall-clock for the t_ms field, which keeps the API consistent
-// with the wizard's per-step convention.
+// Drain any note events the RtMidi callback queued since the last call
+// into both the caller's event vector AND the per-pad / per-byte state
+// arrays on the handle. Non-note messages were dropped at the callback
+// boundary so the deque only ever holds NoteEvent records.
 std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     std::vector<NoteEvent> out;
-    if (!h->midi || !h->midi->isPortOpen())
+    if (!h->midi)
         return out;
     const auto now = std::chrono::steady_clock::now();
-    std::vector<unsigned char> msg;
-    while (true) {
-        try {
-            (void)h->midi->getMessage(&msg);
-        } catch (const RtMidiError& e) {
-            LOG_WARNING(Input, "MIDI: getMessage failed: {}", e.getMessage());
-            break;
-        }
-        if (msg.empty())
-            break;
-        // Channel messages are 2 or 3 bytes. We care about 0x80 (Note
-        // Off) and 0x90 (Note On) on any channel; lower nibble is the
-        // channel number, ignored.
-        const unsigned char status = msg[0] & 0xF0;
-        bool note_on = false;
-        bool note_off = false;
-        int note = 0;
-        int vel = 0;
-        if (status == 0x90 && msg.size() >= 3) {
-            note = msg[1] & 0x7F;
-            vel = msg[2] & 0x7F;
-            if (vel > 0)
-                note_on = true;
-            else
-                note_off = true;
-        } else if (status == 0x80 && msg.size() >= 3) {
-            note = msg[1] & 0x7F;
-            vel = msg[2] & 0x7F;
-            note_off = true;
-        } else {
-            continue;
-        }
-
-        NoteEvent record;
-        record.on = note_on;
-        record.note = static_cast<std::uint8_t>(note);
-        record.velocity = static_cast<std::uint8_t>(vel);
-        record.t_ms = static_cast<std::uint32_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - h->opened_at).count());
+    while (!h->pending.empty()) {
+        const NoteEvent record = h->pending.front();
+        h->pending.pop_front();
         out.push_back(record);
-
+        const int vel = record.velocity;
+        const bool note_on = record.on;
         if (!h->custom_map.empty()) {
             auto it = h->custom_map.find(record.note);
             if (it != h->custom_map.end()) {
@@ -220,7 +240,7 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
             for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
                 bool match = false;
                 for (int n : kPadDefaults[p].notes) {
-                    if (n == note) {
+                    if (n == record.note) {
                         match = true;
                         break;
                     }

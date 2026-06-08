@@ -280,9 +280,54 @@ bool LoadKitFromToml(const std::string& file_path) {
                     }
                 }
             }
-            // Velocity scaling is shared with the HID drum path (the
-            // packer reads dud_scale_lo/hi). Parsed below by the same
-            // velocity_scaling block, so no separate work here.
+            // [velocity_scaling] + [gate] parsing must run for MIDI
+            // kits too. Older code returned right after [midi_pad_map]
+            // (the comment claimed the trailing velocity_scaling /
+            // gate blocks at the bottom of the function would cover
+            // it, but they don't — control never reaches them because
+            // of the early return). That meant the auto-derived /v2
+            // [gate] entries the wizard writes for MIDI kits were
+            // silently dropped at load time: kit->raw_gate stayed
+            // empty, pack_vel saw no entry, sub-threshold values
+            // sailed straight through to dud + PackButtons. Mirror
+            // the HID blocks here so MIDI kits actually honour both
+            // tables.
+            if (root.contains("velocity_scaling")) {
+                const auto& tbl = toml::find(root, "velocity_scaling").as_table();
+                for (const auto& [key, val] : tbl) {
+                    const int idx = ResolveVelocityScalingKey(key);
+                    if (idx < 0 || idx >= (int)kMaxDeviceUniqueData)
+                        continue;
+                    if (!val.is_table())
+                        continue;
+                    const auto& o = val.as_table();
+                    if (o.count("lo"))
+                        k.dud_scale_lo[idx] = o.at("lo").as_integer();
+                    if (o.count("hi"))
+                        k.dud_scale_hi[idx] = o.at("hi").as_integer();
+                }
+            }
+            if (root.contains("gate")) {
+                const auto& tbl = toml::find(root, "gate").as_table();
+                for (const auto& [key, val] : tbl) {
+                    const int raw_idx = ResolveGateKey(key);
+                    if (raw_idx < 0)
+                        continue;
+                    if (!val.is_integer())
+                        continue;
+                    int threshold = static_cast<int>(val.as_integer());
+                    // MIDI kits write the user-facing 0..127 velocity;
+                    // convert to the 0..255 raw-byte space the runtime
+                    // checks (same rounding the snapshot writer uses).
+                    threshold = (threshold * 255 + 63) / 127;
+                    if (threshold < 0)
+                        threshold = 0;
+                    if (threshold > 255)
+                        threshold = 255;
+                    if (threshold > 0)
+                        k.raw_gate[raw_idx] = threshold;
+                }
+            }
             std::lock_guard<std::mutex> lk(g_kits_mu);
             auto it = std::find_if(g_kits.begin(), g_kits.end(), [&](const KitDef& e) {
                 return e.vid == k.vid && e.pid == k.pid;

@@ -757,6 +757,135 @@ CaseResult RunCase(const fs::path &path) {
   return r;
 }
 
+// Runtime gate-apply test. Answers "are we sure values below the gate
+// don't reach the game?" without relying on captured fixtures. Builds
+// a synthetic v2 kit with a known [gate] table, hands it to the live
+// LoadKitFromToml + BindKitFromTomlForTesting, then feeds raw frames
+// with single-byte values just below / at / just above each pad's
+// gate threshold. The asserts:
+//   - byte < gate  →  pack_vel writes 0 in the dud slot AND PackButtons
+//                     does not OR in the pad's face-button bit
+//   - byte >= gate →  pack_vel writes the (scaled) velocity AND
+//                     PackButtons fires the face-button bit
+//
+// Uses the MIDI schema variant so LoadKitFromToml auto-injects the
+// drum_*_byte fields and the synthetic button_bytes table (red→Circle,
+// blue→Square, yellow→Triangle, green→Cross). That keeps the test
+// kit's TOML small and avoids re-encoding the PS4 RB drum layout by
+// hand here.
+CaseResult RunGateApplyTest() {
+  using DC = Libraries::Pad::OrbisPadDeviceClass;
+  using B = Libraries::Pad::OrbisPadButtonDataOffset;
+  CaseResult r{};
+  r.name = "RuntimeGateApply";
+
+  // Snapshot byte layout the MIDI loader auto-injects:
+  //   red=3, blue=5, yellow=4, green=6 (kick at byte 1, button-only).
+  const std::string kit = R"(schema = "shadps4-midi-instrument/v2"
+name = "gate apply test"
+source = "midi"
+port_id = "test:gate"
+device_class = "drum"
+device_subclass = "drum"
+
+[midi_pad_map]
+red = [38]
+blue = [45]
+yellow = [48]
+green = [43]
+
+[gate]
+"red" = 50
+"blue" = 100
+"yellow" = 0
+"green" = 25
+)";
+
+  HID::Testing::ResetForTesting();
+  const fs::path tmp = WriteTempToml("gate_apply", kit);
+  const bool bound = HID::Testing::BindKitFromTomlForTesting(1, tmp.string());
+  std::error_code ec;
+  fs::remove(tmp, ec);
+  if (!bound) {
+    r.detail = "BindKitFromTomlForTesting failed for synthetic v2 kit";
+    return r;
+  }
+
+  // MIDI gates are stored in 0..127 native and converted to 0..255
+  // raw space at load time via (v*255+63)/127. Mirror that here so the
+  // test feeds raw values in the same space the runtime checks.
+  auto midi_gate_to_raw = [](int g) { return (g * 255 + 63) / 127; };
+
+  struct Case {
+    const char *pad;
+    int raw_byte;    // snapshot byte index in pack_vel's input
+    int dud_idx;     // expected output slot
+    u32 face_button; // PackButtons bit when above gate
+    int gate_midi;   // gate threshold in MIDI 0..127 space
+  };
+  const Case cases[] = {
+      {"red", 3, 0, static_cast<u32>(B::Circle), 50},
+      {"blue", 5, 1, static_cast<u32>(B::Square), 100},
+      {"yellow", 4, 2, static_cast<u32>(B::Triangle), 0}, // gate disabled
+      {"green", 6, 3, static_cast<u32>(B::Cross), 25},
+  };
+
+  for (const auto &c : cases) {
+    const int gate_raw = midi_gate_to_raw(c.gate_midi);
+    // Three samples: just below, exactly at, just above. The runtime
+    // uses `< gate` for the drop, so `== gate` passes.
+    const int below = (gate_raw > 0) ? gate_raw - 1 : 0;
+    const int at = gate_raw;
+    const int above = std::min(255, gate_raw + 4);
+
+    auto run_frame = [&](int value, bool expect_passes,
+                         const char *label) -> bool {
+      u8 frame[16] = {};
+      frame[c.raw_byte] = static_cast<u8>(value);
+      u8 dud[HID::kMaxDeviceUniqueData] = {};
+      HID::PackDeviceUniqueData(1, frame, sizeof(frame), DC::Drum, dud);
+      const u32 buttons = HID::PackButtons(1, frame, sizeof(frame), DC::Drum);
+      const bool dud_passed = (dud[c.dud_idx] != 0);
+      const bool button_passed = (buttons & c.face_button) != 0;
+      const bool ok =
+          (dud_passed == expect_passes) && (button_passed == expect_passes);
+      if (!ok) {
+        r.detail = std::string{"pad "} + c.pad + " " + label +
+                   " (raw=" + std::to_string(value) +
+                   ", gate_raw=" + std::to_string(gate_raw) + "): dud[" +
+                   std::to_string(c.dud_idx) +
+                   "]=" + std::to_string(dud[c.dud_idx]) + " buttons=0x" +
+                   [&] {
+                     char b[16];
+                     std::snprintf(b, sizeof(b), "%x", buttons);
+                     return std::string{b};
+                   }() +
+                   " (expected " +
+                   (expect_passes ? "pass-through" : "silenced") + ")";
+      }
+      return ok;
+    };
+
+    if (c.gate_midi == 0) {
+      // Gate disabled: even a tiny non-zero raw value should pass.
+      if (!run_frame(1, true, "gate=0 low"))
+        return r;
+      if (!run_frame(127, true, "gate=0 high"))
+        return r;
+    } else {
+      if (!run_frame(below, false, "below gate"))
+        return r;
+      if (!run_frame(at, true, "at gate"))
+        return r;
+      if (!run_frame(above, true, "above gate"))
+        return r;
+    }
+  }
+
+  r.passed = true;
+  return r;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -789,6 +918,11 @@ int main(int argc, char **argv) {
   std::sort(files.begin(), files.end());
 
   std::vector<CaseResult> results;
+  // Runtime gate-apply test runs first (independent of fixtures).
+  // Confirms the v2 [gate] table is actually consulted by the live
+  // PackDeviceUniqueData / PackButtons hot path — sub-threshold raw
+  // bytes silence both the dud velocity AND the face button.
+  results.push_back(RunGateApplyTest());
   for (auto &f : files) {
     results.push_back(RunCase(f));
   }

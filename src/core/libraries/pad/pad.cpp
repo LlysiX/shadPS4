@@ -82,6 +82,41 @@ int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
     LOG_INFO(Lib_Pad, "scePadDeviceClassGetExtendedInformation handle={}", handle);
     std::memset(pExtInfo, 0, sizeof(OrbisPadDeviceClassExtendedInformation));
     pExtInfo->deviceClass = ResolveDeviceClass(handle);
+    // classData was being left at zero. RB4 (and likely other PS4 RB-family
+    // titles) reads the per-class capability byte during slot enumeration
+    // and rejects the slot when it's zero — it interprets "drum class with
+    // no capability bits set" as a fake drum kit and never proceeds to
+    // scePadRead. Captured in a v0.8.3 user log: 11,872 scePadOpen calls,
+    // 7,906 DeviceClassGetExtendedInformation calls, 0 scePadRead calls.
+    //
+    // Set capability so each instrument class advertises a sensible default:
+    //   drum     0x03 = velocity-sensitive + has cymbal pads (Pro Drum).
+    //                   Even a standard 4-lane kit reports cymbal-capable
+    //                   here; RB4 just looks for cymbal hits and finds none.
+    //   guitar   0x07 = whammy + tilt + solo fret (Riffmaster / RB4 stratocaster).
+    //                   Older guitars worked with capability=0 historically,
+    //                   so this is additive; quantityOfSelectorSwitch=5
+    //                   matches the 5-fret layout RB4 expects.
+    //   wheel/stick 0x01 = basic capability advertised so games don't
+    //                      reject the slot during enumeration.
+    using DC = OrbisPadDeviceClass;
+    switch (pExtInfo->deviceClass) {
+    case DC::Drum:
+        pExtInfo->classData.drum.capability = 0x03;
+        break;
+    case DC::Guitar:
+        pExtInfo->classData.guitar.capability = 0x07;
+        pExtInfo->classData.guitar.quantityOfSelectorSwitch = 5;
+        break;
+    case DC::SteeringWheel:
+        pExtInfo->classData.steeringWheel.capability = 0x01;
+        break;
+    case DC::FightStick:
+        pExtInfo->classData.flightStick.capability = 0x01;
+        break;
+    default:
+        break;
+    }
     return ORBIS_OK;
 }
 

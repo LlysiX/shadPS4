@@ -89,18 +89,20 @@ private:
         Review,
     };
 
+    class PadVuBar; // forward, defined in kit_probe_dialog.cpp
+
     // One row in the Tune-pads step. Mirrors the toml keys
-    // [gate]/[velocity_scaling] expect plus a live VU readout.
+    // [gate]/[velocity_scaling] expect plus a live VU readout. gate=0
+    // means the gate is disabled (no separate enable flag).
     struct PadTuneRow {
         QString toml_key;      // "red", "blue", ...
         int dud_idx = -1;      // -1 = no dud slot (kick under MIDI)
         int raw_byte_idx = -1; // snapshot byte for VU readout / runtime gate
-        QProgressBar* vu = nullptr;
+        PadVuBar* vu = nullptr;
         QSlider* gate_slider = nullptr;
         QLabel* gate_value = nullptr;
         QSpinBox* lo_spin = nullptr;
         QSpinBox* hi_spin = nullptr;
-        QCheckBox* enabled_cb = nullptr;
         QLabel* raw_label = nullptr;
     };
 

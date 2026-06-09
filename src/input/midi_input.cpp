@@ -138,6 +138,19 @@ void RtMidiCb(double /*deltatime*/, std::vector<unsigned char>* message, void* u
     rec.note = static_cast<std::uint8_t>((*message)[1] & 0x7F);
     rec.velocity = static_cast<std::uint8_t>((*message)[2] & 0x7F);
     rec.on = (status == 0x90 && rec.velocity > 0);
+    // Diagnostic: log every note-on we receive from the live MIDI port.
+    // Drop to LOG_DEBUG once we've pinned down whether the user's Pro Drum module is sending notes that match the kit's midi_pad_map at gameplay time. If the in-game module mode differs from the probe mode (different MIDI program / preset), notes hit here but the
+    // is sending notes that match the kit's midi_pad_map at
+    // gameplay time. If the in-game module mode differs from the probe
+    // mode (different MIDI program / preset), notes hit here but the
+    // pads_by_byte writer in DrainAndUpdate finds no map entry and
+    // SnapshotDrumBuffer returns all zeros — RB4 sees no drum hit
+    // even though the runtime is functioning correctly. This log line
+    // makes that diagnosable from a tap-each-pad-once test.
+    if (rec.on) {
+        LOG_INFO(Input, "MIDI rx: note_on note={} vel={} (status=0x{:x})", rec.note, rec.velocity,
+                 (*message)[0]);
+    }
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard lk(g_global_mu);
     rec.t_ms = static_cast<std::uint32_t>(

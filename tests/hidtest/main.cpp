@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "input/hid_instrument.h"
+#include "input/hid_kit_def.h"
 #include "input/hid_kit_probe_data.h"
 
 namespace fs = std::filesystem;
@@ -886,6 +887,116 @@ green = [43]
   return r;
 }
 
+// `hidtest --replay-midi <kit.toml> <capture.midi.jsonl>` — load the kit
+// TOML through the runtime loader (BindKitFromTomlForTesting), then walk
+// every Note On event in the jsonl. For each event:
+//   - look up the note in the kit's midi_pad_map → raw byte index
+//   - synthesise a 16-byte snapshot with that byte set to the velocity
+//     scaled to 0..255 (same formula MidiInput::DrainEvents writes into
+//     pads_by_byte)
+//   - feed the snapshot to PackDeviceUniqueData + PackButtons exactly
+//     the way the runtime does for the legacy-instrument scePadRead path
+//   - print buttons bitmap + dud[0..6] so a human can confirm whether
+//     the runtime would produce a real "drum hit" for that input
+//
+// Lets us replay a user's actual probe capture against their actual TOML
+// offline and see whether the SDK output is correct without needing him
+// to re-test.
+int RunReplayMidi(const fs::path &toml_path, const fs::path &jsonl_path) {
+  using DC = Libraries::Pad::OrbisPadDeviceClass;
+  HID::Testing::ResetForTesting();
+  if (!HID::Testing::BindKitFromTomlForTesting(1, toml_path.string())) {
+    std::cerr << "replay-midi: BindKitFromTomlForTesting failed for "
+              << toml_path << "\n";
+    return 2;
+  }
+  // Pull the loaded kit so we can resolve note → byte. The synthetic kit
+  // BindKitFromTomlForTesting attaches lives in g_slots[0].kit.
+  const HID::KitDef *kit = HID::g_slots[0].kit;
+  if (!kit) {
+    std::cerr << "replay-midi: g_slots[0].kit is null after Bind\n";
+    return 2;
+  }
+  std::ifstream in(jsonl_path);
+  if (!in) {
+    std::cerr << "replay-midi: could not open " << jsonl_path << "\n";
+    return 2;
+  }
+  std::printf("# replaying %s against %s\n# kit '%s' midi_pad_map "
+              "has %zu entries\n",
+              jsonl_path.filename().string().c_str(),
+              toml_path.filename().string().c_str(), kit->name.c_str(),
+              kit->midi_pad_map.size());
+  std::printf("# columns: step  note  vel  byte  buttons    dud[0..6]\n");
+
+  std::string current_step = "(none)";
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty())
+      continue;
+    if (ExtractField(line, "type") == "meta") {
+      continue;
+    }
+    const std::string step = ExtractField(line, "step");
+    if (!step.empty())
+      current_step = step;
+    // Parse events array (this works for the .midi.jsonl format the wizard
+    // writes — same shape miditest already handles).
+    const std::string ev_arr_str = ExtractField(line, "events");
+    if (ev_arr_str.empty())
+      continue;
+    // Iterate event objects inside the array. We only handle Note On with
+    // vel > 0; off / vel=0 don't tell us what RB4 sees as a hit.
+    std::size_t i = 0;
+    while ((i = ev_arr_str.find('{', i)) != std::string::npos) {
+      const std::size_t end = ev_arr_str.find('}', i);
+      if (end == std::string::npos)
+        break;
+      const std::string obj = ev_arr_str.substr(i, end - i + 1);
+      const std::string on_s = ExtractField(obj, "on");
+      if (on_s != "true" && on_s != "1") {
+        i = end + 1;
+        continue;
+      }
+      int note = 0, vel = 0;
+      try {
+        note = std::stoi(ExtractField(obj, "note"));
+      } catch (...) {
+      }
+      try {
+        vel = std::stoi(ExtractField(obj, "vel"));
+      } catch (...) {
+      }
+      i = end + 1;
+      if (vel <= 0)
+        continue;
+      // note → byte via kit's midi_pad_map (built at LoadKitFromToml from
+      // the TOML's [midi_pad_map] section).
+      auto it = kit->midi_pad_map.find(static_cast<std::uint8_t>(note));
+      if (it == kit->midi_pad_map.end()) {
+        std::printf("%-15s n=%-3d v=%-3d (no pad map entry)\n",
+                    current_step.c_str(), note, vel);
+        continue;
+      }
+      const int byte_idx = it->second;
+      // Snapshot byte = (vel * 255 + 63) / 127 — same formula
+      // MidiInput::DrainEvents uses when writing pads_by_byte.
+      const u8 scaled = static_cast<u8>((vel * 255 + 63) / 127);
+      u8 frame[16] = {};
+      if (byte_idx >= 0 && byte_idx < 16)
+        frame[byte_idx] = scaled;
+      u8 dud[HID::kMaxDeviceUniqueData] = {};
+      HID::PackDeviceUniqueData(1, frame, sizeof(frame), DC::Drum, dud);
+      const u32 buttons = HID::PackButtons(1, frame, sizeof(frame), DC::Drum);
+      std::printf("%-15s n=%-3d v=%-3d byte=%-2d buttons=0x%08x "
+                  "dud=[%02x,%02x,%02x,%02x,%02x,%02x,%02x]\n",
+                  current_step.c_str(), note, vel, byte_idx, buttons, dud[0],
+                  dud[1], dud[2], dud[3], dud[4], dud[5], dud[6]);
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -902,6 +1013,9 @@ int main(int argc, char **argv) {
     }
     std::cout << DeriveKitToml(data);
     return 0;
+  }
+  if (argc >= 4 && std::string(argv[1]) == "--replay-midi") {
+    return RunReplayMidi(fs::path(argv[2]), fs::path(argv[3]));
   }
   fs::path fixtures = (argc > 1) ? fs::path(argv[1])
                                  : fs::current_path() / "tests" / "hid_kits";

@@ -514,11 +514,29 @@ int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
         return ORBIS_PAD_ERROR_INVALID_HANDLE;
     }
 
+    // Diagnostic: throttled visibility into what scePadRead is returning
+    // — buttons bitmap, dud[0..6] (drum pad velocities), connected flag.
+    // Default LOG_TRACE above stays as-is; this fires every 120th call
+    // (~once a second at 120 Hz polling) so we can see button/dud flow
+    // without flooding the log. Drop once the actual bug is found.
+    static thread_local int s_read_counter[4] = {};
+    const int slot_idx = (handle >= 1 && handle <= 4) ? (handle - 1) : 0;
+    const bool do_log = ((++s_read_counter[slot_idx] % 120) == 0);
+
     // Legacy-instrument path: this slot is driven solely by the kit's raw
     // HID report. Returns exactly one state; SDL/keyboard read path below
     // is bypassed. Standard controllers are unaffected — they fall through.
     if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
         FillLegacyInstrumentData(handle, &pData[0]);
+        if (do_log) {
+            LOG_INFO(Lib_Pad,
+                     "scePadRead handle={} (legacy-instrument) buttons=0x{:x} "
+                     "dud=[{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
+                     handle, static_cast<u32>(pData[0].buttons), pData[0].deviceUniqueData[0],
+                     pData[0].deviceUniqueData[1], pData[0].deviceUniqueData[2],
+                     pData[0].deviceUniqueData[3], pData[0].deviceUniqueData[4],
+                     pData[0].deviceUniqueData[5], pData[0].deviceUniqueData[6]);
+        }
         return 1;
     }
 

@@ -248,19 +248,29 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
         out.push_back(record);
         const int vel = record.velocity;
         const bool note_on = record.on;
+        // Note-off is intentionally ignored here. The decay loop at the
+        // bottom of DrainAndUpdate clears the velocity kVelocityHoldMs
+        // after the last note-on. Pro Drum modules that send an
+        // explicit note-off shortly after each note-on (Alesis Surge,
+        // Roland TD-series) would otherwise hit the runtime in pairs:
+        // pads_by_byte[byte] gets set by note-on then zeroed by the
+        // matching note-off in the same DrainAndUpdate tick. The
+        // SnapshotDrumBuffer caller never sees a non-zero velocity and
+        // RB4 never registers a drum hit even though the events did
+        // arrive correctly. Letting the decay window handle the release
+        // uniformly is correct for both note-off-sending and
+        // note-off-less modules.
+        if (!note_on)
+            continue;
         if (!h->custom_map.empty()) {
             auto it = h->custom_map.find(record.note);
             if (it != h->custom_map.end()) {
                 const int byte_idx = it->second;
                 if (byte_idx >= 0 && byte_idx < (int)kSnapshotBytes) {
-                    if (note_on) {
-                        h->pads_by_byte[byte_idx].velocity =
-                            static_cast<std::uint8_t>((vel * 255 + 63) / 127);
-                        h->pads_by_byte[byte_idx].last_active = now;
-                        ++hits_applied;
-                    } else {
-                        h->pads_by_byte[byte_idx].velocity = 0;
-                    }
+                    h->pads_by_byte[byte_idx].velocity =
+                        static_cast<std::uint8_t>((vel * 255 + 63) / 127);
+                    h->pads_by_byte[byte_idx].last_active = now;
+                    ++hits_applied;
                 }
             }
         } else {
@@ -274,12 +284,8 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
                 }
                 if (!match)
                     continue;
-                if (note_on) {
-                    h->pads[p].velocity = static_cast<std::uint8_t>((vel * 255 + 63) / 127);
-                    h->pads[p].last_active = now;
-                } else {
-                    h->pads[p].velocity = 0;
-                }
+                h->pads[p].velocity = static_cast<std::uint8_t>((vel * 255 + 63) / 127);
+                h->pads[p].last_active = now;
                 break;
             }
         }

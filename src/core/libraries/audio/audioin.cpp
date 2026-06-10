@@ -1,15 +1,41 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/config.h"
 #include "common/logging/log.h"
 #include "core/libraries/audio/audioin.h"
 #include "core/libraries/audio/sdl_in.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/pad/pad.h"
+#include "input/hid_instrument.h"
 
 namespace Libraries::AudioIn {
 
 static std::unique_ptr<SDLAudioIn> audio = std::make_unique<SDLAudioIn>();
+
+float GetMicPeakDbfs(int slot) {
+    return audio ? audio->GetPeakDbfs(slot) : -120.0f;
+}
+
+// Refuse sceAudioInOpen for instrument-class slots. RB4 probes mics
+// before the device-class lookup, so a successful open classifies a
+// drummer as a vocalist. The legacy-kit-TOML branch is what makes
+// "Automatic" mode (useSpecialPad=false but kit declares drum) still
+// register as an instrument.
+static bool SlotIsInstrument(int userId) {
+    if (userId < 1 || userId > 4)
+        return false;
+    using Libraries::Pad::OrbisPadDeviceClass;
+    auto is_instrument = [](int cls) {
+        return cls == static_cast<int>(OrbisPadDeviceClass::Guitar) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::Drum) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::DjTurntable) ||
+               cls == static_cast<int>(OrbisPadDeviceClass::Dancemat);
+    };
+    auto cls = Libraries::Pad::ResolveDeviceClass(userId);
+    return is_instrument(static_cast<int>(cls));
+}
 
 int PS4_SYSV_ABI sceAudioInChangeAppModuleState() {
     LOG_ERROR(Lib_AudioIn, "(STUBBED) called");
@@ -91,18 +117,34 @@ int PS4_SYSV_ABI sceAudioInGetRerouteCount() {
     return ORBIS_OK;
 }
 
-int PS4_SYSV_ABI sceAudioInGetSilentState() {
-    LOG_ERROR(Lib_AudioIn, "(STUBBED) called");
-    return ORBIS_OK;
+s32 PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle) {
+    // sceAudioInGetSilentState returns the silent-channel bitmask as its
+    // RETURN value (>= 0 = bitmask, 0 = all channels active). It does NOT
+    // take an output pointer — an earlier version of this fix added a
+    // `u32* silent_state` second parameter and wrote through it, but RB4
+    // calls this with only the handle, so the second register held
+    // garbage and the write faulted (crash in the game's 'mic_reader'
+    // thread, address 0xff). Report the software noise-gate state through
+    // the return value instead: 0 when the mic is active (matches the old
+    // always-active stub, so behaviour is unchanged while the gate is off),
+    // non-zero when the gate has muted it.
+    if (handle < 1 || handle > 8) {
+        return ORBIS_OK; // unknown handle: report active, never error here
+    }
+    return audio->IsSilent(handle) ? 1 : 0;
 }
 
 int PS4_SYSV_ABI sceAudioInHqOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                   u32 index, u32 len, u32 freq, u32 param) {
-    if (userId != 1)
-        return ORBIS_OK;
-    int result = audio->AudioInOpen(type, len, freq, param);
+    LOG_INFO(Lib_AudioIn, "sceAudioInHqOpen user_id={} type={} len={} freq={}", userId, type, len,
+             freq);
+    if (SlotIsInstrument(userId)) {
+        LOG_INFO(Lib_AudioIn, "sceAudioInHqOpen: refusing user_id={} (instrument slot)", userId);
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
+    int result = audio->AudioInOpen(userId, type, len, freq, param);
     if (result < 0) {
-        LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
+        LOG_ERROR(Lib_AudioIn, "sceAudioInHqOpen user_id={} error {:#x}", userId, result);
     }
     return result;
 }
@@ -133,11 +175,15 @@ int PS4_SYSV_ABI sceAudioInIsSharedDevice() {
 
 int PS4_SYSV_ABI sceAudioInOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                 u32 index, u32 len, u32 freq, u32 param) {
-    if (userId != 1)
-        return 0x80260005;
-    int result = audio->AudioInOpen(type, len, freq, param);
+    LOG_INFO(Lib_AudioIn, "sceAudioInOpen user_id={} type={} len={} freq={}", userId, type, len,
+             freq);
+    if (SlotIsInstrument(userId)) {
+        LOG_INFO(Lib_AudioIn, "sceAudioInOpen: refusing user_id={} (instrument slot)", userId);
+        return ORBIS_AUDIO_IN_ERROR_INVALID_PORT;
+    }
+    int result = audio->AudioInOpen(userId, type, len, freq, param);
     if (result < 0) {
-        LOG_ERROR(Lib_AudioIn, "Error returned  {:#x}", result);
+        LOG_ERROR(Lib_AudioIn, "sceAudioInOpen user_id={} error {:#x}", userId, result);
     }
     return result;
 }

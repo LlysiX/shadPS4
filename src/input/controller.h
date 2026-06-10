@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <mutex>
+#include <vector>
 #include "SDL3/SDL_joystick.h"
 #include "common/assert.h"
 #include "common/types.h"
@@ -12,6 +15,22 @@
 struct SDL_Gamepad;
 
 namespace Input {
+
+// Steady-clock nanosecond timestamps of the most recent input on each
+// of the 4 player slots. Bumped from every input source that ultimately
+// drives a slot (SDL gamepad / keyboard via FinalizeUpdate, raw-HID kit
+// via HidInstrument::PollLoop, MIDI via MidiInput poll). The Player
+// Assignment dialog polls these to "light up" the tab matching whichever
+// slot is currently producing input, regardless of source.
+extern std::array<std::atomic<u64>, 4> g_last_input_ns;
+void NoteInputOnSlot(int slot /*0..3*/);
+u64 GetLastInputNs(int slot /*0..3*/);
+
+// Resolve which player slot (1..4) a gamepad with the given SDL GUID +
+// host path is bound to via Config::getPlayerSlotDevices. -1 when no
+// binding matches. Exposed so the Player Assignment dialog can mirror
+// the runtime's placement when lighting up its tab indicator.
+int FindBoundSlotForGamepad(const std::string& guid, const std::string& path);
 
 enum class Axis {
     LeftX = 0,
@@ -90,7 +109,18 @@ private:
     std::array<State, MAX_STATES> m_states;
     std::array<StateInternal, MAX_STATES> m_private;
 
+    // m_sdl_gamepad is the "primary" SDL gamepad bound to this slot —
+    // queried directly by vibration / lightbar / sensor-poll code.
+    // m_additional_gamepads are secondary devices co-bound to the same
+    // slot (Config::getPlayerSlotDevices). All of them have player_index
+    // set to this slot, so SDL events from any of them route to this
+    // GameController via GetGamepadIndexFromJoystickId — their button /
+    // axis / sensor updates land in the SAME m_last_state, which gives
+    // a free OR-on-digital / last-write-wins-on-analog merge without
+    // any explicit aggregation code. The vector is only consulted at
+    // open / close time for hot-plug bookkeeping.
     SDL_Gamepad* m_sdl_gamepad = nullptr;
+    std::vector<SDL_Gamepad*> m_additional_gamepads;
     u8 player_index = -1;
 };
 
@@ -110,6 +140,31 @@ public:
     }
     static void TryOpenSDLControllers(GameControllers& controllers);
     static u8 GetGamepadIndexFromJoystickId(SDL_JoystickID id);
+
+    // Close any currently-open gamepad whose GUID is now bound to a
+    // different slot than the one it's in, then re-run
+    // TryOpenSDLControllers so the placement passes re-route them. Used
+    // by the Player Assignment dialog so changes apply without forcing
+    // the user to unplug + replug their controllers.
+    static void ApplyAssignmentChanges();
+
+    // Fire a UserService Login event for `slot` (0-indexed) the first
+    // time real input arrives on that slot. Player 1 (slot 0) is the
+    // only one that gets auto-Login'd at startup so global menus are
+    // immediately navigable; Players 2-4 stay un-logged-in until a key
+    // or button press routes to their slot, mimicking the PS4
+    // "press OPTIONS to JOIN" UX. No-op if the slot is already
+    // logged in.
+    static void EnsureLoggedIn(int slot);
+
+private:
+    // Attach `pad` to slot `slot` as primary (if the slot is empty) or as
+    // a secondary (otherwise). Sets SDL's player_index, enables sensors,
+    // and fires a Login event when fire_login=true and the slot was
+    // previously empty. Touches GameController's private members, hence
+    // a member function rather than a free helper.
+    static void PlaceGamepadInSlot(GameControllers& controllers, int slot, SDL_Gamepad* pad,
+                                   bool& slot_taken, bool fire_login);
 };
 
 } // namespace Input

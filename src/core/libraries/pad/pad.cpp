@@ -1,15 +1,71 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
+
 #include "common/config.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad_errors.h"
 #include "input/controller.h"
+#include "input/hid_instrument.h"
 #include "pad.h"
 
 namespace Libraries::Pad {
+
+// Map a kit TOML's `device_class` string ("guitar" / "drum" / ...) onto the
+// SCE enum. Returns Standard for unknown strings — most kits only set this to
+// "guitar" or "drum" in practice.
+static OrbisPadDeviceClass KitClassFromString(const std::string& s) {
+    if (s == "guitar")
+        return OrbisPadDeviceClass::Guitar;
+    if (s == "drum")
+        return OrbisPadDeviceClass::Drum;
+    if (s == "dj_turntable" || s == "turntable")
+        return OrbisPadDeviceClass::DjTurntable;
+    if (s == "dance_mat" || s == "dancemat")
+        return OrbisPadDeviceClass::Dancemat;
+    return OrbisPadDeviceClass::Standard;
+}
+
+// Resolve the game-visible device class for the given slot. Precedence:
+//   1. Legacy raw-HID pass-through is on for this slot AND a kit is active
+//      → the kit TOML's `device_class` wins. This is the "Automatic"
+//      behaviour surfaced in the Special Devices dialog.
+//   2. useSpecialPad{N} → the user-pinned class from Config.
+//   3. Otherwise → SDL's detected class (Guitar / Drum / Standard).
+OrbisPadDeviceClass ResolveDeviceClass(s32 handle) {
+    // Guard against handle 0 / handle > 4 — every caller is supposed to
+    // pass 1..4 but a stubbed sce* path or a future caller mistakenly
+    // forwarding a sceUserServiceUserId could feed garbage in. Falling
+    // back to Standard keeps the misuse contained (no controllers[-1]
+    // UB, no kit lookup that races) until the caller is fixed.
+    if (handle < 1 || handle > 4) {
+        return OrbisPadDeviceClass::Standard;
+    }
+    OrbisPadDeviceClass result;
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        const std::string kit_cls = Input::HidInstrument::GetActiveKitDeviceClass(handle);
+        if (!kit_cls.empty()) {
+            result = KitClassFromString(kit_cls);
+            LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (kit-toml, cls='{}')", handle,
+                      static_cast<int>(result), kit_cls);
+            return result;
+        }
+    }
+    if (Config::getUseSpecialPad(handle)) {
+        result = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
+        LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (Config::useSpecialPad)", handle,
+                  static_cast<int>(result));
+        return result;
+    }
+    auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+    result = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
+    LOG_DEBUG(Lib_Pad, "ResolveDeviceClass handle={} -> {} (SDL)", handle,
+              static_cast<int>(result));
+    return result;
+}
 
 int PS4_SYSV_ABI scePadClose(s32 handle) {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
@@ -23,20 +79,79 @@ int PS4_SYSV_ABI scePadConnectPort() {
 
 int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
     s32 handle, OrbisPadDeviceClassExtendedInformation* pExtInfo) {
-    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    LOG_INFO(Lib_Pad, "scePadDeviceClassGetExtendedInformation handle={}", handle);
     std::memset(pExtInfo, 0, sizeof(OrbisPadDeviceClassExtendedInformation));
-    if (Config::getUseSpecialPad(handle)) {
-        pExtInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-    } else {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        pExtInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
+    pExtInfo->deviceClass = ResolveDeviceClass(handle);
+    // classData was being left at zero. RB4 (and likely other PS4 RB-family
+    // titles) reads the per-class capability byte during slot enumeration
+    // and rejects the slot when it's zero — it interprets "drum class with
+    // no capability bits set" as a fake drum kit and never proceeds to
+    // scePadRead. Captured in a v0.8.3 user log: 11,872 scePadOpen calls,
+    // 7,906 DeviceClassGetExtendedInformation calls, 0 scePadRead calls.
+    //
+    // Set capability so each instrument class advertises a sensible default:
+    //   drum     0x03 = velocity-sensitive + has cymbal pads (Pro Drum).
+    //                   Even a standard 4-lane kit reports cymbal-capable
+    //                   here; RB4 just looks for cymbal hits and finds none.
+    //   guitar   0x07 = whammy + tilt + solo fret (Riffmaster / RB4 stratocaster).
+    //                   Older guitars worked with capability=0 historically,
+    //                   so this is additive; quantityOfSelectorSwitch=5
+    //                   matches the 5-fret layout RB4 expects.
+    //   wheel/stick 0x01 = basic capability advertised so games don't
+    //                      reject the slot during enumeration.
+    using DC = OrbisPadDeviceClass;
+    switch (pExtInfo->deviceClass) {
+    case DC::Drum:
+        pExtInfo->classData.drum.capability = 0x03;
+        break;
+    case DC::Guitar:
+        // Match v0.6 exactly: leave classData.guitar at the memset(0)
+        // default. Confirmed via `git show v0.6-rb4-instruments:src/
+        // core/libraries/pad/pad.cpp` that v0.6 didn't touch the
+        // capability bits at all and whammy / Star Power dpad-left
+        // fallback both worked on real RB4 hardware with that build.
+        //
+        // v0.8.4 set this to 0x07 (whammy + tilt + solo fret) on the
+        // theory that it was a "harmless additive" change. It wasn't:
+        // the tilt bit (0x02) makes RB4 wait for tilt-based Star Power
+        // activation and ignore the dpad-left fallback that wizard-
+        // derived guitar TOMLs depend on. v0.8.7 user reports flagged
+        // both Star Power AND whammy as broken; the v0.6 datapoint
+        // ruled the capability bits OUT as the whammy cause, but the
+        // tilt bit is still the Star Power regression. Going full v0.6
+        // here (cap=0) is the conservative restoration — no bit we
+        // don't fully understand the meaning of is advertised.
+        //
+        // Drums get the genuinely-needed 0x03 above; guitars need
+        // nothing.
+        break;
+    case DC::SteeringWheel:
+        pExtInfo->classData.steeringWheel.capability = 0x01;
+        break;
+    case DC::FightStick:
+        pExtInfo->classData.flightStick.capability = 0x01;
+        break;
+    default:
+        break;
     }
     return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI scePadDeviceClassParseData(s32 handle, const OrbisPadData* pData,
                                             OrbisPadDeviceClassData* pDeviceClassData) {
-    LOG_ERROR(Lib_Pad, "(STUBBED) called");
+    if (!pData || !pDeviceClassData) {
+        return ORBIS_PAD_ERROR_INVALID_ARG;
+    }
+    // Device class follows the shared precedence: legacy raw-HID kit TOML
+    // first, then user's per-slot Config, then SDL detection.
+    OrbisPadDeviceClass dev_class = ResolveDeviceClass(handle);
+    const bool ok = Input::HidInstrument::ParseTypedData(
+        handle, pData->deviceUniqueData, pData->deviceUniqueDataLen, dev_class, pDeviceClassData);
+    if (!ok) {
+        std::memset(pDeviceClassData, 0, sizeof(*pDeviceClassData));
+        pDeviceClassData->deviceClass = dev_class;
+        pDeviceClassData->bDataValid = false;
+    }
     return ORBIS_OK;
 }
 
@@ -91,7 +206,7 @@ int PS4_SYSV_ABI scePadGetCapability() {
 }
 
 int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerInformation* pInfo) {
-    LOG_DEBUG(Lib_Pad, "called handle = {}", handle);
+    LOG_DEBUG(Lib_Pad, "scePadGetControllerInformation called handle={}", handle);
     if (handle < 0) {
         pInfo->touchPadInfo.pixelDensity = 1;
         pInfo->touchPadInfo.resolution.x = 1920;
@@ -112,14 +227,13 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     pInfo->connectionType = ORBIS_PAD_PORT_TYPE_STANDARD;
     pInfo->connectedCount = 1;
     pInfo->connected = true;
-    pInfo->deviceClass = OrbisPadDeviceClass::Standard;
-    if (Config::getUseSpecialPad(handle)) {
+    pInfo->deviceClass = ResolveDeviceClass(handle);
+    if (pInfo->deviceClass != OrbisPadDeviceClass::Standard) {
         pInfo->connectionType = ORBIS_PAD_PORT_TYPE_SPECIAL;
-        pInfo->deviceClass = (OrbisPadDeviceClass)Config::getSpecialPadClass(handle);
-    } else {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        pInfo->deviceClass = (OrbisPadDeviceClass)controllers[handle - 1]->GetPadClassFromSDL();
     }
+    LOG_DEBUG(Lib_Pad, "scePadGetControllerInformation returning handle={} class={} connType={}",
+              handle, static_cast<int>(pInfo->deviceClass),
+              static_cast<int>(pInfo->connectionType));
     return 0;
 }
 
@@ -254,16 +368,12 @@ int PS4_SYSV_ABI scePadMbusTerm() {
 }
 
 int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenParam* pParam) {
+    LOG_INFO(Lib_Pad, "scePadOpen user_id={} type={} index={}", userId, type, index);
     if (userId == -1) {
         return ORBIS_PAD_ERROR_DEVICE_NO_HANDLE;
     }
-    bool special = Config::getUseSpecialPad(userId);
-    if (!special) {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
-            special = true;
-        }
-    }
+    const OrbisPadDeviceClass resolved = ResolveDeviceClass(userId);
+    const bool special = resolved != OrbisPadDeviceClass::Standard;
     if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
@@ -271,7 +381,8 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
         if (type != ORBIS_PAD_PORT_TYPE_STANDARD && type != ORBIS_PAD_PORT_TYPE_REMOTE_CONTROL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
     }
-    LOG_INFO(Lib_Pad, "(DUMMY) called user_id = {} type = {} index = {}", userId, type, index);
+    LOG_INFO(Lib_Pad, "scePadOpen -> user_id={} class={} special={}", userId,
+             static_cast<int>(resolved), special);
     scePadResetLightBar(1);
     return userId;
     // todo: using userId as handle works and simplifies some logic,
@@ -281,13 +392,7 @@ int PS4_SYSV_ABI scePadOpen(s32 userId, s32 type, s32 index, const OrbisPadOpenP
 int PS4_SYSV_ABI scePadOpenExt(s32 userId, s32 type, s32 index,
                                const OrbisPadOpenExtParam* pParam) {
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
-    bool special = Config::getUseSpecialPad(userId);
-    if (!special) {
-        auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
-        if (controllers[userId - 1]->GetPadClassFromSDL() != 0) {
-            special = true;
-        }
-    }
+    const bool special = ResolveDeviceClass(userId) != OrbisPadDeviceClass::Standard;
     if (special) {
         if (type != ORBIS_PAD_PORT_TYPE_SPECIAL)
             return ORBIS_PAD_ERROR_DEVICE_NOT_CONNECTED;
@@ -308,11 +413,150 @@ int PS4_SYSV_ABI scePadOutputReport() {
     return ORBIS_OK;
 }
 
+// Fill a single OrbisPadData purely from a legacy instrument's raw HID
+// report. Used by scePadRead/scePadReadState when the per-slot
+// specialPadLegacyPassUSBRawHID flag is on.
+//
+// The kit drives the slot's deviceUniqueData (velocity) and its buttons.
+// The SDL/keyboard mapping for the slot is ALSO folded in as a fallback so
+// menus stay navigable — but via the level-based ReadState (one current
+// snapshot per call), never the queue-based ReadStates, so a held key
+// cannot be double-counted.
+static void FillLegacyInstrumentData(s32 handle, OrbisPadData* pData) {
+    auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
+    int connectedCount = 0;
+    bool isConnected = false;
+    Input::State state;
+    controllers[handle - 1]->ReadState(&state, &isConnected, &connectedCount);
+    const u32 sdl_buttons = static_cast<u32>(state.buttonsState);
+
+    // Sticks / triggers default to "no nav controller bound to this slot":
+    // centred sticks, no triggers. For HID-source kits the user can bind
+    // a separate gamepad to the same slot (per-player-device-assignment)
+    // to navigate menus — in that case let the gamepad's sticks and
+    // triggers pass through. For XInput-source kits the SAME physical
+    // device is opened twice (once by us, once by hid_instrument's poll
+    // loop), so passing SDL sticks would double-count and we keep the
+    // safe centred default.
+    const std::string kit_source = Input::HidInstrument::GetActiveKitSource(handle);
+    // Only XInput-source kits open the same physical SDL gamepad as the
+    // navigation pad, so passing SDL state would double-count. HID-source
+    // and MIDI-source kits are separate devices — the user's Xbox / DS4
+    // sitting beside the drum module is what they expect to navigate
+    // menus with, so let its sticks, triggers, and buttons through.
+    const bool xinput_source = (kit_source == "xinput");
+    const bool nav_passthrough = !xinput_source;
+    if (nav_passthrough) {
+        pData->leftStick.x = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftX)]);
+        pData->leftStick.y = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::LeftY)]);
+        pData->rightStick.x = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightX)]);
+        pData->rightStick.y = static_cast<u8>(state.axes[static_cast<int>(Input::Axis::RightY)]);
+        pData->analogButtons.l2 =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::TriggerLeft)]);
+        pData->analogButtons.r2 =
+            static_cast<u8>(state.axes[static_cast<int>(Input::Axis::TriggerRight)]);
+    } else {
+        pData->leftStick.x = 0x80;
+        pData->leftStick.y = 0x80;
+        pData->rightStick.x = 0x80;
+        pData->rightStick.y = 0x80;
+        pData->analogButtons.l2 = 0;
+        pData->analogButtons.r2 = 0;
+    }
+    float acc_x = 0.0f, acc_y = 0.0f, acc_z = 0.0f;
+    if (Input::HidInstrument::GetLatestAcceleration(handle, acc_x, acc_y, acc_z)) {
+        pData->acceleration = {acc_x, acc_y, acc_z};
+    } else {
+        pData->acceleration = {0.0f, 0.0f, 0.0f};
+    }
+    pData->angularVelocity = {0.0f, 0.0f, 0.0f};
+    pData->orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+    pData->touchData = {};
+    pData->timestamp = state.time;
+    pData->connected = true;
+    pData->connectedCount = 1;
+    pData->deviceUniqueDataLen = 0;
+    // Default: just the keyboard/SDL fallback (kit may not be open yet).
+    pData->buttons = static_cast<OrbisPadButtonDataOffset>(sdl_buttons);
+
+    u8 raw[Input::HidInstrument::kMaxRawReport];
+    std::size_t raw_len = 0;
+    const bool have_kit = Input::HidInstrument::GetLatestReport(handle, raw, &raw_len);
+    if (have_kit) {
+        // Use the same resolver scePadGetControllerInformation reports
+        // through — otherwise a slot on "Automatic" (useSpecialPad=false,
+        // kit TOML says drum) hits this branch with cls=Standard and
+        // ParseTypedData silently no-ops, leaving the game without
+        // velocity bytes.
+        const OrbisPadDeviceClass cls = ResolveDeviceClass(handle);
+        // For XInput-source kits the SDL gamepad in this slot IS the kit
+        // (hid_instrument's poll thread opens the same physical device),
+        // so its face / shoulder / D-pad bits would conflict with the
+        // kit's PackButtons output (e.g. SDL says Yellow=Square, we say
+        // Yellow=Triangle). Mask those.
+        // For HID-source kits the SDL gamepad — if any — is a SEPARATE
+        // navigation controller bound to the slot via the per-player
+        // device assignment (e.g. an Xbox controller next to a MIDI drum
+        // module). We don't want a Yellow drum hit to compete with a
+        // Triangle press on the gamepad, but we DO want the gamepad's
+        // dpad/face buttons to navigate menus. Keep the conservative
+        // mask: instrument bits routed only through the kit, navigation
+        // bits (Options, Touchpad, Share, PS) through SDL. The dpad
+        // stays masked because RB4 treats the kit's HAT decoding as
+        // authoritative for the player.
+        constexpr u32 kInstrumentBtnMask =
+            static_cast<u32>(OrbisPadButtonDataOffset::Square | OrbisPadButtonDataOffset::Cross |
+                             OrbisPadButtonDataOffset::Circle | OrbisPadButtonDataOffset::Triangle |
+                             OrbisPadButtonDataOffset::L1 | OrbisPadButtonDataOffset::R1 |
+                             OrbisPadButtonDataOffset::L2 | OrbisPadButtonDataOffset::R2 |
+                             OrbisPadButtonDataOffset::Up | OrbisPadButtonDataOffset::Down |
+                             OrbisPadButtonDataOffset::Left | OrbisPadButtonDataOffset::Right);
+        // The instrument-bit mask only applies to XInput-source kits.
+        // For HID and MIDI sources the navigation gamepad is a separate
+        // device — the user wants pressing X / dpad / etc. to land as
+        // Cross / dpad / etc. in the game, not be filtered out as
+        // "instrument bits."
+        const u32 sdl_for_buttons =
+            xinput_source ? (sdl_buttons & ~kInstrumentBtnMask) : sdl_buttons;
+        pData->buttons = static_cast<OrbisPadButtonDataOffset>(
+            sdl_for_buttons | Input::HidInstrument::PackButtons(handle, raw, raw_len, cls));
+        pData->deviceUniqueDataLen = static_cast<u8>(Input::HidInstrument::PackDeviceUniqueData(
+            handle, raw, raw_len, cls, pData->deviceUniqueData));
+    }
+}
+
 int PS4_SYSV_ABI scePadRead(s32 handle, OrbisPadData* pData, s32 num) {
     LOG_TRACE(Lib_Pad, "handle: {}", handle);
     if (handle == ORBIS_PAD_ERROR_DEVICE_NO_HANDLE || handle != std::clamp(handle, 1, 4)) {
         return ORBIS_PAD_ERROR_INVALID_HANDLE;
     }
+
+    // Diagnostic: throttled visibility into what scePadRead is returning
+    // — buttons bitmap, dud[0..6] (drum pad velocities), connected flag.
+    // Default LOG_TRACE above stays as-is; this fires every 120th call
+    // (~once a second at 120 Hz polling) so we can see button/dud flow
+    // without flooding the log. Drop once the actual bug is found.
+    static thread_local int s_read_counter[4] = {};
+    const int slot_idx = (handle >= 1 && handle <= 4) ? (handle - 1) : 0;
+    const bool do_log = ((++s_read_counter[slot_idx] % 120) == 0);
+
+    // Legacy-instrument path: this slot is driven solely by the kit's raw
+    // HID report. Returns exactly one state; SDL/keyboard read path below
+    // is bypassed. Standard controllers are unaffected — they fall through.
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        FillLegacyInstrumentData(handle, &pData[0]);
+        if (do_log) {
+            LOG_INFO(Lib_Pad,
+                     "scePadRead handle={} (legacy-instrument) buttons=0x{:x} "
+                     "dud=[{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
+                     handle, static_cast<u32>(pData[0].buttons), pData[0].deviceUniqueData[0],
+                     pData[0].deviceUniqueData[1], pData[0].deviceUniqueData[2],
+                     pData[0].deviceUniqueData[3], pData[0].deviceUniqueData[4],
+                     pData[0].deviceUniqueData[5], pData[0].deviceUniqueData[6]);
+        }
+        return 1;
+    }
+
     int connected_count = 0;
     bool connected = false;
     Input::State states[64];
@@ -382,6 +626,13 @@ int PS4_SYSV_ABI scePadReadState(s32 handle, OrbisPadData* pData) {
     if (handle == ORBIS_PAD_ERROR_DEVICE_NO_HANDLE || handle != std::clamp(handle, 1, 4)) {
         return ORBIS_PAD_ERROR_INVALID_HANDLE;
     }
+
+    // Legacy-instrument path: same single source of truth as scePadRead.
+    if (Config::getSpecialPadLegacyPassUSBRawHID(handle)) {
+        FillLegacyInstrumentData(handle, pData);
+        return ORBIS_OK;
+    }
+
     auto controllers = *Common::Singleton<Input::GameControllers>::Instance();
     int connectedCount = 0;
     bool isConnected = false;
@@ -683,16 +934,14 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("Uq6LgTJEmQs", "libScePad", 1, "libScePad", scePadGetDataInternal);
     LIB_FUNCTION("hDgisSGkOgw", "libScePad", 1, "libScePad", scePadGetDeviceId);
     LIB_FUNCTION("4rS5zG7RFaM", "libScePad", 1, "libScePad", scePadGetDeviceInfo);
-    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad",
-                 scePadGetExtControllerInformation);
+    LIB_FUNCTION("hGbf2QTBmqc", "libScePad", 1, "libScePad", scePadGetExtControllerInformation);
     LIB_FUNCTION("1DmZjZAuzEM", "libScePad", 1, "libScePad", scePadGetExtensionUnitInfo);
     LIB_FUNCTION("PZSoY8j0Pko", "libScePad", 1, "libScePad", scePadGetFeatureReport);
     LIB_FUNCTION("u1GRHp+oWoY", "libScePad", 1, "libScePad", scePadGetHandle);
     LIB_FUNCTION("kiA9bZhbnAg", "libScePad", 1, "libScePad", scePadGetIdleCount);
     LIB_FUNCTION("1Odcw19nADw", "libScePad", 1, "libScePad", scePadGetInfo);
     LIB_FUNCTION("4x5Im8pr0-4", "libScePad", 1, "libScePad", scePadGetInfoByPortType);
-    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad",
-                 scePadGetLicenseControllerInformation);
+    LIB_FUNCTION("vegw8qax5MI", "libScePad", 1, "libScePad", scePadGetLicenseControllerInformation);
     LIB_FUNCTION("WPIB7zBWxVE", "libScePad", 1, "libScePad", scePadGetMotionSensorPosition);
     LIB_FUNCTION("k4+nDV9vbT0", "libScePad", 1, "libScePad", scePadGetMotionTimerUnit);
     LIB_FUNCTION("do-JDWX+zRs", "libScePad", 1, "libScePad", scePadGetSphereRadius);
@@ -720,13 +969,10 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("5Wf4q349s+Q", "libScePad", 1, "libScePad", scePadReadStateExt);
     LIB_FUNCTION("DscD1i9HX1w", "libScePad", 1, "libScePad", scePadResetLightBar);
     LIB_FUNCTION("+4c9xRLmiXQ", "libScePad", 1, "libScePad", scePadResetLightBarAll);
-    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad",
-                 scePadResetLightBarAllByPortType);
+    LIB_FUNCTION("+Yp6+orqf1M", "libScePad", 1, "libScePad", scePadResetLightBarAllByPortType);
     LIB_FUNCTION("rIZnR6eSpvk", "libScePad", 1, "libScePad", scePadResetOrientation);
-    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad",
-                 scePadResetOrientationForTracker);
-    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad",
-                 scePadSetAngularVelocityDeadbandState);
+    LIB_FUNCTION("jbAqAvLEP4A", "libScePad", 1, "libScePad", scePadResetOrientationForTracker);
+    LIB_FUNCTION("r44mAxdSG+U", "libScePad", 1, "libScePad", scePadSetAngularVelocityDeadbandState);
     LIB_FUNCTION("ew647HuKi2Y", "libScePad", 1, "libScePad", scePadSetAutoPowerOffCount);
     LIB_FUNCTION("MbTt1EHYCTg", "libScePad", 1, "libScePad", scePadSetButtonRemappingInfo);
     LIB_FUNCTION("MLA06oNfF+4", "libScePad", 1, "libScePad", scePadSetConnection);
@@ -743,8 +989,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("DmBx8K+jDWw", "libScePad", 1, "libScePad", scePadSetProcessPrivilege);
     LIB_FUNCTION("FbxEpTRDou8", "libScePad", 1, "libScePad",
                  scePadSetProcessPrivilegeOfButtonRemapping);
-    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad",
-                 scePadSetShareButtonMaskForRemotePlay);
+    LIB_FUNCTION("yah8Bk4TcYY", "libScePad", 1, "libScePad", scePadSetShareButtonMaskForRemotePlay);
     LIB_FUNCTION("vDLMoJLde8I", "libScePad", 1, "libScePad", scePadSetTiltCorrectionState);
     LIB_FUNCTION("z+GEemoTxOo", "libScePad", 1, "libScePad", scePadSetUserColor);
     LIB_FUNCTION("yFVnOdGxvZY", "libScePad", 1, "libScePad", scePadSetVibration);
@@ -759,8 +1004,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("PFec14-UhEQ", "libScePad", 1, "libScePad", scePadVirtualDeviceDeleteDevice);
     LIB_FUNCTION("pjPCronWdxI", "libScePad", 1, "libScePad",
                  scePadVirtualDeviceDisableButtonRemapping);
-    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad",
-                 scePadVirtualDeviceGetRemoteSetting);
+    LIB_FUNCTION("LKXfw7VJYqg", "libScePad", 1, "libScePad", scePadVirtualDeviceGetRemoteSetting);
     LIB_FUNCTION("IWOyO5jKuZg", "libScePad", 1, "libScePad", scePadVirtualDeviceInsertData);
     LIB_FUNCTION("KLmYx9ij2h0", "libScePad", 1, "libScePad", Func_28B998C7D8A3DA1D);
     LIB_FUNCTION("KY0hSB+Uyfo", "libScePad", 1, "libScePad", Func_298D21481F94C9FA);

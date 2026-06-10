@@ -135,3 +135,32 @@ SPDX-License-Identifier = "MIT"
 path = "dist/qt.conf"
 SPDX-FileCopyrightText = "shadPS4 Emulator Project"
 SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# HID test-kit raw captures and synthetic fixtures (binary data, no inline headers).
+[[annotations]]
+path = "tests/hid_kits/**.raw.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadPS4 Emulator Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# MIDI test-kit synthesised captures (JSONL data files, no inline headers).
+[[annotations]]
+path = "tests/midi/synthesised/**.midi.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadPS4 Emulator Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# Real-hardware MIDI captures contributed by community members for the
+# regression corpus. JSONL data so no inline SPDX header; donors agreed
+# to GPL-2.0-or-later licensing alongside the rest of the project.
+[[annotations]]
+path = "tests/midi/community/**.midi.jsonl"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadPS4 Emulator Project (community contributors)"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# Upstream placeholder file (empty), inherited from the rb4 branch.
+[[annotations]]
+path = "hi"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"

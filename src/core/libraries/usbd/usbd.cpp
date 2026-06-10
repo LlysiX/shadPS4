@@ -5,6 +5,7 @@
 #include "common/singleton.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
+#include "input/hid_instrument.h"
 #include "usbd.h"
 
 #include <fmt/format.h>
@@ -44,7 +45,28 @@ void PS4_SYSV_ABI sceUsbdExit() {
 s64 PS4_SYSV_ABI sceUsbdGetDeviceList(SceUsbdDevice*** list) {
     LOG_DEBUG(Lib_Usbd, "called");
 
-    return libusb_to_orbis_error(libusb_get_device_list(g_libusb_context, list));
+    ssize_t count = libusb_get_device_list(g_libusb_context, list);
+    if (count <= 0) {
+        return libusb_to_orbis_error(static_cast<int>(count));
+    }
+
+    // Hide any device claimed by the legacy raw-HID passthrough so games
+    // don't see the same physical guitar / drum kit twice (once through
+    // this libusb path and once through OrbisPadData::deviceUniqueData).
+    ssize_t kept = 0;
+    for (ssize_t i = 0; i < count; ++i) {
+        libusb_device* dev = (*list)[i];
+        libusb_device_descriptor desc{};
+        const bool hide = libusb_get_device_descriptor(dev, &desc) == 0 &&
+                          Input::HidInstrument::ShouldHideFromUsbd(desc.idVendor, desc.idProduct);
+        if (hide) {
+            libusb_unref_device(dev);
+        } else {
+            (*list)[kept++] = dev;
+        }
+    }
+    (*list)[kept] = nullptr; // libusb_free_device_list stops at the first null
+    return kept;
 }
 
 void PS4_SYSV_ABI sceUsbdFreeDeviceList(SceUsbdDevice** list, s32 unref_devices) {

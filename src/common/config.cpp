@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -159,15 +160,59 @@ static ConfigEntry<int> specialPadClass1(1);
 static ConfigEntry<int> specialPadClass2(1);
 static ConfigEntry<int> specialPadClass3(1);
 static ConfigEntry<int> specialPadClass4(1);
+// Per-player toggle: when true, the kit's raw USB HID input report is delivered
+// to the game through OrbisPadData::deviceUniqueData (legacy-instrument path).
+// Independent of specialPadClass*, which still selects the declared device class.
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID1(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID2(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID3(false);
+static ConfigEntry<bool> specialPadLegacyPassUSBRawHID4(false);
+
+// Per-player device assignment storage. Each slot owns a vector of
+// encoded device strings; encodePlayerDevice / decodePlayerDevice
+// translate between PlayerDevice and the string form. Empty list =
+// "auto" (no override, controller layer falls back to first-come-
+// first-served). Not a ConfigEntry<...> because the type isn't a
+// simple scalar — read/write directly from/to the TOML.
+static std::array<std::vector<std::string>, kNumPlayerSlots> playerSlotDevices{};
 static ConfigEntry<bool> isMotionControlsEnabled(true);
 static ConfigEntry<bool> useUnifiedInputConfig(true);
 static ConfigEntry<string> defaultControllerID("");
 static ConfigEntry<bool> backgroundControllerInput(false);
 
 // Audio
-static ConfigEntry<string> micDevice("Default Device");
+// Mic and noise-gate config is per-user-slot (1..kNumMicSlots) so games
+// that open multiple mics for harmonies (RB4 vocals) can route each one
+// to a distinct physical device and tune its gate threshold separately.
+// The hold time stays shared — it's a feel/decay parameter that rarely
+// needs per-mic tuning.
+constexpr int kNumMicSlots = 4;
+static std::array<ConfigEntry<string>, kNumMicSlots> micDevices{
+    ConfigEntry<string>{"Default Device"},
+    ConfigEntry<string>{"None"},
+    ConfigEntry<string>{"None"},
+    ConfigEntry<string>{"None"},
+};
 static ConfigEntry<string> mainOutputDevice("Default Device");
 static ConfigEntry<string> padSpkOutputDevice("Default Device");
+// Software noise gate on the mic. When the input level falls below
+// `micGateThresholdDb` for longer than `micGateHoldMs`, AudioInInput
+// hands the game a zero-filled buffer and sceAudioInGetSilentState
+// reports "all channels silent" — letting the game's vocal-mix path
+// (RB4 etc.) skip the mix instead of broadcasting room hum.
+static std::array<ConfigEntry<bool>, kNumMicSlots> micGateEnabledSlots{
+    ConfigEntry<bool>{false},
+    ConfigEntry<bool>{false},
+    ConfigEntry<bool>{false},
+    ConfigEntry<bool>{false},
+};
+static std::array<ConfigEntry<int>, kNumMicSlots> micGateThresholdDbSlots{
+    ConfigEntry<int>{-50},
+    ConfigEntry<int>{-50},
+    ConfigEntry<int>{-50},
+    ConfigEntry<int>{-50},
+};
+static ConfigEntry<int> micGateHoldMs(300);
 
 // GPU
 static ConfigEntry<u32> windowWidth(1280);
@@ -347,8 +392,69 @@ int getCursorHideTimeout() {
     return cursorHideTimeout.get();
 }
 
+// Clamp a caller-supplied user slot (1..kNumMicSlots) to a valid array
+// index. Out-of-range slots silently fall back to slot 0 — the same
+// behaviour the single-mic code path had before per-slot config existed,
+// so a game that opens a mic with an unexpected userId still gets the
+// primary mic settings instead of crashing.
+static int clampMicSlot(int slot) {
+    if (slot < 0)
+        return 0;
+    if (slot >= kNumMicSlots)
+        return kNumMicSlots - 1;
+    return slot;
+}
+
+int getNumMicSlots() {
+    return kNumMicSlots;
+}
+
 string getMicDevice() {
-    return micDevice.get();
+    return micDevices[0].get();
+}
+
+string getMicDevice(int slot) {
+    return micDevices[clampMicSlot(slot)].get();
+}
+
+bool getMicGateEnabled() {
+    return micGateEnabledSlots[0].get();
+}
+
+bool getMicGateEnabled(int slot) {
+    return micGateEnabledSlots[clampMicSlot(slot)].get();
+}
+
+void setMicGateEnabled(bool enabled, bool is_game_specific) {
+    micGateEnabledSlots[0].set(enabled, is_game_specific);
+}
+
+void setMicGateEnabled(int slot, bool enabled, bool is_game_specific) {
+    micGateEnabledSlots[clampMicSlot(slot)].set(enabled, is_game_specific);
+}
+
+int getMicGateThresholdDb() {
+    return micGateThresholdDbSlots[0].get();
+}
+
+int getMicGateThresholdDb(int slot) {
+    return micGateThresholdDbSlots[clampMicSlot(slot)].get();
+}
+
+void setMicGateThresholdDb(int db, bool is_game_specific) {
+    micGateThresholdDbSlots[0].set(db, is_game_specific);
+}
+
+void setMicGateThresholdDb(int slot, int db, bool is_game_specific) {
+    micGateThresholdDbSlots[clampMicSlot(slot)].set(db, is_game_specific);
+}
+
+int getMicGateHoldMs() {
+    return micGateHoldMs.get();
+}
+
+void setMicGateHoldMs(int ms, bool is_game_specific) {
+    micGateHoldMs.set(ms, is_game_specific);
 }
 
 std::string getMainOutputDevice() {
@@ -400,31 +506,45 @@ string getChooseHomeTab() {
 }
 
 bool getUseSpecialPad(int pad) {
-    switch(pad){
-        case 1:
-            return useSpecialPad1.get();
-        case 2:
-            return useSpecialPad2.get();
-        case 3:
-            return useSpecialPad3.get();
-        case 4:
-            return useSpecialPad4.get();
+    switch (pad) {
+    case 1:
+        return useSpecialPad1.get();
+    case 2:
+        return useSpecialPad2.get();
+    case 3:
+        return useSpecialPad3.get();
+    case 4:
+        return useSpecialPad4.get();
     }
     return useSpecialPad1.get();
 }
 
 int getSpecialPadClass(int pad) {
-    switch(pad){
-        case 1:
-            return specialPadClass1.get();
-        case 2:
-            return specialPadClass2.get();
-        case 3:
-            return specialPadClass3.get();
-        case 4:
-            return specialPadClass4.get();
+    switch (pad) {
+    case 1:
+        return specialPadClass1.get();
+    case 2:
+        return specialPadClass2.get();
+    case 3:
+        return specialPadClass3.get();
+    case 4:
+        return specialPadClass4.get();
     }
     return specialPadClass1.get();
+}
+
+bool getSpecialPadLegacyPassUSBRawHID(int pad) {
+    switch (pad) {
+    case 1:
+        return specialPadLegacyPassUSBRawHID1.get();
+    case 2:
+        return specialPadLegacyPassUSBRawHID2.get();
+    case 3:
+        return specialPadLegacyPassUSBRawHID3.get();
+    case 4:
+        return specialPadLegacyPassUSBRawHID4.get();
+    }
+    return specialPadLegacyPassUSBRawHID1.get();
 }
 
 bool getIsMotionControlsEnabled() {
@@ -663,7 +783,11 @@ void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific) {
 }
 
 void setMicDevice(std::string device, bool is_game_specific) {
-    micDevice.set(device, is_game_specific);
+    micDevices[0].set(device, is_game_specific);
+}
+
+void setMicDevice(int slot, std::string device, bool is_game_specific) {
+    micDevices[clampMicSlot(slot)].set(device, is_game_specific);
 }
 
 void setMainOutputDevice(std::string device, bool is_game_specific) {
@@ -710,12 +834,182 @@ void setChooseHomeTab(const string& type, bool is_game_specific) {
     chooseHomeTab.set(type, is_game_specific);
 }
 
-void setUseSpecialPad(bool use) {
-    useSpecialPad1.base_value = use;
+void setUseSpecialPad(int pad, bool use) {
+    switch (pad) {
+    case 1:
+        useSpecialPad1.base_value = use;
+        break;
+    case 2:
+        useSpecialPad2.base_value = use;
+        break;
+    case 3:
+        useSpecialPad3.base_value = use;
+        break;
+    case 4:
+        useSpecialPad4.base_value = use;
+        break;
+    default:
+        break;
+    }
 }
 
-void setSpecialPadClass(int type) {
-    specialPadClass1.base_value = type;
+void setSpecialPadClass(int pad, int type) {
+    switch (pad) {
+    case 1:
+        specialPadClass1.base_value = type;
+        break;
+    case 2:
+        specialPadClass2.base_value = type;
+        break;
+    case 3:
+        specialPadClass3.base_value = type;
+        break;
+    case 4:
+        specialPadClass4.base_value = type;
+        break;
+    default:
+        break;
+    }
+}
+
+void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass) {
+    switch (pad) {
+    case 1:
+        specialPadLegacyPassUSBRawHID1.base_value = pass;
+        break;
+    case 2:
+        specialPadLegacyPassUSBRawHID2.base_value = pass;
+        break;
+    case 3:
+        specialPadLegacyPassUSBRawHID3.base_value = pass;
+        break;
+    case 4:
+        specialPadLegacyPassUSBRawHID4.base_value = pass;
+        break;
+    default:
+        break;
+    }
+}
+
+int getNumPlayerSlots() {
+    return kNumPlayerSlots;
+}
+
+static int clampPlayerSlot(int slot) {
+    if (slot < 1)
+        return 0;
+    if (slot > kNumPlayerSlots)
+        return kNumPlayerSlots - 1;
+    return slot - 1;
+}
+
+// Wire format examples:
+//   gamepad:030000005e040000ea02000000007200
+//   kit:0x1209:0x2882
+//   keyboard
+//   midi:Roland TD-1KV
+// Lowercase kind prefix, fields separated by ':'. Keyboards have no
+// payload because there's only one virtual keyboard pad.
+std::string encodePlayerDevice(const PlayerDevice& dev) {
+    switch (dev.kind) {
+    case PlayerDeviceKind::Gamepad:
+        // gamepad:<guid>            — older format, GUID-only matching
+        // gamepad:<guid>:p:<path>   — extended, path disambiguates identical
+        //                             controllers. The "p:" prefix lets the
+        //                             decoder distinguish path from any
+        //                             future extension.
+        if (dev.path.empty())
+            return "gamepad:" + dev.guid;
+        return "gamepad:" + dev.guid + ":p:" + dev.path;
+    case PlayerDeviceKind::Kit:
+        return fmt::format("kit:0x{:04x}:0x{:04x}", dev.vid, dev.pid);
+    case PlayerDeviceKind::Keyboard:
+        return "keyboard";
+    case PlayerDeviceKind::Midi:
+        return "midi:" + dev.guid;
+    }
+    return {};
+}
+
+bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out) {
+    if (encoded.empty())
+        return false;
+    const auto colon = encoded.find(':');
+    const std::string kind = encoded.substr(0, colon);
+    const std::string rest =
+        (colon == std::string::npos) ? std::string() : encoded.substr(colon + 1);
+    if (kind == "gamepad") {
+        if (rest.empty())
+            return false;
+        out.kind = PlayerDeviceKind::Gamepad;
+        // Look for the optional ":p:<path>" suffix.
+        const auto pmarker = rest.find(":p:");
+        if (pmarker == std::string::npos) {
+            out.guid = rest;
+        } else {
+            out.guid = rest.substr(0, pmarker);
+            out.path = rest.substr(pmarker + 3); // skip ":p:"
+        }
+        return true;
+    }
+    if (kind == "kit") {
+        // Expect rest = "0xVVVV:0xPPPP"
+        const auto sep = rest.find(':');
+        if (sep == std::string::npos)
+            return false;
+        const std::string vid_s = rest.substr(0, sep);
+        const std::string pid_s = rest.substr(sep + 1);
+        try {
+            const auto parse_hex = [](const std::string& s) -> u16 {
+                std::size_t pos = 0;
+                if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+                    pos = 2;
+                }
+                return static_cast<u16>(std::stoul(s.substr(pos), nullptr, 16));
+            };
+            out.kind = PlayerDeviceKind::Kit;
+            out.vid = parse_hex(vid_s);
+            out.pid = parse_hex(pid_s);
+            return out.vid != 0 && out.pid != 0;
+        } catch (...) {
+            return false;
+        }
+    }
+    if (kind == "keyboard") {
+        out.kind = PlayerDeviceKind::Keyboard;
+        return true;
+    }
+    if (kind == "midi") {
+        out.kind = PlayerDeviceKind::Midi;
+        out.guid = rest;
+        return true;
+    }
+    return false;
+}
+
+std::vector<PlayerDevice> getPlayerSlotDevices(int slot) {
+    const int idx = clampPlayerSlot(slot);
+    std::vector<PlayerDevice> out;
+    out.reserve(playerSlotDevices[idx].size());
+    for (const auto& enc : playerSlotDevices[idx]) {
+        PlayerDevice dev;
+        if (decodePlayerDevice(enc, dev))
+            out.push_back(std::move(dev));
+    }
+    return out;
+}
+
+void setPlayerSlotDevices(int slot, const std::vector<PlayerDevice>& devices,
+                          bool /*is_game_specific*/) {
+    const int idx = clampPlayerSlot(slot);
+    std::vector<std::string> encoded;
+    encoded.reserve(devices.size());
+    for (const auto& dev : devices) {
+        std::string s = encodePlayerDevice(dev);
+        if (!s.empty())
+            encoded.push_back(std::move(s));
+    }
+    playerSlotDevices[idx] = std::move(encoded);
 }
 
 void setIsMotionControlsEnabled(bool use, bool is_game_specific) {
@@ -923,6 +1217,26 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
         specialPadClass2.setFromToml(input, "specialPadClass2", is_game_specific);
         specialPadClass3.setFromToml(input, "specialPadClass3", is_game_specific);
         specialPadClass4.setFromToml(input, "specialPadClass4", is_game_specific);
+        specialPadLegacyPassUSBRawHID1.setFromToml(input, "specialPadLegacyPassUSBRawHID1",
+                                                   is_game_specific);
+        specialPadLegacyPassUSBRawHID2.setFromToml(input, "specialPadLegacyPassUSBRawHID2",
+                                                   is_game_specific);
+        specialPadLegacyPassUSBRawHID3.setFromToml(input, "specialPadLegacyPassUSBRawHID3",
+                                                   is_game_specific);
+        specialPadLegacyPassUSBRawHID4.setFromToml(input, "specialPadLegacyPassUSBRawHID4",
+                                                   is_game_specific);
+        for (int i = 0; i < kNumPlayerSlots; ++i) {
+            const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
+            // Per-game configs that don't mention player-slot bindings must
+            // NOT clobber the global assignment loaded earlier — find_or
+            // would write back the default empty vector. Only overwrite when
+            // the file actually carries the key.
+            if (input.contains(key)) {
+                if (!is_game_specific) {
+                    playerSlotDevices[i] = toml::find<std::vector<std::string>>(input, key);
+                }
+            }
+        }
         isMotionControlsEnabled.setFromToml(input, "isMotionControlsEnabled", is_game_specific);
         useUnifiedInputConfig.setFromToml(input, "useUnifiedInputConfig", is_game_specific);
         backgroundControllerInput.setFromToml(input, "backgroundControllerInput", is_game_specific);
@@ -931,9 +1245,24 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
     if (data.contains("Audio")) {
         const toml::value& audio = data.at("Audio");
 
-        micDevice.setFromToml(audio, "micDevice", is_game_specific);
+        // Migration: pre-multi-mic configs only had `micDevice` / `micGateEnabled`
+        // / `micGateThresholdDb`. Read those into slot 0 first, then let the
+        // per-slot keys (micDevice0..micDevice3 etc.) override on top so a
+        // config written by a newer build wins. The next save writes only the
+        // per-slot keys; the legacy keys are no longer written.
+        micDevices[0].setFromToml(audio, "micDevice", is_game_specific);
+        micGateEnabledSlots[0].setFromToml(audio, "micGateEnabled", is_game_specific);
+        micGateThresholdDbSlots[0].setFromToml(audio, "micGateThresholdDb", is_game_specific);
+        for (int i = 0; i < kNumMicSlots; ++i) {
+            const std::string suffix = std::to_string(i);
+            micDevices[i].setFromToml(audio, "micDevice" + suffix, is_game_specific);
+            micGateEnabledSlots[i].setFromToml(audio, "micGateEnabled" + suffix, is_game_specific);
+            micGateThresholdDbSlots[i].setFromToml(audio, "micGateThresholdDb" + suffix,
+                                                   is_game_specific);
+        }
         mainOutputDevice.setFromToml(audio, "mainOutputDevice", is_game_specific);
         padSpkOutputDevice.setFromToml(audio, "padSpkOutputDevice", is_game_specific);
+        micGateHoldMs.setFromToml(audio, "micGateHoldMs", is_game_specific);
     }
 
     if (data.contains("GPU")) {
@@ -1112,9 +1441,17 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
     backgroundControllerInput.setTomlValue(data, "Input", "backgroundControllerInput",
                                            is_game_specific);
 
-    micDevice.setTomlValue(data, "Audio", "micDevice", is_game_specific);
+    for (int i = 0; i < kNumMicSlots; ++i) {
+        const std::string suffix = std::to_string(i);
+        micDevices[i].setTomlValue(data, "Audio", "micDevice" + suffix, is_game_specific);
+        micGateEnabledSlots[i].setTomlValue(data, "Audio", "micGateEnabled" + suffix,
+                                            is_game_specific);
+        micGateThresholdDbSlots[i].setTomlValue(data, "Audio", "micGateThresholdDb" + suffix,
+                                                is_game_specific);
+    }
     mainOutputDevice.setTomlValue(data, "Audio", "mainOutputDevice", is_game_specific);
     padSpkOutputDevice.setTomlValue(data, "Audio", "padSpkOutputDevice", is_game_specific);
+    micGateHoldMs.setTomlValue(data, "Audio", "micGateHoldMs", is_game_specific);
 
     windowWidth.setTomlValue(data, "GPU", "screenWidth", is_game_specific);
     windowHeight.setTomlValue(data, "GPU", "screenHeight", is_game_specific);
@@ -1203,6 +1540,20 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
         data["Input"]["specialPadClass2"] = specialPadClass2.base_value;
         data["Input"]["specialPadClass3"] = specialPadClass3.base_value;
         data["Input"]["specialPadClass4"] = specialPadClass4.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID1"] = specialPadLegacyPassUSBRawHID1.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID2"] = specialPadLegacyPassUSBRawHID2.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID3"] = specialPadLegacyPassUSBRawHID3.base_value;
+        data["Input"]["specialPadLegacyPassUSBRawHID4"] = specialPadLegacyPassUSBRawHID4.base_value;
+        for (int i = 0; i < kNumPlayerSlots; ++i) {
+            const std::string key = "playerSlot" + std::to_string(i + 1) + "Devices";
+            data["Input"][key] = playerSlotDevices[i];
+        }
+        // Legacy no-suffix useSpecialPad / specialPadClass keys are no
+        // longer written. Every runtime reader in this fork passes a
+        // slot/handle (1..4), so the mirror was write-only — and it
+        // had a bug where specialPadClass tracked slot 1 only, masking
+        // non-Standard classes on slots 2-4 from any reader that did
+        // still consult the unsuffixed key.
         data["Input"]["useUnifiedInputConfig"] = useUnifiedInputConfig.base_value;
         data["GPU"]["internalScreenWidth"] = internalScreenWidth.base_value;
         data["GPU"]["internalScreenHeight"] = internalScreenHeight.base_value;
@@ -1254,7 +1605,16 @@ void setDefaultValues(bool is_game_specific) {
     backgroundControllerInput.set(false, is_game_specific);
 
     // GS - Audio
-    micDevice.set("Default Device", is_game_specific);
+    for (int i = 0; i < kNumMicSlots; ++i) {
+        // Default the primary slot to the system default mic; harmony slots
+        // start as "None" so a fresh install doesn't grab every input
+        // device on first launch.
+        micDevices[i].set(i == 0 ? std::string{"Default Device"} : std::string{"None"},
+                          is_game_specific);
+        micGateEnabledSlots[i].set(false, is_game_specific);
+        micGateThresholdDbSlots[i].set(-50, is_game_specific);
+    }
+    micGateHoldMs.set(300, is_game_specific);
 
     // GS - GPU
     windowWidth.set(1280, is_game_specific);
@@ -1308,6 +1668,12 @@ void setDefaultValues(bool is_game_specific) {
         specialPadClass2.base_value = 1;
         specialPadClass3.base_value = 1;
         specialPadClass4.base_value = 1;
+        specialPadLegacyPassUSBRawHID1.base_value = false;
+        specialPadLegacyPassUSBRawHID2.base_value = false;
+        specialPadLegacyPassUSBRawHID3.base_value = false;
+        specialPadLegacyPassUSBRawHID4.base_value = false;
+        for (auto& v : playerSlotDevices)
+            v.clear();
         useUnifiedInputConfig.base_value = true;
         controllerCustomColorRGB[0] = 0;
         controllerCustomColorRGB[1] = 0;

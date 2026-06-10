@@ -118,3 +118,6 @@
 	url = https://github.com/shadps4-emu/ext-wepoll.git
 	shallow = true
     branch = dist
+[submodule "externals/rtmidi"]
+	path = externals/rtmidi
+	url = https://github.com/thestk/rtmidi.git

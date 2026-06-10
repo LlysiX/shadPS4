@@ -382,6 +382,32 @@ void ParseInputConfig(const std::string game_id = "") {
                         lineCount, line);
             return;
         }
+        // Keyboard/mouse bindings without an explicit :N suffix go to
+        // whichever slot has Keyboard pinned. Without this they all
+        // land on slot 0, contradicting Player Assignment.
+        bool binding_uses_gamepad = false;
+        for (const auto& k : binding.keys) {
+            if (k.type == InputType::Controller || k.type == InputType::Axis) {
+                binding_uses_gamepad = true;
+                break;
+            }
+        }
+        if (output_gamepad_id == -1 && !binding_uses_gamepad) {
+            for (int slot = 1; slot <= Config::getNumPlayerSlots(); ++slot) {
+                bool slot_has_keyboard = false;
+                for (const auto& dev : Config::getPlayerSlotDevices(slot)) {
+                    if (dev.kind == Config::PlayerDeviceKind::Keyboard) {
+                        slot_has_keyboard = true;
+                        break;
+                    }
+                }
+                if (slot_has_keyboard) {
+                    output_gamepad_id = slot;
+                    break;
+                }
+            }
+            LOG_DEBUG(Input, "Keyboard-route: line='{}' -> slot {}", line, output_gamepad_id);
+        }
         if (button_it != string_to_cbutton_map.end()) {
             // todo add new shit here
             connection = BindingConnection(
@@ -540,6 +566,14 @@ void ControllerOutput::FinalizeUpdate(u8 gamepad_index) {
     if (!state_changed) {
         return;
     }
+    // Fire Login the first time real input lands on this slot. No-op
+    // when the slot is already logged in. This is what gives RB4 and
+    // similar games their "press OPTIONS to JOIN" UX — pressing any
+    // bound input on a previously-silent slot signs that player in.
+    Input::GameControllers::EnsureLoggedIn(gamepad_index);
+    // Stamp the slot so the Player Assignment dialog's tab indicator
+    // glows when this slot is the one currently producing input.
+    Input::NoteInputOnSlot(gamepad_index);
     old_button_state = new_button_state;
     old_param = *new_param;
     float touchpad_x = 0;

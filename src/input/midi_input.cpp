@@ -234,13 +234,10 @@ namespace {
 // boundary so the deque only ever holds NoteEvent records.
 std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     std::vector<NoteEvent> out;
-    if (!h->midi)
-        return out;
     const auto now = std::chrono::steady_clock::now();
     // Snapshot the pre-drain state so the log line below can show what
     // this call did.
     const std::size_t pending_before = h->pending.size();
-    const bool had_custom_map = !h->custom_map.empty();
     int hits_applied = 0;
     while (!h->pending.empty()) {
         const NoteEvent record = h->pending.front();
@@ -248,18 +245,16 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
         out.push_back(record);
         const int vel = record.velocity;
         const bool note_on = record.on;
-        // Note-off is intentionally ignored here. The decay loop at the
-        // bottom of DrainAndUpdate clears the velocity kVelocityHoldMs
-        // after the last note-on. Pro Drum modules that send an
-        // explicit note-off shortly after each note-on (Alesis Surge,
-        // Roland TD-series) would otherwise hit the runtime in pairs:
-        // pads_by_byte[byte] gets set by note-on then zeroed by the
-        // matching note-off in the same DrainAndUpdate tick. The
-        // SnapshotDrumBuffer caller never sees a non-zero velocity and
-        // RB4 never registers a drum hit even though the events did
-        // arrive correctly. Letting the decay window handle the release
-        // uniformly is correct for both note-off-sending and
-        // note-off-less modules.
+        // Note-off is intentionally ignored here. SnapshotDrumBuffer
+        // consumes velocities on read (each note-on produces velocity
+        // in exactly one snapshot), so the release path is "every
+        // snapshot that happens AFTER a note-on with no fresh
+        // note-on arriving returns 0 for that byte." Pro Drum modules
+        // that send an explicit note-off shortly after each note-on
+        // (Alesis Surge, Roland TD-series) would otherwise pair-clobber
+        // the byte the note-on just set within the same drain tick;
+        // ignoring note-off keeps the byte alive long enough for at
+        // least one snapshot to capture it.
         if (!note_on)
             continue;
         if (!h->custom_map.empty()) {
@@ -290,19 +285,17 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
             }
         }
     }
-    // Decay pads whose last activity is older than the hold window.
-    for (auto& p : h->pads) {
-        if (p.velocity == 0)
-            continue;
-        if (now - p.last_active > kVelocityHoldMs)
-            p.velocity = 0;
-    }
-    for (auto& p : h->pads_by_byte) {
-        if (p.velocity == 0)
-            continue;
-        if (now - p.last_active > kVelocityHoldMs)
-            p.velocity = 0;
-    }
+    // Decay loop removed in v0.8.9 — SnapshotDrumBuffer now consumes
+    // velocities on read so there's nothing to decay between snapshots.
+    // A note-on landing in pads_by_byte[byte] is guaranteed to survive
+    // until the very next snapshot regardless of elapsed time, then is
+    // cleared by that snapshot, and the next snapshot will see 0 for
+    // that byte unless another note-on has been drained in between.
+    // Fixes fast-play hit detection where rapid back-to-back hits on
+    // the same pad (e.g. 30Hz on the snare during a roll) were leaving
+    // the byte stuck non-zero across multiple polls, so RB4 didn't see
+    // the 0->velocity edge for each hit and missed every one after the
+    // first.
     // Diagnostic: log only when something happened (events drained or
     // hits applied). The size of custom_map and which bytes ended up
     // non-zero after the drain make it obvious whether the lookup is
@@ -358,11 +351,20 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
     (void)DrainAndUpdate(h);
     std::memset(out, 0, kSnapshotBytes);
     std::uint8_t flags = 0;
+    // Consume-on-read: every non-zero velocity is copied into the
+    // snapshot AND cleared from pads_by_byte / pads, so the very next
+    // SnapshotDrumBuffer call returns 0 for that byte unless another
+    // note-on has been drained in between. This is what RB4 needs to
+    // count each MIDI note-on as a separate hit during fast play —
+    // the runtime's downstream signal becomes a discrete pulse per
+    // hit instead of a value that stays "stuck" for kVelocityHoldMs
+    // and shadows back-to-back hits on the same pad.
     if (!h->custom_map.empty()) {
         for (int b = 0; b < (int)kSnapshotBytes; ++b) {
             if (h->pads_by_byte[b].velocity == 0)
                 continue;
             out[b] = h->pads_by_byte[b].velocity;
+            h->pads_by_byte[b].velocity = 0;
             std::uint8_t mask = 0;
             for (const auto& d : kPadDefaults) {
                 if (d.snap_byte == b) {
@@ -374,10 +376,11 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
         }
     } else {
         for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
-            const auto& pad = h->pads[p];
+            auto& pad = h->pads[p];
             if (pad.velocity == 0)
                 continue;
             out[kPadDefaults[p].snap_byte] = pad.velocity;
+            pad.velocity = 0;
             flags |= kPadDefaults[p].mask_bit;
         }
     }
@@ -407,5 +410,34 @@ void Shutdown() {
     // Per-port handles are owned by callers; nothing global to release —
     // RtMidiIn destructors close their OS clients automatically.
 }
+
+namespace Testing {
+
+void* CreateSyntheticHandleForTesting() {
+    auto* h = new PortHandle();
+    h->opened_at = std::chrono::steady_clock::now();
+    return h;
+}
+
+void DestroySyntheticHandleForTesting(void* handle) {
+    if (!handle)
+        return;
+    delete static_cast<PortHandle*>(handle);
+}
+
+void PushNoteEventForTesting(void* handle, std::uint8_t note, std::uint8_t velocity, bool note_on) {
+    if (!handle)
+        return;
+    auto* h = static_cast<PortHandle*>(handle);
+    std::lock_guard lk(g_global_mu);
+    NoteEvent rec;
+    rec.on = note_on;
+    rec.note = note;
+    rec.velocity = velocity;
+    rec.t_ms = 0;
+    h->pending.push_back(rec);
+}
+
+} // namespace Testing
 
 } // namespace Input::MidiInput

@@ -25,6 +25,7 @@
 #include "input/hid_instrument.h"
 #include "input/hid_kit_def.h"
 #include "input/hid_kit_probe_data.h"
+#include "input/midi_input.h"
 
 namespace fs = std::filesystem;
 namespace HID = Input::HidInstrument;
@@ -887,6 +888,127 @@ green = [43]
   return r;
 }
 
+// Fast-play hit detection — the v0.8.9 regression test. Before v0.8.9 the
+// runtime held each note-on's velocity in pads_by_byte for kVelocityHoldMs
+// (80 ms) regardless of how many subsequent snapshots happened. For
+// back-to-back hits on the same pad faster than 80 ms apart (e.g. snare
+// roll at ~30 Hz), RB4 didn't see the 0 → velocity edge for each hit
+// because the byte was already non-zero from the previous hit. v0.8.9
+// changed SnapshotDrumBuffer to consume velocities on read: each note-on
+// produces velocity in exactly one snapshot, then the byte returns to 0
+// until another note-on is drained. This test injects a sequence of
+// note-ons against a synthetic MIDI handle and asserts each one
+// produces a discrete pulse.
+CaseResult RunFastPlayPulseTest() {
+  namespace MI = Input::MidiInput;
+  CaseResult r{};
+  r.name = "FastPlayPulse";
+
+  void *handle = MI::Testing::CreateSyntheticHandleForTesting();
+  if (!handle) {
+    r.detail = "CreateSyntheticHandleForTesting returned nullptr";
+    return r;
+  }
+  // Map MIDI note 38 (GM Acoustic Snare) to red snare byte 3.
+  std::map<std::uint8_t, int> pad_map{{38, MI::kSnapByteSnareRed}};
+  MI::ConfigurePadMap(handle, pad_map);
+
+  auto snapshot = [&]() -> std::array<std::uint8_t, MI::kSnapshotBytes> {
+    std::array<std::uint8_t, MI::kSnapshotBytes> buf{};
+    MI::SnapshotDrumBuffer(handle, buf.data(), buf.size());
+    return buf;
+  };
+
+  auto velocity_for = [](int midi_vel) -> std::uint8_t {
+    return static_cast<std::uint8_t>((midi_vel * 255 + 63) / 127);
+  };
+
+  // Hit 1: note-on red at velocity 80.
+  MI::Testing::PushNoteEventForTesting(handle, 38, 80, /*note_on=*/true);
+  auto s1 = snapshot();
+  if (s1[MI::kSnapByteSnareRed] != velocity_for(80)) {
+    r.detail = "first snapshot did not capture hit1: expected " +
+               std::to_string(velocity_for(80)) + " got " +
+               std::to_string(s1[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+  if ((s1[MI::kSnapByteFaceFlags] & 0x02) == 0) {
+    r.detail = "first snapshot face-flags missing red bit (0x02)";
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  // Second snapshot WITHOUT another note-on must return 0 — this is the
+  // consume-on-read invariant that lets RB4 see a 0 -> velocity edge
+  // for the next hit.
+  auto s2 = snapshot();
+  if (s2[MI::kSnapByteSnareRed] != 0) {
+    r.detail =
+        "second snapshot did not return to 0 after consume: expected 0 got " +
+        std::to_string(s2[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+  if (s2[MI::kSnapByteFaceFlags] != 0) {
+    r.detail = "second snapshot face-flags should be 0, got " +
+               std::to_string(s2[MI::kSnapByteFaceFlags]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  // Hit 2: arrives immediately after the prior hit's snapshot consumed
+  // it. Must produce a new discrete pulse with the NEW velocity.
+  MI::Testing::PushNoteEventForTesting(handle, 38, 120, /*note_on=*/true);
+  auto s3 = snapshot();
+  if (s3[MI::kSnapByteSnareRed] != velocity_for(120)) {
+    r.detail = "third snapshot did not capture hit2: expected " +
+               std::to_string(velocity_for(120)) + " got " +
+               std::to_string(s3[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  // Hits 3+4 arrive between the same pair of snapshot calls — the
+  // runtime can only report one pulse per snapshot, so the more
+  // recent velocity wins (matches what a player would expect: the
+  // last hit is what reaches the game). This is the edge case from
+  // very-fast rolls; documents the intended behaviour rather than
+  // testing a problem.
+  MI::Testing::PushNoteEventForTesting(handle, 38, 60, /*note_on=*/true);
+  MI::Testing::PushNoteEventForTesting(handle, 38, 100, /*note_on=*/true);
+  auto s4 = snapshot();
+  if (s4[MI::kSnapByteSnareRed] != velocity_for(100)) {
+    r.detail =
+        "fourth snapshot did not show latest of two coalesced hits: expected " +
+        std::to_string(velocity_for(100)) + " got " +
+        std::to_string(s4[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  // Explicit note-off MUST NOT zero pads_by_byte before SnapshotDrumBuffer
+  // reads it. Pro Drum modules send note-off ~50-100 ms after note-on;
+  // pre-v0.8.7 the runtime cleared the velocity on note-off in the same
+  // drain tick as the note-on, so SnapshotDrumBuffer saw 0. This guard
+  // tests that explicit note-off is ignored.
+  MI::Testing::PushNoteEventForTesting(handle, 38, 90, /*note_on=*/true);
+  MI::Testing::PushNoteEventForTesting(handle, 38, 64, /*note_on=*/false);
+  auto s5 = snapshot();
+  if (s5[MI::kSnapByteSnareRed] != velocity_for(90)) {
+    r.detail = "fifth snapshot lost note-on velocity when note-off arrived in "
+               "same drain: expected " +
+               std::to_string(velocity_for(90)) + " got " +
+               std::to_string(s5[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  MI::Testing::DestroySyntheticHandleForTesting(handle);
+  r.passed = true;
+  return r;
+}
+
 // `hidtest --replay-midi <kit.toml> <capture.midi.jsonl>` — load the kit
 // TOML through the runtime loader (BindKitFromTomlForTesting), then walk
 // every Note On event in the jsonl. For each event:
@@ -1037,6 +1159,10 @@ int main(int argc, char **argv) {
   // PackDeviceUniqueData / PackButtons hot path — sub-threshold raw
   // bytes silence both the dud velocity AND the face button.
   results.push_back(RunGateApplyTest());
+  // Fast-play pulse — guards the v0.8.9 consume-on-read invariant so
+  // back-to-back hits on the same pad each produce a discrete velocity
+  // pulse instead of being shadowed by an 80 ms hold window.
+  results.push_back(RunFastPlayPulseTest());
   for (auto &f : files) {
     results.push_back(RunCase(f));
   }

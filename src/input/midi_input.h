@@ -107,4 +107,24 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
 // client. Called on emulator exit.
 void Shutdown();
 
+namespace Testing {
+
+// Allocate a PortHandle without going through RtMidi — used by hidtest
+// to exercise the DrainAndUpdate / SnapshotDrumBuffer state machine
+// without needing a real MIDI device on the test host. Free with
+// DestroySyntheticHandleForTesting; standard CloseInputPort would also
+// work but does an unnecessary RtMidi cancelCallback dance on a handle
+// that never set one up.
+void* CreateSyntheticHandleForTesting();
+void DestroySyntheticHandleForTesting(void* handle);
+
+// Inject a note-on/off directly into the handle's pending queue,
+// bypassing the RtMidi callback. The pushed event behaves exactly like
+// one delivered live (subject to the same DrainAndUpdate / consume-on-
+// read pipeline). Used to test the fast-play hit-detection invariant
+// without a physical MIDI source.
+void PushNoteEventForTesting(void* handle, std::uint8_t note, std::uint8_t velocity, bool note_on);
+
+} // namespace Testing
+
 } // namespace Input::MidiInput

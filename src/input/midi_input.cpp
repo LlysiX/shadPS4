@@ -139,8 +139,8 @@ void RtMidiCb(double /*deltatime*/, std::vector<unsigned char>* message, void* u
     rec.velocity = static_cast<std::uint8_t>((*message)[2] & 0x7F);
     rec.on = (status == 0x90 && rec.velocity > 0);
     // Diagnostic: log every note-on we receive from the live MIDI port.
-    // Drop to LOG_DEBUG once we've pinned down whether the user's Pro Drum module is sending notes that match the kit's midi_pad_map at gameplay time. If the in-game module mode differs from the probe mode (different MIDI program / preset), notes hit here but the
-    // is sending notes that match the kit's midi_pad_map at
+    // Drop to LOG_DEBUG once we've pinned down whether the user's Pro
+    // Drum module is sending notes that match the kit's midi_pad_map at
     // gameplay time. If the in-game module mode differs from the probe
     // mode (different MIDI program / preset), notes hit here but the
     // pads_by_byte writer in DrainAndUpdate finds no map entry and
@@ -148,8 +148,10 @@ void RtMidiCb(double /*deltatime*/, std::vector<unsigned char>* message, void* u
     // even though the runtime is functioning correctly. This log line
     // makes that diagnosable from a tap-each-pad-once test.
     if (rec.on) {
-        LOG_INFO(Input, "MIDI rx: note_on note={} vel={} (status=0x{:x})", rec.note, rec.velocity,
-                 (*message)[0]);
+        // Include handle so we can match this rx against the handle
+        // PollLoop reads via SnapshotDrumBuffer. Mismatch = bug.
+        LOG_INFO(Input, "MIDI rx: handle={:p} note_on note={} vel={} (status=0x{:x})",
+                 static_cast<void*>(h), rec.note, rec.velocity, (*message)[0]);
     }
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard lk(g_global_mu);
@@ -191,7 +193,13 @@ void* OpenInputPort(const std::string& id) {
         // after the port is hot lands in our deque, not RtMidi's queue.
         handle->midi->setCallback(&RtMidiCb, handle.get());
         handle->midi->openPort(static_cast<unsigned int>(idx), "shadPS4 MIDI in");
-        LOG_INFO(Input, "MIDI: opened port {} ({})", idx, handle->midi->getPortName(idx));
+        // Include the PortHandle pointer in the log so we can correlate
+        // OpenInputPort, ConfigurePadMap, the RtMidi callback's userData,
+        // DrainAndUpdate, and SnapshotDrumBuffer across the log. If
+        // these pointers don't agree we're routing events into a
+        // PortHandle whose pads_by_byte / custom_map nobody reads.
+        LOG_INFO(Input, "MIDI: opened port {} ({}) handle={:p}", idx,
+                 handle->midi->getPortName(idx), static_cast<void*>(handle.get()));
         return handle.release();
     } catch (const RtMidiError& e) {
         LOG_WARNING(Input, "MIDI: open failed for port {}: {}", id, e.getMessage());
@@ -229,6 +237,11 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
     if (!h->midi)
         return out;
     const auto now = std::chrono::steady_clock::now();
+    // Snapshot the pre-drain state so the log line below can show what
+    // this call did.
+    const std::size_t pending_before = h->pending.size();
+    const bool had_custom_map = !h->custom_map.empty();
+    int hits_applied = 0;
     while (!h->pending.empty()) {
         const NoteEvent record = h->pending.front();
         h->pending.pop_front();
@@ -244,6 +257,7 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
                         h->pads_by_byte[byte_idx].velocity =
                             static_cast<std::uint8_t>((vel * 255 + 63) / 127);
                         h->pads_by_byte[byte_idx].last_active = now;
+                        ++hits_applied;
                     } else {
                         h->pads_by_byte[byte_idx].velocity = 0;
                     }
@@ -283,6 +297,26 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
         if (now - p.last_active > kVelocityHoldMs)
             p.velocity = 0;
     }
+    // Diagnostic: log only when something happened (events drained or
+    // hits applied). The size of custom_map and which bytes ended up
+    // non-zero after the drain make it obvious whether the lookup is
+    // landing in pads_by_byte. Silent when there's nothing to report so
+    // we don't flood the log on every poll tick.
+    if (pending_before > 0 || hits_applied > 0) {
+        std::string nonzero;
+        for (int b = 0; b < (int)kSnapshotBytes; ++b) {
+            if (h->pads_by_byte[b].velocity != 0) {
+                if (!nonzero.empty())
+                    nonzero += ",";
+                nonzero += std::to_string(b) + "=" + std::to_string(h->pads_by_byte[b].velocity);
+            }
+        }
+        LOG_INFO(Input,
+                 "MIDI DrainAndUpdate: handle={:p} drained={} hits_applied={} "
+                 "custom_map_size={} pads_by_byte[nonzero]={{{}}}",
+                 static_cast<void*>(h), pending_before, hits_applied, h->custom_map.size(),
+                 nonzero);
+    }
     return out;
 }
 
@@ -306,6 +340,8 @@ void ConfigurePadMap(void* handle, const std::map<std::uint8_t, int>& note_to_by
         p.velocity = 0;
     for (auto& p : h->pads_by_byte)
         p.velocity = 0;
+    LOG_INFO(Input, "MIDI ConfigurePadMap: handle={:p} entries={}", static_cast<void*>(h),
+             note_to_byte.size());
 }
 
 std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_len) {
@@ -340,6 +376,24 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
         }
     }
     out[kSnapByteFaceFlags] = flags;
+    // Log only when the snapshot actually has drum bytes set — silent
+    // on every empty-snapshot poll tick so we don't flood. Tells us
+    // which handle the caller is reading and whether pads_by_byte was
+    // non-empty at that moment.
+    if (flags != 0) {
+        std::string nonzero;
+        for (int b = 0; b < (int)kSnapshotBytes; ++b) {
+            if (out[b] != 0 && b != kSnapByteFaceFlags) {
+                if (!nonzero.empty())
+                    nonzero += ",";
+                nonzero += std::to_string(b) + "=" + std::to_string(out[b]);
+            }
+        }
+        LOG_INFO(Input,
+                 "MIDI SnapshotDrumBuffer: handle={:p} flags=0x{:x} "
+                 "bytes={{{}}}",
+                 static_cast<void*>(h), flags, nonzero);
+    }
     return kSnapshotBytes;
 }
 

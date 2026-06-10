@@ -900,7 +900,7 @@ green = [43]
 //     the runtime would produce a real "drum hit" for that input
 //
 // Lets us replay a user's actual probe capture against their actual TOML
-// offline and see whether the SDK output is correct without needing him
+// offline and see whether the SDK output is correct without needing them
 // to re-test.
 int RunReplayMidi(const fs::path &toml_path, const fs::path &jsonl_path) {
   using DC = Libraries::Pad::OrbisPadDeviceClass;

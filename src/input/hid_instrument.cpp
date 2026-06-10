@@ -250,9 +250,9 @@ void PollLoop() {
                                  "HID instrument slot {}: MIDI ConfigurePadMap "
                                  "applied {} note->byte entries (drum_red_byte={} "
                                  "drum_blue_byte={} drum_yellow_byte={} "
-                                 "drum_green_byte={})",
+                                 "drum_green_byte={}) port_handle={:p}",
                                  slot, kd.midi_pad_map.size(), kd.drum_red_byte, kd.drum_blue_byte,
-                                 kd.drum_yellow_byte, kd.drum_green_byte);
+                                 kd.drum_yellow_byte, kd.drum_green_byte, port);
                         std::lock_guard<std::mutex> lk(s.mu);
                         s.midi = port;
                         s.vid = kd.vid;

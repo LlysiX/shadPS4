@@ -105,8 +105,25 @@ int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
         pExtInfo->classData.drum.capability = 0x03;
         break;
     case DC::Guitar:
-        pExtInfo->classData.guitar.capability = 0x07;
-        pExtInfo->classData.guitar.quantityOfSelectorSwitch = 5;
+        // Match v0.6 exactly: leave classData.guitar at the memset(0)
+        // default. Confirmed via `git show v0.6-rb4-instruments:src/
+        // core/libraries/pad/pad.cpp` that v0.6 didn't touch the
+        // capability bits at all and whammy / Star Power dpad-left
+        // fallback both worked on real RB4 hardware with that build.
+        //
+        // v0.8.4 set this to 0x07 (whammy + tilt + solo fret) on the
+        // theory that it was a "harmless additive" change. It wasn't:
+        // the tilt bit (0x02) makes RB4 wait for tilt-based Star Power
+        // activation and ignore the dpad-left fallback that wizard-
+        // derived guitar TOMLs depend on. v0.8.7 user reports flagged
+        // both Star Power AND whammy as broken; the v0.6 datapoint
+        // ruled the capability bits OUT as the whammy cause, but the
+        // tilt bit is still the Star Power regression. Going full v0.6
+        // here (cap=0) is the conservative restoration — no bit we
+        // don't fully understand the meaning of is advertised.
+        //
+        // Drums get the genuinely-needed 0x03 above; guitars need
+        // nothing.
         break;
     case DC::SteeringWheel:
         pExtInfo->classData.steeringWheel.capability = 0x01;

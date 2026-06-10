@@ -45,7 +45,21 @@ const PadDefault kPadDefaults[] = {
     {kSnapByteCymGreen, 0x01, {49, 51, 57}},
 };
 
-constexpr auto kVelocityHoldMs = std::chrono::milliseconds(80);
+// v0.8.10 dialed this from 80 ms (v0.8.7's value) down to 30 ms after a
+// user report that v0.8.9's consume-on-read-at-snapshot regression made
+// most hits miss the scePadRead read window. 30 ms is a balance between:
+//   - long enough that scePadRead polling at ~60 Hz (RB4's poll rate)
+//     is virtually guaranteed to sample at least one non-zero read per
+//     hit, since 16.67 ms < 30 ms by a comfortable margin,
+//   - short enough that fast playing (16th notes at 200 BPM ≈ 13 Hz,
+//     32nd notes ≈ 27 Hz, inter-hit 37 ms) still produces a clear
+//     0-velocity gap between hits so RB4 sees a fresh 0→velocity edge
+//     for each one.
+// At 200 BPM 32nd notes (~30 ms apart) the byte stays non-zero across
+// successive hits, and the gameplay-correct behaviour is to take the
+// latest velocity — same as what a real PS4 RB drum kit does when hit
+// during its own decay envelope.
+constexpr auto kVelocityHoldMs = std::chrono::milliseconds(30);
 
 struct PadState {
     std::uint8_t velocity = 0;
@@ -285,17 +299,25 @@ std::vector<NoteEvent> DrainAndUpdate(PortHandle* h) {
             }
         }
     }
-    // Decay loop removed in v0.8.9 — SnapshotDrumBuffer now consumes
-    // velocities on read so there's nothing to decay between snapshots.
-    // A note-on landing in pads_by_byte[byte] is guaranteed to survive
-    // until the very next snapshot regardless of elapsed time, then is
-    // cleared by that snapshot, and the next snapshot will see 0 for
-    // that byte unless another note-on has been drained in between.
-    // Fixes fast-play hit detection where rapid back-to-back hits on
-    // the same pad (e.g. 30Hz on the snare during a roll) were leaving
-    // the byte stuck non-zero across multiple polls, so RB4 didn't see
-    // the 0->velocity edge for each hit and missed every one after the
-    // first.
+    // Decay pads whose last activity is older than kVelocityHoldMs.
+    // v0.8.10 restored this loop (v0.8.9 had removed it in favour of
+    // consume-on-read in SnapshotDrumBuffer, which broke detection
+    // for the slow-play case because the velocity didn't survive
+    // long enough at the scePadRead boundary). The window was also
+    // shortened from 80 ms (v0.8.7) to 30 ms so back-to-back hits at
+    // 30+ Hz can each be seen as a fresh 0->velocity edge by RB4.
+    for (auto& p : h->pads) {
+        if (p.velocity == 0)
+            continue;
+        if (now - p.last_active > kVelocityHoldMs)
+            p.velocity = 0;
+    }
+    for (auto& p : h->pads_by_byte) {
+        if (p.velocity == 0)
+            continue;
+        if (now - p.last_active > kVelocityHoldMs)
+            p.velocity = 0;
+    }
     // Diagnostic: log only when something happened (events drained or
     // hits applied). The size of custom_map and which bytes ended up
     // non-zero after the drain make it obvious whether the lookup is
@@ -351,20 +373,18 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
     (void)DrainAndUpdate(h);
     std::memset(out, 0, kSnapshotBytes);
     std::uint8_t flags = 0;
-    // Consume-on-read: every non-zero velocity is copied into the
-    // snapshot AND cleared from pads_by_byte / pads, so the very next
-    // SnapshotDrumBuffer call returns 0 for that byte unless another
-    // note-on has been drained in between. This is what RB4 needs to
-    // count each MIDI note-on as a separate hit during fast play —
-    // the runtime's downstream signal becomes a discrete pulse per
-    // hit instead of a value that stays "stuck" for kVelocityHoldMs
-    // and shadows back-to-back hits on the same pad.
+    // pads_by_byte is read but NOT cleared here — the decay loop in
+    // DrainAndUpdate ages the velocity out after kVelocityHoldMs (~30 ms)
+    // so each note-on produces a stable velocity that survives several
+    // scePadRead polls before returning to zero. v0.8.9 cleared on read
+    // and made the pulse equal to PollLoop's tick interval, which is
+    // much shorter than RB4's poll period for most users → most hits
+    // were missed at the scePadRead boundary.
     if (!h->custom_map.empty()) {
         for (int b = 0; b < (int)kSnapshotBytes; ++b) {
             if (h->pads_by_byte[b].velocity == 0)
                 continue;
             out[b] = h->pads_by_byte[b].velocity;
-            h->pads_by_byte[b].velocity = 0;
             std::uint8_t mask = 0;
             for (const auto& d : kPadDefaults) {
                 if (d.snap_byte == b) {
@@ -376,11 +396,10 @@ std::size_t SnapshotDrumBuffer(void* handle, std::uint8_t* out, std::size_t out_
         }
     } else {
         for (int p = 0; p < (int)(sizeof(kPadDefaults) / sizeof(kPadDefaults[0])); ++p) {
-            auto& pad = h->pads[p];
+            const auto& pad = h->pads[p];
             if (pad.velocity == 0)
                 continue;
             out[kPadDefaults[p].snap_byte] = pad.velocity;
-            pad.velocity = 0;
             flags |= kPadDefaults[p].mask_bit;
         }
     }

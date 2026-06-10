@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -888,17 +890,18 @@ green = [43]
   return r;
 }
 
-// Fast-play hit detection — the v0.8.9 regression test. Before v0.8.9 the
-// runtime held each note-on's velocity in pads_by_byte for kVelocityHoldMs
-// (80 ms) regardless of how many subsequent snapshots happened. For
-// back-to-back hits on the same pad faster than 80 ms apart (e.g. snare
-// roll at ~30 Hz), RB4 didn't see the 0 → velocity edge for each hit
-// because the byte was already non-zero from the previous hit. v0.8.9
-// changed SnapshotDrumBuffer to consume velocities on read: each note-on
-// produces velocity in exactly one snapshot, then the byte returns to 0
-// until another note-on is drained. This test injects a sequence of
-// note-ons against a synthetic MIDI handle and asserts each one
-// produces a discrete pulse.
+// Hold-and-decay hit detection — the v0.8.10 regression test. v0.8.7 held
+// each note-on's velocity in pads_by_byte for kVelocityHoldMs = 80 ms,
+// which left the byte stuck non-zero across back-to-back hits faster than
+// 80 ms apart (snare rolls, fast kicks) so RB4 never saw the 0 → velocity
+// edge for the second-and-later hits in a burst. v0.8.9 over-corrected
+// to consume-on-read at the snapshot boundary, which made the pulse
+// equal to one PollLoop tick interval — too short for RB4's ~60 Hz
+// scePadRead polling to reliably sample, so most hits were missed even
+// during slow play. v0.8.10 splits the difference at kVelocityHoldMs =
+// 30 ms — long enough that scePadRead at 60 Hz catches every pulse,
+// short enough that 16th notes at 200 BPM (~13 Hz) leave a real gap.
+// This test pins the hold-then-decay shape.
 CaseResult RunFastPlayPulseTest() {
   namespace MI = Input::MidiInput;
   CaseResult r{};
@@ -939,50 +942,68 @@ CaseResult RunFastPlayPulseTest() {
     return r;
   }
 
-  // Second snapshot WITHOUT another note-on must return 0 — this is the
-  // consume-on-read invariant that lets RB4 see a 0 -> velocity edge
-  // for the next hit.
+  // Second snapshot within the hold window MUST still report the same
+  // velocity — RB4 polls scePadRead many times per pulse, and every
+  // poll inside the hold window must see a stable value. This is the
+  // invariant the v0.8.9 consume-on-read approach broke.
   auto s2 = snapshot();
-  if (s2[MI::kSnapByteSnareRed] != 0) {
-    r.detail =
-        "second snapshot did not return to 0 after consume: expected 0 got " +
-        std::to_string(s2[MI::kSnapByteSnareRed]);
+  if (s2[MI::kSnapByteSnareRed] != velocity_for(80)) {
+    r.detail = "second snapshot (within hold) lost velocity: expected " +
+               std::to_string(velocity_for(80)) + " got " +
+               std::to_string(s2[MI::kSnapByteSnareRed]);
     MI::Testing::DestroySyntheticHandleForTesting(handle);
     return r;
   }
-  if (s2[MI::kSnapByteFaceFlags] != 0) {
-    r.detail = "second snapshot face-flags should be 0, got " +
-               std::to_string(s2[MI::kSnapByteFaceFlags]);
+  if ((s2[MI::kSnapByteFaceFlags] & 0x02) == 0) {
+    r.detail = "second snapshot (within hold) face-flags lost red bit (0x02)";
     MI::Testing::DestroySyntheticHandleForTesting(handle);
     return r;
   }
 
-  // Hit 2: arrives immediately after the prior hit's snapshot consumed
-  // it. Must produce a new discrete pulse with the NEW velocity.
+  // Hit 2 arrives while the previous hit is still inside the hold
+  // window — the NEW velocity must immediately overwrite the held
+  // one (matches real PS4 RB drum hardware re-triggering during its
+  // own decay envelope; also gives RB4 fresh data without waiting
+  // for the previous decay to finish).
   MI::Testing::PushNoteEventForTesting(handle, 38, 120, /*note_on=*/true);
   auto s3 = snapshot();
   if (s3[MI::kSnapByteSnareRed] != velocity_for(120)) {
-    r.detail = "third snapshot did not capture hit2: expected " +
+    r.detail = "third snapshot did not take latest velocity on overlapping "
+               "hit: expected " +
                std::to_string(velocity_for(120)) + " got " +
                std::to_string(s3[MI::kSnapByteSnareRed]);
     MI::Testing::DestroySyntheticHandleForTesting(handle);
     return r;
   }
 
-  // Hits 3+4 arrive between the same pair of snapshot calls — the
-  // runtime can only report one pulse per snapshot, so the more
-  // recent velocity wins (matches what a player would expect: the
-  // last hit is what reaches the game). This is the edge case from
-  // very-fast rolls; documents the intended behaviour rather than
-  // testing a problem.
-  MI::Testing::PushNoteEventForTesting(handle, 38, 60, /*note_on=*/true);
-  MI::Testing::PushNoteEventForTesting(handle, 38, 100, /*note_on=*/true);
+  // After kVelocityHoldMs (30 ms) elapses with no new note-on, the
+  // snapshot must decay back to 0 so RB4 sees a fresh 0 → velocity
+  // edge on the next hit. Sleep 60 ms to comfortably clear the
+  // window even with scheduler jitter on a busy CI host.
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
   auto s4 = snapshot();
-  if (s4[MI::kSnapByteSnareRed] != velocity_for(100)) {
-    r.detail =
-        "fourth snapshot did not show latest of two coalesced hits: expected " +
-        std::to_string(velocity_for(100)) + " got " +
-        std::to_string(s4[MI::kSnapByteSnareRed]);
+  if (s4[MI::kSnapByteSnareRed] != 0) {
+    r.detail = "fourth snapshot did not decay to 0 after 60 ms idle: got " +
+               std::to_string(s4[MI::kSnapByteSnareRed]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+  if (s4[MI::kSnapByteFaceFlags] != 0) {
+    r.detail = "fourth snapshot face-flags did not return to 0 after decay: "
+               "got " +
+               std::to_string(s4[MI::kSnapByteFaceFlags]);
+    MI::Testing::DestroySyntheticHandleForTesting(handle);
+    return r;
+  }
+
+  // Fresh note-on after the decay window must produce a new pulse,
+  // not be shadowed by any leftover state.
+  MI::Testing::PushNoteEventForTesting(handle, 38, 100, /*note_on=*/true);
+  auto s4b = snapshot();
+  if (s4b[MI::kSnapByteSnareRed] != velocity_for(100)) {
+    r.detail = "post-decay snapshot did not capture fresh hit: expected " +
+               std::to_string(velocity_for(100)) + " got " +
+               std::to_string(s4b[MI::kSnapByteSnareRed]);
     MI::Testing::DestroySyntheticHandleForTesting(handle);
     return r;
   }
@@ -992,6 +1013,8 @@ CaseResult RunFastPlayPulseTest() {
   // pre-v0.8.7 the runtime cleared the velocity on note-off in the same
   // drain tick as the note-on, so SnapshotDrumBuffer saw 0. This guard
   // tests that explicit note-off is ignored.
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  (void)snapshot();  // confirm prior pulse decayed before testing note-off
   MI::Testing::PushNoteEventForTesting(handle, 38, 90, /*note_on=*/true);
   MI::Testing::PushNoteEventForTesting(handle, 38, 64, /*note_on=*/false);
   auto s5 = snapshot();

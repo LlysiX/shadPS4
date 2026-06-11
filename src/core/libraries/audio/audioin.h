@@ -16,6 +16,12 @@ enum class OrbisAudioInParamFormat : u32 { S16Mono = 0, S16Stereo = 2 };
 
 enum class OrbisAudioInType : u32 { VoiceChat = 0, General = 1, VoiceRecognition = 5 };
 
+// Public (non-SCE) accessor: latest mic peak amplitude in dBFS for the
+// SDL port currently open on the given player slot (0..3). Returns
+// -120.0 when no port is open for that slot. Used by the Player
+// Assignment dialog's per-slot VU meter.
+float GetMicPeakDbfs(int slot);
+
 int PS4_SYSV_ABI sceAudioInChangeAppModuleState();
 int PS4_SYSV_ABI sceAudioInClose(s32 handle);
 int PS4_SYSV_ABI sceAudioInCountPorts();
@@ -32,7 +38,7 @@ int PS4_SYSV_ABI sceAudioInExtSetAecMode();
 int PS4_SYSV_ABI sceAudioInGetGain();
 int PS4_SYSV_ABI sceAudioInGetHandleStatusInfo();
 int PS4_SYSV_ABI sceAudioInGetRerouteCount();
-int PS4_SYSV_ABI sceAudioInGetSilentState();
+s32 PS4_SYSV_ABI sceAudioInGetSilentState(s32 handle);
 int PS4_SYSV_ABI sceAudioInHqOpen(Libraries::UserService::OrbisUserServiceUserId userId, u32 type,
                                   u32 index, u32 len, u32 freq, u32 param);
 int PS4_SYSV_ABI sceAudioInHqOpenEx();

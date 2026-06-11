@@ -1064,6 +1064,16 @@ set(INPUT src/input/controller.cpp
           src/input/input_handler.h
           src/input/input_mouse.cpp
           src/input/input_mouse.h
+          src/input/hid_instrument.cpp
+          src/input/hid_instrument.h
+          src/input/hid_kit_def.h
+          src/input/hid_packer.cpp
+          src/input/hid_kit_probe_data.h
+          src/input/hid_kit_probe_derive.cpp
+          src/input/midi_input.cpp
+          src/input/midi_input.h
+          src/input/midi_kit_probe_data.h
+          src/input/midi_kit_probe_derive.cpp
 )
 
 set(EMULATOR src/emulator.cpp
@@ -1092,10 +1102,20 @@ set(QT_GUI src/qt_gui/about_dialog.cpp
            src/qt_gui/cheats_patches.h
            src/qt_gui/compatibility_info.cpp
            src/qt_gui/compatibility_info.h
-	   src/qt_gui/control_settings.cpp	   
+	   src/qt_gui/control_settings.cpp
            src/qt_gui/control_settings.h
            src/qt_gui/control_settings.ui
-           src/qt_gui/kbm_gui.cpp	   
+           src/qt_gui/kit_probe_dialog.cpp
+           src/qt_gui/kit_probe_dialog.h
+           src/qt_gui/kit_probe_dialog.ui
+           src/qt_gui/special_devices_dialog.cpp
+           src/qt_gui/special_devices_dialog.h
+           src/qt_gui/special_devices_dialog.ui
+           src/qt_gui/player_assignment_dialog.cpp
+           src/qt_gui/player_assignment_dialog.h
+           src/qt_gui/device_picker_dialog.cpp
+           src/qt_gui/device_picker_dialog.h
+           src/qt_gui/kbm_gui.cpp
            src/qt_gui/kbm_gui.h
            src/qt_gui/kbm_gui.ui
            src/qt_gui/main_window_ui.h
@@ -1123,6 +1143,7 @@ set(QT_GUI src/qt_gui/about_dialog.cpp
            src/qt_gui/main_window_themes.h
            src/qt_gui/log_presets_dialog.cpp
            src/qt_gui/log_presets_dialog.h
+           src/qt_gui/mic_level_meter.h
            src/qt_gui/settings_dialog.cpp
            src/qt_gui/settings_dialog.h
            src/qt_gui/settings_dialog.ui
@@ -1194,6 +1215,11 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
 
     target_link_libraries(shadps4 PRIVATE uuid)
 endif()
+
+# RtMidi — pulls in ALSA on Linux, CoreMIDI on macOS, WinMM on
+# Windows. The MidiInput backend translates between RtMidi and our
+# polling-snapshot API.
+target_link_libraries(shadps4 PRIVATE rtmidi)
 
 if (APPLE)
     # Include MoltenVK, along with an ICD file so it can be found by the system Vulkan loader if used for loading layers.
@@ -1355,3 +1381,10 @@ if (ENABLE_QT_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(FILES ".github/shadps4.png" DESTINATION "share/icons/hicolor/512x512/apps" RENAME "net.shadps4.shadPS4.png")
     install(FILES "src/images/net.shadps4.shadPS4.svg" DESTINATION "share/icons/hicolor/scalable/apps")
 endif()
+
+# HID kit regression tests — replay raw HID captures through a Python
+# reimplementation of the packer and assert step-level expectations. Catches
+# wizard / loader regressions on community-supplied kits without needing the
+# main shadps4 binary or a real game running.
+enable_testing()
+add_subdirectory(tests)

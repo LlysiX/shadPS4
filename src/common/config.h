@@ -97,23 +97,82 @@ double getTrophyNotificationDuration();
 void setTrophyNotificationDuration(double newTrophyNotificationDuration,
                                    bool is_game_specific = false);
 int getCursorHideTimeout();
-std::string getMicDevice();
-void setCursorHideTimeout(int newcursorHideTimeout);
+void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific = false);
 std::string getMainOutputDevice();
 void setMainOutputDevice(std::string device);
 std::string getPadSpkOutputDevice();
 void setPadSpkOutputDevice(std::string device);
+// Per-player mic config. Slot 0 = primary player; slots 1..3 = harmony
+// players for games that open multiple mics (RB4 vocals). The no-arg
+// overloads return slot 0 so callers that don't care about per-user
+// routing keep working unchanged. getNumMicSlots() returns the array
+// length so callers can iterate without hardcoding 4.
+int getNumMicSlots();
 std::string getMicDevice();
-void setCursorHideTimeout(int newcursorHideTimeout, bool is_game_specific = false);
+std::string getMicDevice(int slot);
 void setMicDevice(std::string device, bool is_game_specific = false);
+void setMicDevice(int slot, std::string device, bool is_game_specific = false);
+bool getMicGateEnabled();
+bool getMicGateEnabled(int slot);
+void setMicGateEnabled(bool enabled, bool is_game_specific = false);
+void setMicGateEnabled(int slot, bool enabled, bool is_game_specific = false);
+int getMicGateThresholdDb();
+int getMicGateThresholdDb(int slot);
+void setMicGateThresholdDb(int db, bool is_game_specific = false);
+void setMicGateThresholdDb(int slot, int db, bool is_game_specific = false);
+int getMicGateHoldMs();
+void setMicGateHoldMs(int ms, bool is_game_specific = false);
 void setSeparateLogFilesEnabled(bool enabled, bool is_game_specific = false);
 bool getSeparateLogFilesEnabled();
 u32 GetLanguage();
 void setLanguage(u32 language, bool is_game_specific = false);
-void setUseSpecialPad(bool use);
+void setUseSpecialPad(int pad, bool use);
 bool getUseSpecialPad(int pad);
-void setSpecialPadClass(int type);
+void setSpecialPadClass(int pad, int type);
 int getSpecialPadClass(int pad);
+void setSpecialPadLegacyPassUSBRawHID(int pad, bool pass);
+bool getSpecialPadLegacyPassUSBRawHID(int pad);
+
+// Per-player device assignment. Each player slot 1..kNumPlayerSlots can
+// list any number of input devices that contribute to that slot's pad
+// state — a navigation gamepad PLUS a probed RB instrument PLUS a MIDI
+// drum module can all be on the same slot, or a single gamepad's slot
+// can be overridden to a non-default player. Storage only at this stage;
+// the controller open/poll layer still uses first-come-first-served and
+// will start consulting this map in a follow-up commit.
+constexpr int kNumPlayerSlots = 4;
+enum class PlayerDeviceKind {
+    Gamepad,  // SDL_Gamepad bound by SDL_JoystickGUID (32 hex chars)
+    Kit,      // probed RB instrument bound by VID:PID
+    Keyboard, // emulator's virtual keyboard pad (singleton)
+    Midi,     // MIDI input port bound by name string
+};
+struct PlayerDevice {
+    PlayerDeviceKind kind = PlayerDeviceKind::Gamepad;
+    // For Gamepad: SDL GUID hex (32 chars). For Midi: port name. For Kit
+    // / Keyboard: unused.
+    std::string guid;
+    // For Gamepad: OS-specific device path (SDL_GetJoystickPathForID).
+    // Unique per physical USB port — two identical-model controllers
+    // get distinct paths even though their GUID matches. Optional: when
+    // empty, GUID-only matching is used (backward compat with bindings
+    // written before path support landed).
+    std::string path;
+    // For Kit: device VID:PID. Unused for other kinds.
+    u16 vid = 0;
+    u16 pid = 0;
+};
+int getNumPlayerSlots();
+// Returns the (possibly empty) device list bound to slot 1..kNumPlayerSlots.
+// An empty list means "auto" — same as the no-binding default.
+std::vector<PlayerDevice> getPlayerSlotDevices(int slot);
+void setPlayerSlotDevices(int slot, const std::vector<PlayerDevice>& devices,
+                          bool is_game_specific = false);
+// Wire-format encoders/decoders used for TOML storage. Exposed so the Qt
+// settings UI and the hidtest harness can round-trip device records
+// without re-implementing the format.
+std::string encodePlayerDevice(const PlayerDevice& dev);
+bool decodePlayerDevice(const std::string& encoded, PlayerDevice& out);
 bool getPSNSignedIn();
 void setPSNSignedIn(bool sign, bool is_game_specific = false);
 bool patchShaders(); // no set

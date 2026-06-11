@@ -20,9 +20,9 @@
 #endif
 #if defined(__linux__) && defined(ARCH_X86_64)
 #include <asm/prctl.h>
-#include <unistd.h>
-#include <sys/syscall.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 namespace Core {

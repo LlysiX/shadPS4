@@ -1,14 +1,23 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
 #include <fstream>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
+#include <QTimer>
+#include "common/config.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "control_settings.h"
 #include "input/input_handler.h"
+#include "player_assignment_dialog.h"
+#include "special_devices_dialog.h"
 #include "ui_control_settings.h"
 
 ControlSettings::ControlSettings(std::shared_ptr<GameInfoClass> game_info_get, bool isGameRunning,
@@ -80,6 +89,17 @@ ControlSettings::ControlSettings(std::shared_ptr<GameInfoClass> game_info_get, b
     ui->buttonBox->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
 
     ui->PerGameCheckBox->setChecked(!Config::GetUseUnifiedInputConfig());
+
+    // Open the separate Special Devices dialog (guitars, drum kits, legacy
+    // raw-HID passthrough, udev install, kit probe wizard).
+    connect(ui->openSpecialDevicesBtn, &QPushButton::clicked, this, [this]() {
+        SpecialDevicesDialog dlg(this);
+        dlg.exec();
+    });
+    connect(ui->playerAssignmentBtn, &QPushButton::clicked, this, [this]() {
+        PlayerAssignmentDialog dlg(this);
+        dlg.exec();
+    });
 
     connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QWidget::close);
 
@@ -345,6 +365,7 @@ void ControlSettings::SaveControllerConfig(bool CloseOnSave) {
 
     Config::SetUseUnifiedInputConfig(!ui->PerGameCheckBox->isChecked());
     Config::SetOverrideControllerColor(ui->LightbarCheckBox->isChecked());
+    // Special-device settings are persisted by SpecialDevicesDialog itself.
     Config::SetControllerCustomColor(ui->RSlider->value(), ui->GSlider->value(),
                                      ui->BSlider->value());
     Config::save(Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "config.toml");

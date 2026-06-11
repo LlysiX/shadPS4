@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+     SPDX-License-Identifier: GPL-2.0-or-later -->
+<ui version="4.0">
+ <class>KitProbeDialog</class>
+ <widget class="QDialog" name="KitProbeDialog">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>720</width><height>540</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>Probe a Legacy Instrument</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+
+   <item>
+    <widget class="QStackedWidget" name="pages">
+     <property name="currentIndex"><number>0</number></property>
+
+     <!-- Page 0: device selection -->
+     <widget class="QWidget" name="pageSelect">
+      <layout class="QVBoxLayout" name="selectLayout">
+       <item>
+        <widget class="QLabel" name="selectHelp">
+         <property name="text">
+          <string>Pick the USB instrument to probe. If yours isn't listed, make sure it's plugged in and the udev rules are installed (Control Settings → Install Linux udev rules).</string>
+         </property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QListWidget" name="deviceList"/>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="deviceTypeLayout">
+         <item><widget class="QLabel" name="deviceTypeLabel"><property name="text"><string>Device type:</string></property></widget></item>
+         <item><widget class="QComboBox" name="deviceTypeCombo">
+          <item><property name="text"><string>— pick instrument type —</string></property></item>
+          <item><property name="text"><string>Drum kit (5-lane GH / no cymbal split)</string></property></item>
+          <item><property name="text"><string>Drum kit (Pro — separate pad and cymbal slots)</string></property></item>
+          <item><property name="text"><string>Guitar (5 frets)</string></property></item>
+          <item><property name="text"><string>Guitar (5 frets + upper solo frets — PS4 RB Mustang / PS5 Riffmaster)</string></property></item>
+         </widget></item>
+         <item><spacer name="dts"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="selectButtonsLayout">
+         <item><widget class="QPushButton" name="refreshBtn"><property name="text"><string>Refresh</string></property></widget></item>
+         <item><spacer name="ssp"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+         <item><widget class="QPushButton" name="startBtn"><property name="text"><string>Begin probe →</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Page 1: walk-through (baseline + per-step) -->
+     <widget class="QWidget" name="pageWalk">
+      <layout class="QVBoxLayout" name="walkLayout">
+       <item>
+        <widget class="QLabel" name="stepHeader">
+         <property name="text"><string/></property>
+         <property name="styleSheet"><string>QLabel{font-size:14pt;font-weight:bold;}</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="stepPrompt">
+         <property name="text"><string/></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QProgressBar" name="stepProgress">
+         <property name="minimum"><number>0</number></property>
+         <property name="maximum"><number>2500</number></property>
+         <property name="value"><number>0</number></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="gridHeading">
+         <property name="text"><string>Live HID report (changed bytes flash):</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QTableWidget" name="byteGrid">
+         <property name="rowCount"><number>2</number></property>
+         <property name="columnCount"><number>27</number></property>
+         <property name="horizontalScrollBarPolicy"><enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum></property>
+         <property name="verticalScrollBarPolicy"><enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum></property>
+         <property name="editTriggers"><set>QAbstractItemView::EditTrigger::NoEditTriggers</set></property>
+         <property name="selectionMode"><enum>QAbstractItemView::SelectionMode::NoSelection</enum></property>
+         <attribute name="horizontalHeaderVisible"><bool>false</bool></attribute>
+         <attribute name="verticalHeaderVisible"><bool>false</bool></attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="crossTalkLabel">
+         <property name="text"><string/></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>QLabel{color:#cc8;font-style:italic;}</string></property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="walkButtonsLayout">
+         <item><widget class="QPushButton" name="beginBtn"><property name="text"><string>Begin sampling (5 s)</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+         <item><widget class="QPushButton" name="skipBtn"><property name="text"><string>Skip (this input isn't on my kit)</string></property></widget></item>
+         <item><spacer name="wsp"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+         <item><widget class="QPushButton" name="nextBtn"><property name="text"><string>Next →</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- Page 2: review + save -->
+     <widget class="QWidget" name="pageReview">
+      <layout class="QVBoxLayout" name="reviewLayout">
+       <item>
+        <widget class="QLabel" name="reviewHeader">
+         <property name="text"><string>Probe complete. Review the captured mapping below, then save.</string></property>
+         <property name="styleSheet"><string>QLabel{font-size:14pt;font-weight:bold;}</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPlainTextEdit" name="reviewText">
+         <property name="readOnly"><bool>true</bool></property>
+         <property name="font"><font><family>monospace</family></font></property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="reviewButtonsLayout">
+         <item><spacer name="rsp"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+         <item><widget class="QPushButton" name="saveBtn"><property name="text"><string>Save kit files...</string></property></widget></item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::StandardButton::Close</set>
+     </property>
+    </widget>
+   </item>
+
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -20,6 +20,32 @@ jobs:
     - uses: actions/checkout@v5
     - uses: fsfe/reuse-action@v5
 
+  hid-tests:
+    # Builds the hidtest + miditest targets and runs ctest. Fixtures
+    # under tests/hid_kits/ replay through the same DeriveKitToml the
+    # wizard uses in the running emulator; tests/midi/ replay through
+    # DeriveMidiKitToml. hidtest additionally links rtmidi (needed for
+    # the v0.8.9 FastPlayPulse case which drives the live
+    # SnapshotDrumBuffer consume-on-read state machine via the
+    # Input::MidiInput::Testing namespace).
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+    - name: Install build tools
+      # libasound2-dev: RtMidi's ALSA backend (forced ON on Linux in
+      # externals/CMakeLists.txt) requires it. Before v0.8.9 the hidtest
+      # binary didn't need RtMidi, so the dev headers weren't installed.
+      run: sudo apt-get update && sudo apt-get install -y cmake build-essential libasound2-dev
+    - name: Configure
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_QT_GUI=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+    - name: Build hidtest + miditest
+      run: cmake --build build --target hidtest miditest --parallel $(nproc)
+    - name: Run ctest
+      run: cd build && ctest --output-on-failure --label-regex 'hid|midi'
+
+
   clang-format:
     runs-on: ubuntu-24.04
     continue-on-error: true
@@ -64,24 +90,12 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4
-      env:
-          cache-name: ${{ runner.os }}-sdl-ninja-cache-cmake-configuration
-      with:
-          path: | 
-            ${{github.workspace}}/build
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-          restore-keys: |
-            ${{ env.cache-name }}-
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-sdl-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -G Ninja -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -106,6 +120,7 @@ jobs:
     - name: Setup Qt
       uses: jurplel/install-qt-action@v4
       with:
+        cache: true
         version: 6.9.3
         host: windows
         target: desktop
@@ -113,24 +128,12 @@ jobs:
         archives: qtbase qttools
         modules: qtmultimedia
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4
-      env:
-          cache-name: ${{ runner.os }}-qt-ninja-cache-cmake-configuration
-      with:
-          path: | 
-            ${{github.workspace}}/build
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-          restore-keys: |
-            ${{ env.cache-name }}-
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-qt-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -G Ninja -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_QT_GUI=ON -DENABLE_UPDATER=ON -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -166,25 +169,13 @@ jobs:
       with:
         xcode-version: latest
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-sdl-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{runner.os}}-sdl-cache-cmake-build
       with:
-        append-timestamp: false
         create-symlink: true
-        key: ${{env.cache-name}}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
         variant: sccache
 
     - name: Configure CMake
@@ -220,6 +211,7 @@ jobs:
     - name: Setup Qt
       uses: jurplel/install-qt-action@v4
       with:
+        cache: true
         version: 6.9.3
         host: mac
         target: desktop
@@ -227,25 +219,13 @@ jobs:
         archives: qtbase qttools
         modules: qtmultimedia
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-qt-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{runner.os}}-qt-cache-cmake-build
       with:
-        append-timestamp: false
         create-symlink: true
-        key: ${{env.cache-name}}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
         variant: sccache
 
     - name: Configure CMake
@@ -281,24 +261,12 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt install -y libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev libglfw3-dev libgles2-mesa-dev libfuse2 clang-19 mold build-essential libasound2-dev libpulse-dev libopenal-dev libudev-dev libxcursor-dev libxi-dev
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-sdl-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-sdl-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -342,24 +310,12 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt install -y libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev libglfw3-dev libgles2-mesa-dev libfuse2 clang-19 mold build-essential qt6-base-dev qt6-tools-dev qt6-multimedia-dev libasound2-dev libpulse-dev libopenal-dev libudev-dev libxcursor-dev libxi-dev
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-qt-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-qt-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DENABLE_QT_GUI=ON -DENABLE_UPDATER=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -389,24 +345,12 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt install -y libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev libglfw3-dev libgles2-mesa-dev libfuse2 gcc-14 mold build-essential libasound2-dev libpulse-dev libopenal-dev libudev-dev libxcursor-dev libxi-dev
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-sdl-gcc-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-sdl-gcc-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -425,24 +369,12 @@ jobs:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt install -y libx11-dev libxext-dev libwayland-dev libdecor-0-dev libxkbcommon-dev libglfw3-dev libgles2-mesa-dev libfuse2 gcc-14 mold build-essential qt6-base-dev qt6-tools-dev qt6-multimedia-dev libasound2-dev libpulse-dev libopenal-dev libudev-dev libxcursor-dev libxi-dev
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v4 
-      env: 
-          cache-name: ${{ runner.os }}-qt-gcc-cache-cmake-configuration
-      with: 
-          path: |  
-            ${{github.workspace}}/build 
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }} 
-          restore-keys: | 
-            ${{ env.cache-name }}- 
-
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.19
       env:
           cache-name: ${{ runner.os }}-qt-gcc-cache-cmake-build
       with:
-        append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}
 
     - name: Configure CMake
       run: cmake --fresh -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" -DENABLE_QT_GUI=ON -DENABLE_UPDATER=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache

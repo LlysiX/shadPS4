@@ -458,6 +458,7 @@ SettingsDialog::SettingsDialog(std::shared_ptr<gui_settings> gui_settings,
         ui->showSplashCheckBox->installEventFilter(this);
         ui->discordRPCCheckbox->installEventFilter(this);
         ui->volumeSliderElement->installEventFilter(this);
+        ui->playgoFixCheckBox->installEventFilter(this);
 #ifdef ENABLE_UPDATER
         ui->updaterGroupBox->installEventFilter(this);
 #endif
@@ -628,6 +629,7 @@ void SettingsDialog::LoadValuesFromConfig() {
             toml::find_or<bool>(data, "General", "compatibilityEnabled", false));
         ui->checkCompatibilityOnStartupCheckBox->setChecked(
             toml::find_or<bool>(data, "General", "checkCompatibilityOnStartup", false));
+        ui->playgoFixCheckBox->setChecked(Config::enablePlayGoFix());
 
         ui->removeFolderButton->setEnabled(!ui->gameFoldersListWidget->selectedItems().isEmpty());
         ui->backgroundImageOpacitySlider->setValue(
@@ -854,6 +856,8 @@ void SettingsDialog::updateNoteTextEdit(const QString& elementName) {
         text = tr("Emulator Language:\\nSets the language of the emulator's user interface.");
     } else if (elementName == "showSplashCheckBox") {
         text = tr("Show Splash Screen:\\nShows the game's splash screen (a special image) while the game is starting.");
+    } else if (elementName == "playgoFixCheckBox") {
+        text = tr("Enable PlayGo Fix:\nEnables compatibility workaround for PlayGo package chunk installations.");
     } else if (elementName == "discordRPCCheckbox") {
         text = tr("Enable Discord Rich Presence:\\nDisplays the emulator icon and relevant information on your Discord profile.");
     } else if (elementName == "userName") {
@@ -1032,6 +1036,7 @@ void SettingsDialog::UpdateSettings(bool is_specific) {
                                          is_specific);
     Config::setisTrophyPopupDisabled(ui->disableTrophycheckBox->isChecked(), is_specific);
     Config::setTrophyNotificationDuration(ui->popUpDurationSpinBox->value(), is_specific);
+    Config::setEnablePlayGoFix(ui->playgoFixCheckBox->isChecked(), is_specific);
 
     if (ui->radioButton_Top->isChecked()) {
         Config::setSideTrophy("top", is_specific);

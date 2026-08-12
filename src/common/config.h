@@ -55,6 +55,8 @@ bool collectShadersForDebug();
 void setCollectShaderForDebug(bool enable, bool is_game_specific = false);
 bool showSplash();
 void setShowSplash(bool enable, bool is_game_specific = false);
+bool enablePlayGoFix();
+void setEnablePlayGoFix(bool enable, bool is_game_specific = false);    
 std::string sideTrophy();
 void setSideTrophy(std::string side, bool is_game_specific = false);
 bool nullGpu();

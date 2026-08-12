@@ -137,6 +137,9 @@ s32 PS4_SYSV_ABI scePlayGoGetLanguageMask(OrbisPlayGoHandle handle,
 
 s32 PS4_SYSV_ABI scePlayGoGetLocus(OrbisPlayGoHandle handle, const OrbisPlayGoChunkId* chunkIds,
                                    uint32_t numberOfEntries, OrbisPlayGoLocus* outLoci) {
+    LOG_DEBUG(Lib_PlayGo, "called handle = {}, chunkIds = {}, numberOfEntries = {}", handle,
+              *chunkIds, numberOfEntries);
+
     if (handle != PlaygoHandle) {
         return ORBIS_PLAYGO_ERROR_BAD_HANDLE;
     }
@@ -146,15 +149,11 @@ s32 PS4_SYSV_ABI scePlayGoGetLocus(OrbisPlayGoHandle handle, const OrbisPlayGoCh
     if (numberOfEntries == 0) {
         return ORBIS_PLAYGO_ERROR_BAD_SIZE;
     }
-
-    LOG_DEBUG(Lib_PlayGo, "called handle = {}, chunkIds = {}, numberOfEntries = {}", handle,
-              *chunkIds, numberOfEntries);
-
     if (!playgo) {
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    // Force LocalFast status for all queried chunks
+    // Return LocalFast status for all requested chunks unconditionally
     for (uint32_t i = 0; i < numberOfEntries; i++) {
         outLoci[i] = OrbisPlayGoLocus::LocalFast;
     }
@@ -180,7 +179,7 @@ s32 PS4_SYSV_ABI scePlayGoGetProgress(OrbisPlayGoHandle handle, const OrbisPlayG
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    // Report 100% progress with 1 GB fixed size
+    // Always report 100% download progress for any requested chunk
     outProgress->progressSize = 1073741824; // 1 GB
     outProgress->totalSize = 1073741824;
 

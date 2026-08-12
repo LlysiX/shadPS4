@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/config.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/file_format/playgo_chunk.h"
@@ -51,14 +52,19 @@ s32 PS4_SYSV_ABI scePlayGoGetChunkId(OrbisPlayGoHandle handle, OrbisPlayGoChunkI
         return ORBIS_PLAYGO_ERROR_BAD_SIZE;
     }
 
-    if (outChunkIdList == nullptr) {
-        *outEntries = (playgo && !playgo->chunks.empty()) ? playgo->chunks.size() : 1;
+    if (!Config::enablePlayGoFix() && playgo->GetPlaygoHeader().file_size == 0) {
+        *outEntries = 0;
         return ORBIS_OK;
     }
 
-    u32 total = (playgo && !playgo->chunks.empty()) ? playgo->chunks.size() : 1;
-    if (numberOfEntries > total) {
-        numberOfEntries = total;
+    if (outChunkIdList == nullptr) {
+        *outEntries = (playgo && !playgo->chunks.empty()) ? playgo->chunks.size() : (Config::enablePlayGoFix() ? 1 : 0);
+        return ORBIS_OK;
+    }
+
+    u32 total_chunks = (playgo && !playgo->chunks.empty()) ? playgo->chunks.size() : (Config::enablePlayGoFix() ? 1 : 0);
+    if (numberOfEntries > total_chunks) {
+        numberOfEntries = total_chunks;
     }
 
     for (u32 i = 0; i < numberOfEntries; i++) {
@@ -99,7 +105,22 @@ s32 PS4_SYSV_ABI scePlayGoGetInstallSpeed(OrbisPlayGoHandle handle,
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    *outSpeed = OrbisPlayGoInstallSpeed::Full;
+    if (Config::enablePlayGoFix()) {
+        *outSpeed = OrbisPlayGoInstallSpeed::Full;
+        return ORBIS_OK;
+    }
+
+    std::scoped_lock lk{playgo->GetSpeedMutex()};
+
+    if (playgo->speed == OrbisPlayGoInstallSpeed::Suspended) {
+        using namespace std::chrono;
+        if ((duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count() -
+             playgo->speed_tick) > 30 * 1000) { // 30sec
+            playgo->speed = OrbisPlayGoInstallSpeed::Trickle;
+        }
+    }
+    *outSpeed = playgo->speed;
+
     return ORBIS_OK;
 }
 
@@ -140,9 +161,26 @@ s32 PS4_SYSV_ABI scePlayGoGetLocus(OrbisPlayGoHandle handle, const OrbisPlayGoCh
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    // Force LocalFast for all queried chunks
+    // Workaround if the UI checkbox is enabled
+    if (Config::enablePlayGoFix()) {
+        for (uint32_t i = 0; i < numberOfEntries; i++) {
+            outLoci[i] = OrbisPlayGoLocus::LocalFast;
+        }
+        return ORBIS_OK;
+    }
+
+    // Original logic
+    if (playgo->GetPlaygoHeader().file_size == 0) {
+        return ORBIS_PLAYGO_ERROR_NOT_SUPPORT_PLAYGO;
+    }
+
     for (uint32_t i = 0; i < numberOfEntries; i++) {
-        outLoci[i] = OrbisPlayGoLocus::LocalFast;
+        if (chunkIds[i] < playgo->chunks.size()) {
+            outLoci[i] = OrbisPlayGoLocus::LocalFast;
+        } else {
+            outLoci[i] = OrbisPlayGoLocus::NotDownloaded;
+            return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
+        }
     }
     return ORBIS_OK;
 }
@@ -165,9 +203,33 @@ s32 PS4_SYSV_ABI scePlayGoGetProgress(OrbisPlayGoHandle handle, const OrbisPlayG
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    // Report 100% progress (1 GB fixed size)
-    outProgress->progressSize = 1073741824; // 1 GB
-    outProgress->totalSize = 1073741824;
+    // Workaround if the UI checkbox is enabled (Force dummy 100% progress)
+    if (Config::enablePlayGoFix()) {
+        outProgress->progressSize = 1073741824; // 1 GB
+        outProgress->totalSize = 1073741824;
+        return ORBIS_OK;
+    }
+
+    // Original logic
+    if (playgo->GetPlaygoHeader().file_size == 0) {
+        return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
+    }
+
+    outProgress->progressSize = 0;
+    outProgress->totalSize = 0;
+
+    u64 total_size = 0;
+    for (u32 i = 0; i < numberOfEntries; i++) {
+        u32 chunk_id = chunkIds[i];
+        if (chunk_id < playgo->chunks.size()) {
+            total_size += playgo->chunks[chunk_id].total_size;
+        } else {
+            return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
+        }
+    }
+
+    outProgress->progressSize = total_size;
+    outProgress->totalSize = total_size;
 
     return ORBIS_OK;
 }
@@ -242,7 +304,10 @@ s32 PS4_SYSV_ABI scePlayGoOpen(OrbisPlayGoHandle* outHandle, const void* param) 
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
 
-    // Allow opening library handle directly
+    if (!Config::enablePlayGoFix() && playgo->GetPlaygoHeader().file_size == 0) {
+        return ORBIS_PLAYGO_ERROR_NOT_SUPPORT_PLAYGO;
+    }
+
     playgo->handle = *outHandle = PlaygoHandle;
     return ORBIS_OK;
 }

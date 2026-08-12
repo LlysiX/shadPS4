@@ -132,7 +132,7 @@ public:
 static ConfigEntry<int> volumeSlider(100);
 static ConfigEntry<bool> isNeo(false);
 static ConfigEntry<bool> isDevKit(false);
-static ConfigEntry<bool> enablePlayGoFix(false);
+static ConfigEntry<bool> isEnablePlayGoFix(false);
 static ConfigEntry<int> extraDmemInMbytes(0);
 static ConfigEntry<bool> isPSNSignedIn(false);
 static ConfigEntry<bool> isTrophyPopupDisabled(false);
@@ -445,7 +445,7 @@ bool showSplash() {
 }
 
 bool enablePlayGoFix() {
-    return enablePlayGoFix.get();
+    return isEnablePlayGoFix.get();
 }
 
 string sideTrophy() {
@@ -592,7 +592,7 @@ void setShowSplash(bool enable, bool is_game_specific) {
 }
 
 void setEnablePlayGoFix(bool enable, bool is_game_specific) {
-    enablePlayGoFix.set(enable, is_game_specific);
+    isEnablePlayGoFix.set(enable, is_game_specific);
 }
 
 void setSideTrophy(string side, bool is_game_specific) {
@@ -909,7 +909,7 @@ void load(const std::filesystem::path& path, bool is_game_specific) {
         userName.setFromToml(general, "userName", is_game_specific);
         isShowSplash.setFromToml(general, "showSplash", is_game_specific);
         isSideTrophy.setFromToml(general, "sideTrophy", is_game_specific);
-        enablePlayGoFix.setFromToml(general, "enablePlayGoFix", is_game_specific);
+        isEnablePlayGoFix.setFromToml(general, "enablePlayGoFix", is_game_specific);
         compatibilityData = toml::find_or<bool>(general, "compatibilityEnabled", compatibilityData);
         checkCompatibilityOnStartup = toml::find_or<bool>(general, "checkCompatibilityOnStartup",
                                                           checkCompatibilityOnStartup);
@@ -1107,7 +1107,7 @@ void save(const std::filesystem::path& path, bool is_game_specific) {
     chooseHomeTab.setTomlValue(data, "General", "chooseHomeTab", is_game_specific);
     isShowSplash.setTomlValue(data, "General", "showSplash", is_game_specific);
     isSideTrophy.setTomlValue(data, "General", "sideTrophy", is_game_specific);
-    enablePlayGoFix.setTomlValue(data, "General", "enablePlayGoFix", is_game_specific);
+    isEnablePlayGoFix.setTomlValue(data, "General", "enablePlayGoFix", is_game_specific);
     isNeo.setTomlValue(data, "General", "isPS4Pro", is_game_specific);
     isDevKit.setTomlValue(data, "General", "isDevKit", is_game_specific);
     if (is_game_specific) {

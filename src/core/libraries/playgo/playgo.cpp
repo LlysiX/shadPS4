@@ -153,18 +153,12 @@ s32 PS4_SYSV_ABI scePlayGoGetLocus(OrbisPlayGoHandle handle, const OrbisPlayGoCh
     if (!playgo) {
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
-    if (playgo->GetPlaygoHeader().file_size == 0) {
-        return ORBIS_PLAYGO_ERROR_NOT_SUPPORT_PLAYGO;
+
+    // Force LocalFast status for all queried chunks
+    for (uint32_t i = 0; i < numberOfEntries; i++) {
+        outLoci[i] = OrbisPlayGoLocus::LocalFast;
     }
 
-    for (int i = 0; i < numberOfEntries; i++) {
-        if (chunkIds[i] < playgo->chunks.size()) {
-            outLoci[i] = OrbisPlayGoLocus::LocalFast;
-        } else {
-            outLoci[i] = OrbisPlayGoLocus::NotDownloaded;
-            return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
-        }
-    }
     return ORBIS_OK;
 }
 
@@ -185,25 +179,10 @@ s32 PS4_SYSV_ABI scePlayGoGetProgress(OrbisPlayGoHandle handle, const OrbisPlayG
     if (!playgo) {
         return ORBIS_PLAYGO_ERROR_NOT_INITIALIZED;
     }
-    if (playgo->GetPlaygoHeader().file_size == 0) {
-        return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
-    }
 
-    outProgress->progressSize = 0;
-    outProgress->totalSize = 0;
-
-    u64 total_size = 0;
-    for (u32 i = 0; i < numberOfEntries; i++) {
-        u32 chunk_id = chunkIds[i];
-        if (chunk_id < playgo->chunks.size()) {
-            total_size += playgo->chunks[chunk_id].total_size;
-        } else {
-            return ORBIS_PLAYGO_ERROR_BAD_CHUNK_ID;
-        }
-    }
-
-    outProgress->progressSize = total_size;
-    outProgress->totalSize = total_size;
+    // Report 100% progress with 1 GB fixed size
+    outProgress->progressSize = 1073741824; // 1 GB
+    outProgress->totalSize = 1073741824;
 
     return ORBIS_OK;
 }
